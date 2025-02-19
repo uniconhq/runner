@@ -154,18 +154,15 @@ def test(
     exec_py_version: str | None = None,
 ) -> None:
     """Test executors"""
+    from unicon_runner.models import ExtraOptions
+
     job = Job.model_validate_json(job_file.read_bytes())
     job.context.slurm = slurm or job.context.slurm
     job.context.slurm_options = slurm_opt or job.context.slurm_options
     job.context.slurm_use_system_py = slurm_use_system_py or job.context.slurm_use_system_py
-    if py_exec_version := job.context.extra_options.get("version"):
-        # If there exists a version specification in the job file, only replace it with
-        # `exec_py_version` if it is provided (is not None).
-        job.context.extra_options["version"] = exec_py_version or py_exec_version
-    elif exec_py_version:
-        # If there is no version specification in the job file, set it to `exec_py_version`
-        # only if it is provided (is not None).
-        job.context.extra_options["version"] = exec_py_version
+
+    job.context.extra_options = job.context.extra_options or ExtraOptions()
+    job.context.extra_options.version = exec_py_version or job.context.extra_options.version
 
     executor = create_executor(exec_type, root_wd_dir)
 

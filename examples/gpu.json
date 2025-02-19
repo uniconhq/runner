@@ -8,15 +8,15 @@
           "content": "import torch\nimport math\nimport time\n\n\ndtype = torch.float\ndevice = torch.device(\"cuda:0\") # Uncomment this to run on GPU\n\n# Create random input and output data\nx = torch.linspace(-math.pi, math.pi, 2000, device=device, dtype=dtype)\ny = torch.sin(x)\n\n# Randomly initialize weights\na = torch.randn((), device=device, dtype=dtype)\nb = torch.randn((), device=device, dtype=dtype)\nc = torch.randn((), device=device, dtype=dtype)\nd = torch.randn((), device=device, dtype=dtype)\n\nlearning_rate = 1e-6\n\nstart = time.time()\n\nfor t in range(2000):\n    # Forward pass: compute predicted y\n    y_pred = a + b * x + c * x ** 2 + d * x ** 3\n\n    # Compute and print loss\n    loss = (y_pred - y).pow(2).sum().item()\n    if t % 100 == 99:\n        print(t, loss)\n\n    # Backprop to compute gradients of a, b, c, d with respect to loss\n    grad_y_pred = 2.0 * (y_pred - y)\n    grad_a = grad_y_pred.sum()\n    grad_b = (grad_y_pred * x).sum()\n    grad_c = (grad_y_pred * x ** 2).sum()\n    grad_d = (grad_y_pred * x ** 3).sum()\n\n    # Update weights using gradient descent\n    a -= learning_rate * grad_a\n    b -= learning_rate * grad_b\n    c -= learning_rate * grad_c\n    d -= learning_rate * grad_d\n\n\nprint(f'Result: y = {a.item()} + {b.item()} x + {c.item()} x^2 + {d.item()} x^3')\nprint(f\"Time taken: {time.time() - start}\")\n",
           "is_binary": false
         }
-      ]
+      ],
+      "context": {
+        "language": "PYTHON",
+        "memory_limit_mb": 30000,
+        "time_limit_secs": 500,
+        "extra_options": {
+          "requirements": ["torch", "numpy"]
+        }
+      }
     }
-  ],
-  "context": {
-    "language": "PYTHON",
-    "memory_limit_mb": 30000,
-    "time_limit_secs": 500,
-    "extra_options": {
-      "requirements": "torch\nnumpy"
-    }
-  }
+  ]
 }

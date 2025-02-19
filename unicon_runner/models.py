@@ -21,6 +21,11 @@ class Language(str, Enum):
     PYTHON = "PYTHON"
 
 
+class ExtraOptions(BaseModel):
+    version: str | None = None
+    requirements: list[str] = []
+
+
 class ComputeContext(BaseModel):
     language: Language
     time_limit_secs: float
@@ -34,7 +39,7 @@ class ComputeContext(BaseModel):
     # If true, ignores python version specified under `extra_options` and default fallback python version
     slurm_use_system_py: bool = False
 
-    extra_options: dict[str, str] = {}
+    extra_options: ExtraOptions | None = None
 
 
 class Program(BaseModel):

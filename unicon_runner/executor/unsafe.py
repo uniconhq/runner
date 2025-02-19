@@ -21,8 +21,9 @@ class UnsafeExecutor(Executor):
     ) -> FileSystemMapping:
         package_dir = Path("src")
 
-        requirements: str = (
-            context.extra_options.get("requirements", "") if context.extra_options else ""
+        # Assemble all requirements into `requirements.txt` format
+        requirements_txt: str = "\n".join(
+            (context.extra_options and context.extra_options.requirements) or []
         )
 
         python_version: str = DEFAULT_EXEC_PY_VERSION
@@ -31,7 +32,7 @@ class UnsafeExecutor(Executor):
             # This is because of filesystem restrictions in the slurm environment (more details in the docs)
             python_version = "/usr/bin/python"
         elif context.extra_options:
-            python_version = context.extra_options.get("version", python_version)
+            python_version = context.extra_options.version or python_version
 
         run_script = self.RUN_SCRIPT_TEMPLATE.render(
             python_version=python_version,
@@ -46,7 +47,7 @@ class UnsafeExecutor(Executor):
             *[(package_dir / file.path, file.decoded_data, False) for file in program.files],
             (package_dir / "__init__.py", "", False),
             (Path("pyproject.toml"), self.PYPROJECT_TEMPLATE.render(), False),
-            (Path("requirements.txt"), requirements, False),
+            (Path("requirements.txt"), requirements_txt, False),
             (self.ENTRYPOINT, run_script, True),
         ]
 
