@@ -44,7 +44,7 @@ class UnsafeExecutor(Executor):
         )
 
         return [
-            *[(package_dir / file.name, file.content, False) for file in program.files],
+            *[(package_dir / file.path, file.decoded_data, False) for file in program.files],
             (package_dir / "__init__.py", "", False),
             (Path("pyproject.toml"), self.PYPROJECT_TEMPLATE.render(), False),
             (Path("requirements.txt"), requirements_txt, False),

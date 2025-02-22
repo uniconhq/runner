@@ -12,10 +12,10 @@ measure_elapsed_time() {
     local command="$1"
     local output_file="$2"
 
-    local start_time_ns=$(date +%s%N)
+    local start_time_ns=$(date +%s%N | sed 's/N$//')
     eval "$command"
     local cmd_exit_code=$?
-    local end_time_ns=$(date +%s%N)
+    local end_time_ns=$(date +%s%N | sed 's/N$//')
 
     local execution_time_ns=$((end_time_ns - start_time_ns))
     echo "$execution_time_ns" > "$output_file"

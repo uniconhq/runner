@@ -9,7 +9,7 @@ class PodmanExecutor(Executor):
     """Uses podman + Dockerfile in template to execute code"""
 
     def get_filesystem_mapping(self, program: Program, *_unused) -> FileSystemMapping:
-        return [(Path(file.name), file.content, False) for file in program.files]
+        return [(Path(file.path), file.decoded_data, False) for file in program.files]
 
     def _cmd(self, cwd: Path, program: Program, context: ComputeContext) -> ExecutorCmd:
         # fmt: off

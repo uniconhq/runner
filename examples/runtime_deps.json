@@ -1,30 +1,32 @@
 {
-    "programs": [
+  "programs": [
+    {
+      "entrypoint": "main.py",
+      "files": [
         {
-            "entrypoint": "main.py",
-            "files": [
-                {
-                    "name": "main.py",
-                    "content": "import polars as pl\n\npl.show_versions()"
-                }
-            ]
-        },
+          "path": "main.py",
+          "content": "import polars as pl\n\npl.show_versions()",
+          "is_binary": false
+        }
+      ]
+    },
+    {
+      "entrypoint": "main.py",
+      "files": [
         {
-            "entrypoint": "main.py",
-            "files": [
-                {
-                    "name": "main.py",
-                    "content": "import polars as pl\n\nprint(pl.DataFrame({'a': [1, 2, 3]}))"
-                }
-            ]
+          "path": "main.py",
+          "content": "import polars as pl\n\nprint(pl.DataFrame({'a': [1, 2, 3]}))",
+          "is_binary": false
         }
-    ],
-    "context": {
-        "language": "PYTHON",
-        "memory_limit_mb": 1000,
-        "time_limit_secs": 30,
-        "extra_options": {
-            "requirements": ["polars"]
-        }
+      ]
     }
+  ],
+  "context": {
+    "language": "PYTHON",
+    "memory_limit_mb": 1000,
+    "time_limit_secs": 30,
+    "extra_options": {
+      "requirements": "polars"
+    }
+  }
 }

@@ -57,7 +57,7 @@ class ExecutorWorkspace:
 
 
 # [(<file_path>, <file_content>, <is_executable>)]
-FileSystemMapping = list[tuple[Path, str, bool]]
+FileSystemMapping = list[tuple[Path, str | bytes, bool]]
 
 # (cmd, env_vars)
 ExecutorCmd = tuple[list[str], dict[str, str]]
@@ -136,7 +136,12 @@ class Executor(ABC):
                 logger.info(f"Writing file: [magenta]{path}[/]")
                 file_path = workspace / path
                 file_path.parent.mkdir(parents=True, exist_ok=True)
-                file_path.write_text(content)
+
+                if isinstance(content, bytes):
+                    file_path.write_bytes(content)
+                else:
+                    file_path.write_text(content)
+
                 if is_exec:
                     file_path.chmod(file_path.stat().st_mode | stat.S_IEXEC)
 

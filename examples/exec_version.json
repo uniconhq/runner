@@ -1,19 +1,19 @@
 {
-    "programs": [
+  "programs": [
+    {
+      "entrypoint": "exec.py",
+      "files": [
         {
-            "entrypoint": "exec.py",
-            "files": [
-                {
-                    "name": "exec.py",
-                    "content": "import sys, os; print(sys.executable, sys.version); print(os.uname())"
-                }
-            ]
+          "path": "exec.py",
+          "content": "import sys, os; print(sys.executable, sys.version); print(os.uname())"
         }
-    ],
-    "context": {
-        "language": "PYTHON",
-        "memory_limit_mb": 100,
-        "time_limit_secs": 5,
-        "extra_options": {}
+      ]
     }
+  ],
+  "context": {
+    "language": "PYTHON",
+    "memory_limit_mb": 100,
+    "time_limit_secs": 5,
+    "extra_options": {}
+  }
 }

@@ -1,19 +1,20 @@
 {
-    "programs": [
+  "programs": [
+    {
+      "entrypoint": "hello_world.py",
+      "files": [
         {
-            "entrypoint": "hello_world.py",
-            "files": [
-                {
-                    "name": "hello_world.py",
-                    "content": "print('Hello, World!')"
-                }
-            ]
+          "path": "hello_world.py",
+          "content": "print('Hello, World!')",
+          "is_binary": false
         }
-    ],
-    "context": {
-        "language": "PYTHON",
-        "memory_limit_mb": 100,
-        "time_limit_secs": 5,
-        "extra_options": {}
+      ]
     }
+  ],
+  "context": {
+    "language": "PYTHON",
+    "memory_limit_mb": 100,
+    "time_limit_secs": 5,
+    "extra_options": {}
+  }
 }

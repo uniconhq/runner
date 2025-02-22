@@ -1,20 +1,20 @@
+import base64
 from enum import Enum
 from typing import Self
 
-from pathvalidate import is_valid_filename
-from pydantic import BaseModel, ConfigDict, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, model_validator
 
 
 class File(BaseModel):
-    name: str
+    path: str
     content: str
+    is_binary: bool
 
-    @field_validator("name", mode="before")
-    @classmethod
-    def check_filename_is_safe(cls, v):
-        if not is_valid_filename(v):
-            raise ValueError(f"{v} is an invalid file name")
-        return v
+    @property
+    def decoded_data(self) -> bytes:
+        if self.is_binary:
+            return base64.b64decode(self.content.encode("ascii"), validate=True)
+        return self.content.encode()
 
 
 class Language(str, Enum):
@@ -50,7 +50,7 @@ class Program(BaseModel):
 
     @model_validator(mode="after")
     def check_entrypoint_exists_in_files(self) -> Self:
-        if not any(file.name == self.entrypoint for file in self.files):
+        if not any(file.path == self.entrypoint for file in self.files):
             raise ValueError(f"Entrypoint {self.entrypoint} not found in Program files")
         return self
 
