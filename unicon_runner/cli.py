@@ -18,7 +18,7 @@ from unicon_runner.models import Job, JobResult, Program
 logging.basicConfig(
     level="INFO",
     format="[magenta]%(funcName)s[/] - %(message)s",
-    datefmt="[%X]",
+    datefmt="[%Y-%m-%d %H:%M:%S]",
     handlers=[RichHandler(markup=True)],
 )
 logging.getLogger("asyncio").setLevel(logging.INFO)
