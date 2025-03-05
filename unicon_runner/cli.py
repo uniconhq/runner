@@ -8,7 +8,6 @@ import pika
 import pika.spec
 import typer
 from pika.adapters.blocking_connection import BlockingChannel
-from pika.exchange_type import ExchangeType
 from rich.logging import RichHandler
 
 from unicon_runner.executor import create_executor
@@ -90,13 +89,7 @@ def init_mq() -> tuple[BlockingChannel, BlockingChannel]:
     conn = pika.BlockingConnection(conn_params)
 
     in_ch, out_ch = conn.channel(), conn.channel()
-    for ch in [in_ch, out_ch]:
-        ch.exchange_declare(exchange=AMQP_EXCHANGE_NAME, exchange_type=ExchangeType.topic)
-
-    in_ch.queue_declare(queue=AMQP_TASK_QUEUE_NAME, durable=True)
     in_ch.queue_bind(AMQP_TASK_QUEUE_NAME, AMQP_EXCHANGE_NAME, AMQP_TASK_QUEUE_NAME)
-
-    out_ch.queue_declare(queue=AMQP_RESULT_QUEUE_NAME, durable=True)
     out_ch.queue_bind(AMQP_RESULT_QUEUE_NAME, AMQP_EXCHANGE_NAME, AMQP_RESULT_QUEUE_NAME)
 
     return in_ch, out_ch
