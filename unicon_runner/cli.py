@@ -62,13 +62,13 @@ def exec_pipeline(
 
     result = _run_job(executor, job)
 
-    logger.info(f"Pushing result: {result.model_extra}")
-    out_ch.basic_publish(AMQP_EXCHANGE_NAME, AMQP_RESULT_QUEUE_NAME, result.model_dump_json())
-
     if not result.success:
         # If the job failed to run, only requeue if it has not been redelivered
+        logger.warning(f"Job failed: {result.model_extra}")
         in_ch.basic_nack(delivery_tag=method.delivery_tag, requeue=not method.redelivered)
     else:
+        logger.info(f"Pushing result: {result.model_extra}")
+        out_ch.basic_publish(AMQP_EXCHANGE_NAME, AMQP_RESULT_QUEUE_NAME, result.model_dump_json())
         in_ch.basic_ack(delivery_tag=method.delivery_tag)
 
 
