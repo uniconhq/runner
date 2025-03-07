@@ -57,10 +57,10 @@ class Program(BaseModel):
 
 class Status(str, Enum):
     OK = "OK"
-    MLE = "MLE"
-    TLE = "TLE"
-    RTE = "RTE"
-    WA = "WA"
+    MLE = "MLE"  # Memory limit exceeded
+    TLE = "TLE"  # Time limit exceeded
+    RTE = "RTE"  # Runtime error
+    UKN = "UKN"  # Unknown error
 
 
 class ProgramResult(BaseModel):
