@@ -5,7 +5,7 @@ cd "$(dirname "$0")"
 
 cmd_create_venv="uv -q venv --python {{ python_version }}"
 cmd_install_deps="uv -q --no-cache add -r requirements.txt"
-cmd_run_program="timeout {{ time_limit_secs }} uv -q run {{ entry_point }}"
+cmd_run_program="uv -q run {{ entry_point }}"
 
 {% if track_elapsed_time %}
 measure_elapsed_time() {
@@ -24,21 +24,23 @@ measure_elapsed_time() {
 {% endif %}
 
 {% if track_elapsed_time %}
-measure_elapsed_time "$cmd_create_venv" {{ create_venv_time_file }}
-measure_elapsed_time "$cmd_install_deps" {{ install_deps_time_file }}
+measure_elapsed_time "$cmd_create_venv" "{{ create_venv_time_file }}"
+measure_elapsed_time "$cmd_install_deps" "{{ install_deps_time_file }}"
 {% else %}
-$cmd_create_venv
-$cmd_install_deps
+eval "$cmd_create_venv"
+eval "$cmd_install_deps"
 {% endif %}
 
 # NOTE: Memory limit is set in kilobytes
 # Reference: https://ss64.com/bash/ulimit.html
 ulimit -v {{ memory_limit_kb }}
-# NOTE: Exit code is preserved if process is does not exceed time limit
+run_cmd="timeout {{ time_limit_secs }} bash -c \"ulimit -v {{ memory_limit_kb }} && $cmd_run_program\""
+
+# NOTE: Exit code is preserved if process does not exceed time limit
 # NOTE: Time limit is set in seconds
 # Reference: https://www.man7.org/linux/man-pages/man1/timeout.1.html
 {% if track_elapsed_time %}
-measure_elapsed_time "$cmd_run_program" {{ program_time_file }}
+measure_elapsed_time "$run_cmd" "{{ program_time_file }}"
 {% else %}
-$cmd_run_program
+eval "$run_cmd"
 {% endif %}
