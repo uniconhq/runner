@@ -33,7 +33,6 @@ eval "$cmd_install_deps"
 
 # NOTE: Memory limit is set in kilobytes
 # Reference: https://ss64.com/bash/ulimit.html
-ulimit -v {{ memory_limit_kb }}
 run_cmd="timeout {{ time_limit_secs }} bash -c \"ulimit -v {{ memory_limit_kb }} && $cmd_run_program\""
 
 # NOTE: Exit code is preserved if process does not exceed time limit
