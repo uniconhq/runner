@@ -5,7 +5,7 @@
       "files": [
         {
           "path": "main.py",
-          "content": "from PIL import Image\nimport os\nprint(os.getcwd())\nim = Image.open('folder/ohno.png')\nprint(im.format, im.size, im.mode)",
+          "content": "from PIL import Image\nimport os\nprint(os.getcwd())\nim = Image.open('src/folder/ohno.png')\nprint(im.format, im.size, im.mode)",
           "is_binary": false
         },
         {
@@ -21,7 +21,7 @@
     "memory_limit_mb": 1000,
     "time_limit_secs": 5,
     "extra_options": {
-      "requirements": "pillow"
+      "requirements": ["pillow"]
     }
   }
 }
