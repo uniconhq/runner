@@ -201,14 +201,19 @@ class Executor(ABC):
                 logger.info(f"[Program] Elapsed time: {perf.program_ns / 1e6:.4f}ms")
 
         match result.exit_code:
-            case 137:
+            case 139:  # Segmentation fault
+                # NOTE: This catches memory errors that occurs before the Python interpreter is started
                 status = Status.MLE
             case 124:
+                # NOTE: We do not catch exit codes 125, 126, 127 which suggests issues with the `timeout` command itself
+                # TODO: It would be good to handle these cases as well and flag it as an internal runner error
                 status = Status.TLE
             case 1:
                 status = Status.RTE
-            case _:
+            case 0:
                 status = Status.OK
+            case _:
+                status = Status.UKN
 
         return ProgramResult.model_validate(
             {
