@@ -60,16 +60,21 @@ def exec_pipeline(
     job = Job.model_validate_json(msg_body)
     logger.info(f"Received job: {job.model_extra}")
 
-    result = _run_job(executor, job)
-
-    if not result.success:
-        # If the job failed to run, only requeue if it has not been redelivered
-        logger.warning(f"Job failed: {result.model_extra}")
+    try:
+        result = _run_job(executor, job)
+        if not result.success:
+            # If the job failed to run, only requeue if it has not been redelivered
+            logger.warning(f"Job failed: {result.model_extra}")
+            in_ch.basic_nack(delivery_tag=method.delivery_tag, requeue=not method.redelivered)
+        else:
+            logger.info(f"Pushing result: {result.model_extra}")
+            out_ch.basic_publish(
+                AMQP_EXCHANGE_NAME, AMQP_RESULT_QUEUE_NAME, result.model_dump_json()
+            )
+            in_ch.basic_ack(delivery_tag=method.delivery_tag)
+    except Exception as e:
+        logger.exception(f"Error while processing job: {e}")
         in_ch.basic_nack(delivery_tag=method.delivery_tag, requeue=not method.redelivered)
-    else:
-        logger.info(f"Pushing result: {result.model_extra}")
-        out_ch.basic_publish(AMQP_EXCHANGE_NAME, AMQP_RESULT_QUEUE_NAME, result.model_dump_json())
-        in_ch.basic_ack(delivery_tag=method.delivery_tag)
 
 
 def init_mq() -> tuple[BlockingChannel, BlockingChannel]:
