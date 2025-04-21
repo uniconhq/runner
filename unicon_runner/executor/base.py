@@ -13,7 +13,7 @@ from typing import Final
 import psutil
 from jinja2 import Environment, PackageLoader, select_autoescape
 
-from unicon_runner.constants import DEFAULT_SLURM_OPTS
+from unicon_runner.constants import DEFAULT_SLURM_OPTS, SLURM_DISABLED
 from unicon_runner.models import (
     ComputeContext,
     ExecutorPerf,
@@ -116,7 +116,7 @@ class Executor(ABC):
     def is_compatible(self, context: ComputeContext) -> tuple[bool, str]:
         # NOTE: We assume that as long as the working directory is on **any** NFS,
         # all nodes in the cluster will have access to it
-        if context.slurm and not is_mounted_on_nfs(self._root_dir):
+        if not SLURM_DISABLED and context.slurm and not is_mounted_on_nfs(self._root_dir):
             return False, "Cannot run slurm job as working directory is not on NFS"
         return True, ""
 
@@ -148,7 +148,7 @@ class Executor(ABC):
             cmd: list[str]
             env_vars: dict[str, str]
 
-            if context.slurm:
+            if not SLURM_DISABLED and context.slurm:
                 # NOTE: For `slurm` execution, the working directory needs to be in NFS
                 # There will be 2 working directories:
                 # 1. NFS working directory (where the setup is done)
