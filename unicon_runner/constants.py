@@ -26,3 +26,7 @@ CONTY_PATH: Final[str] = _get_env_var("CONTY_PATH", "conty.sh")
 CONTY_DOWNLOAD_URL: Final[str] = _get_env_var(
     "CONTY_DOWNLOAD_URL", "https://github.com/uniconhq/conty/releases/latest/download/conty.sh"
 )
+
+# The only reason you set this to 1 is probably because you are running this locally on a Mac.
+SLURM_DISABLED = _get_env_var("SLURM_DISABLED", "0") == "1"
+ULIMIT_DISABLED = _get_env_var("ULIMIT_DISABLED", "0") == "1"
