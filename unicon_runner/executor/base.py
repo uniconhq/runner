@@ -195,10 +195,15 @@ class Executor(ABC):
                 )
             )
 
-            if perf := (collect_perf_results(workspace) if track_elapsed_time else None):
-                logger.info(f"[Setup] Create venv: {perf.create_venv_ns / 1e6:.4f}ms")
-                logger.info(f"[Setup] Install deps: {perf.install_deps_ns / 1e6:.4f}ms")
-                logger.info(f"[Program] Elapsed time: {perf.program_ns / 1e6:.4f}ms")
+            try:
+                if perf := (collect_perf_results(workspace) if track_elapsed_time else None):
+                    logger.info(f"[Setup] Create venv: {perf.create_venv_ns / 1e6:.4f}ms")
+                    logger.info(f"[Setup] Install deps: {perf.install_deps_ns / 1e6:.4f}ms")
+                    logger.info(f"[Program] Elapsed time: {perf.program_ns / 1e6:.4f}ms")
+            except Exception as e:
+                e.add_note(f"exit_code: {result.exit_code}")
+                e.add_note(f"stderr:\n{result.stderr}")
+                raise
 
         match result.exit_code:
             case 139:  # Segmentation fault
