@@ -1,0 +1,56 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  harness:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.1.0
+        with:
+          version: "0.12.13"
+          enable-cache: true
+      - run: uv sync --locked
+      - run: uv run ruff format --check .
+      - run: uv run ruff check .
+      - run: uv run mypy
+      - run: uv run pytest
+      # A schema change that forgets the examples is caught here, not at a grading.
+      - run: uv run python scripts/check_contract_files.py
+
+  image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/build-push-action@v7
+        with:
+          context: .
+          push: false
+          load: true
+          tags: unicon-grading:ci
+
+      # Run the image the way Woodpecker does, with nothing set: exit 2, and the
+      # code first on stderr.
+      - name: The image refuses an empty environment
+        run: |
+          set +e
+          stderr="$(docker run --rm unicon-grading:ci 2>&1 >/dev/null)"
+          status=$?
+          set -e
+          echo "$stderr"
+          if [ "$status" -ne 2 ]; then
+            echo "expected exit 2, got $status"
+            exit 1
+          fi
+          case "$stderr" in
+            "unicon-harness: missing_environment:"*) ;;
+            *) echo "expected a missing_environment line"; exit 1 ;;
+          esac
