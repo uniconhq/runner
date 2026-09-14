@@ -1,0 +1,93 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/uniconhq/runner/main/schemas/plan.schema.json",
+  "title": "Unicon grading plan",
+  "description": "What the backend's compiler emits when a task is published: a flat list of primitive calls with every workflow reference already resolved, pinned to one grading image by digest. The harness executes a plan; it never reads workflow YAML.",
+  "type": "object",
+  "required": ["schema_version", "image_digest", "stage", "steps"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "description": "The plan shape this file is written against. The harness refuses a version it does not speak, because a compiler that emits a shape the harness reads differently produces a wrong verdict rather than an error.",
+      "type": "integer",
+      "const": 1
+    },
+    "image_digest": {
+      "description": "The grading image this plan was compiled against, by content digest and never by tag, so a task keeps grading on the image it was published with.",
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "stage": {
+      "description": "The grading stage this plan belongs to. A task may compile a different plan per stage.",
+      "type": "string",
+      "minLength": 1
+    },
+    "steps": {
+      "description": "Run in order. Each step may read the outputs of earlier steps.",
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/step" }
+    }
+  },
+  "$defs": {
+    "step": {
+      "type": "object",
+      "required": ["id", "primitive", "inputs"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "description": "Unique within the plan. Earlier steps are referred to by this id.",
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9_-]*$"
+        },
+        "primitive": {
+          "description": "Which tool in the grading image to call, as owner/name@version, for example unicon/sandbox-run@v1. Must be a primitive listed in the registry.json of the pinned runner release; composed workflows are already inlined by the compiler.",
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*@[A-Za-z0-9][A-Za-z0-9._-]*$"
+        },
+        "inputs": {
+          "description": "Arguments for the primitive, keyed by the input names in the registry. Deliberately open: the value grammar for naming bundle paths and earlier step outputs is settled by the compiler and the primitives in Task 10.",
+          "type": "object",
+          "additionalProperties": true
+        },
+        "for_each": {
+          "description": "Run this step once per item of the named list and collect the outputs into an array. The reference grammar is the compiler's; the harness only needs it to name a list it can already see.",
+          "type": "string",
+          "minLength": 1
+        },
+        "limits": {
+          "description": "Sandbox limits for one run of this step. Open on purpose: Task 6 decides what else the sandbox enforces.",
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "time_ms": {
+              "description": "Wall clock for one run. The sandbox is killed when it passes.",
+              "type": "integer",
+              "minimum": 1
+            },
+            "cpu_ms": {
+              "description": "CPU time for one run, the innermost of the three timers in TASK-FORMAT.md. Usually below time_ms.",
+              "type": "integer",
+              "minimum": 1
+            },
+            "memory_mb": {
+              "description": "Memory cap for the sandbox. Over-limit is a kill, not a slowdown.",
+              "type": "integer",
+              "minimum": 1
+            },
+            "pids": {
+              "description": "Process limit, what stops a fork bomb.",
+              "type": "integer",
+              "minimum": 1
+            },
+            "output_mb": {
+              "description": "How much the step may write before it is cut off.",
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        }
+      }
+    }
+  }
+}

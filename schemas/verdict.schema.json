@@ -1,0 +1,198 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/uniconhq/runner/main/schemas/verdict.schema.json",
+  "title": "Unicon grading verdict",
+  "description": "What the harness writes to object storage at the end of a job, and the only durable record of a grading run. It repeats the Forgejo identity of both the submission and the task so results can be matched back after a loss of the Unicon database, without rejudging everything.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "judging_id",
+    "submission",
+    "stage",
+    "attempt",
+    "task",
+    "task_published_tag",
+    "outcome",
+    "verdict",
+    "score",
+    "metrics",
+    "summary",
+    "started_at",
+    "finished_at",
+    "error_message"
+  ],
+  "additionalProperties": false,
+  "if": {
+    "properties": { "outcome": { "const": "verdict" } },
+    "required": ["outcome"]
+  },
+  "then": {
+    "description": "The plan ran to the end, so the result fields carry the result and there is no error to report.",
+    "properties": {
+      "verdict": { "type": "string", "minLength": 1 },
+      "score": { "type": "string" },
+      "summary": { "type": "array" },
+      "error_message": { "type": "null" }
+    }
+  },
+  "else": {
+    "description": "Nobody graded, or the submission itself failed. There is a sentence for a human and no verdict to record.",
+    "properties": {
+      "verdict": { "type": "null" },
+      "score": { "type": "null" },
+      "error_message": { "type": "string", "minLength": 1 }
+    }
+  },
+  "properties": {
+    "schema_version": {
+      "description": "The verdict shape this file is written against.",
+      "type": "integer",
+      "const": 1
+    },
+    "judging_id": {
+      "description": "The judgings row this result belongs to, copied from the envelope.",
+      "type": "string",
+      "format": "uuid"
+    },
+    "submission": { "$ref": "#/$defs/submission" },
+    "stage": {
+      "description": "Grading stage, copied from the envelope.",
+      "type": "string",
+      "minLength": 1
+    },
+    "attempt": {
+      "description": "Attempt number, copied from the envelope.",
+      "type": "integer",
+      "minimum": 1
+    },
+    "task": { "$ref": "#/$defs/task" },
+    "task_published_tag": {
+      "description": "The tag on the task repo whose published plan produced this result. Two results on the same submission with different tags were graded against different tests.",
+      "type": "string",
+      "minLength": 1
+    },
+    "outcome": {
+      "description": "Who owns the failure. verdict: the plan ran to the end, so read verdict and score. contestant_error: the submission did not compile, crashed or ran out of time, which is a normal result. system_error: the harness could not grade at all, for example a schema_version it does not speak or storage it could not reach, and staff should look.",
+      "type": "string",
+      "enum": ["verdict", "contestant_error", "system_error"]
+    },
+    "verdict": {
+      "description": "The workflow's own word for the result, for example AC or WA. Unicon does not define the vocabulary, it displays it. Null when the outcome is not a verdict.",
+      "type": ["string", "null"],
+      "minLength": 1
+    },
+    "score": {
+      "description": "The workflow's score, carried as text: an optional minus sign, one or more digits, and an optional fractional part after a single dot. No exponent, no thousands separator, no leading plus. A string and not a number because JSON numbers are binary floats: a decimal score would not survive the round trip byte for byte, and a leaderboard that disagrees with the number the contestant was shown is a protest. The backend parses it once into the numeric column the leaderboard sorts on and keeps this text as written.",
+      "type": ["string", "null"],
+      "pattern": "^-?[0-9]+(\\.[0-9]+)?$"
+    },
+    "metrics": {
+      "description": "Whatever the workflow measured beyond the score, for example accuracy or peak memory. Keys and value types belong to the workflow, so this object is open.",
+      "type": ["object", "null"],
+      "additionalProperties": true
+    },
+    "summary": {
+      "description": "The per-test table the task page shows. An empty array when the workflow has no per-test structure, for example a single-metric evaluation; null only when there is no verdict at all.",
+      "type": ["array", "null"],
+      "items": { "$ref": "#/$defs/test_result" }
+    },
+    "started_at": {
+      "description": "When the harness accepted the envelope.",
+      "type": "string",
+      "format": "date-time"
+    },
+    "finished_at": {
+      "description": "When the harness finished the last step.",
+      "type": "string",
+      "format": "date-time"
+    },
+    "error_message": {
+      "description": "One sentence for a human when outcome is not verdict. Null otherwise.",
+      "type": ["string", "null"]
+    }
+  },
+  "$defs": {
+    "submission": {
+      "description": "The Forgejo identity of what was graded, copied from the envelope.",
+      "type": "object",
+      "required": ["org", "repo", "tag", "commit"],
+      "additionalProperties": false,
+      "properties": {
+        "org": {
+          "description": "Forgejo organisation that owns the submission repo.",
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+        },
+        "repo": {
+          "description": "The contestant's submission repo for one task.",
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+        },
+        "tag": {
+          "description": "The protected tag that is the submission. May contain a slash.",
+          "type": "string",
+          "minLength": 1
+        },
+        "commit": {
+          "description": "Full commit sha the tag points at. Forgejo repos are SHA-1 today, so 40 hex characters.",
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        }
+      }
+    },
+    "task": {
+      "description": "The Forgejo identity of the task repo this result was graded against, copied from the envelope. Without it the published tag below names nothing: DATA-MAP.md keeps the link from a judging to its task in the Unicon database, and this file is what has to be readable when that database is gone.",
+      "type": "object",
+      "required": ["org", "repo"],
+      "additionalProperties": false,
+      "properties": {
+        "org": {
+          "description": "Forgejo organisation that owns the task repo, the same org the submission repo is in.",
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+        },
+        "repo": {
+          "description": "The task repo, the one carrying task.yaml and the tests.",
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+        }
+      }
+    },
+    "test_result": {
+      "description": "One row of the per-test table.",
+      "type": "object",
+      "required": ["id", "verdict", "time_ms", "memory_kb"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "description": "The test's name as the task repo spells it.",
+          "type": "string",
+          "minLength": 1
+        },
+        "verdict": {
+          "description": "The workflow's word for this test.",
+          "type": "string",
+          "minLength": 1
+        },
+        "time_ms": {
+          "description": "Wall clock for this test, or null when the step was not measured. Explicitly null rather than absent, so an absent measurement is a statement and not an oversight.",
+          "type": ["integer", "null"],
+          "minimum": 0
+        },
+        "memory_kb": {
+          "description": "Peak memory for this test, or null when the step was not measured.",
+          "type": ["integer", "null"],
+          "minimum": 0
+        },
+        "message": {
+          "description": "The checker's note, shown next to the row when the stage allows it.",
+          "type": "string"
+        }
+      }
+    }
+  }
+}

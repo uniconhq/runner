@@ -1,0 +1,48 @@
+{
+  "schema_version": 1,
+  "judging_id": "0199a2c1-6b7e-7c3a-9f10-5d2e4b8a6c31",
+  "submission": {
+    "org": "acme-open-2026",
+    "repo": "alice-two-sum",
+    "tag": "submission/3",
+    "commit": "6f1b0d0c4d2a9e8f7b6a5c4d3e2f1a0b9c8d7e6f"
+  },
+  "stage": "public",
+  "attempt": 1,
+  "task": {
+    "org": "acme-open-2026",
+    "repo": "two-sum"
+  },
+  "task_published_tag": "v3",
+  "outcome": "verdict",
+  "verdict": "WA",
+  "score": "0",
+  "metrics": {
+    "max_time_ms": 812,
+    "max_memory_kb": 41200
+  },
+  "summary": [
+    {
+      "id": "01-sample",
+      "verdict": "AC",
+      "time_ms": 120,
+      "memory_kb": 20480
+    },
+    {
+      "id": "02-small",
+      "verdict": "AC",
+      "time_ms": 812,
+      "memory_kb": 41200
+    },
+    {
+      "id": "03-duplicates",
+      "verdict": "WA",
+      "time_ms": 96,
+      "memory_kb": 20480,
+      "message": "line 1: expected 42, found 41"
+    }
+  ],
+  "started_at": "2026-09-17T09:02:11Z",
+  "finished_at": "2026-09-17T09:02:24Z",
+  "error_message": null
+}

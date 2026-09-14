@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "image_digest": "sha256:3f1c0a8b5d6e4f2a1b0c9d8e7f6a5b4c3d2e1f0a9b8c7d6e5f4a3b2c1d0e9f8a",
+  "stage": "public",
+  "steps": [
+    {
+      "id": "compile",
+      "primitive": "unicon/compile@v1",
+      "inputs": {
+        "source": "submission/main.cpp",
+        "language": "cpp20"
+      },
+      "limits": {
+        "time_ms": 30000,
+        "cpu_ms": 20000,
+        "memory_mb": 1024,
+        "pids": 64,
+        "output_mb": 64
+      }
+    },
+    {
+      "id": "run",
+      "primitive": "unicon/sandbox-run@v1",
+      "for_each": "task.testcases",
+      "inputs": {
+        "binary": "steps.compile.binary",
+        "input": "item.input"
+      },
+      "limits": {
+        "time_ms": 2000,
+        "memory_mb": 256,
+        "pids": 16,
+        "output_mb": 8
+      }
+    },
+    {
+      "id": "check",
+      "primitive": "unicon/diff-check@v1",
+      "for_each": "task.testcases",
+      "inputs": {
+        "actual": "steps.run.stdout",
+        "expected": "item.answer"
+      }
+    },
+    {
+      "id": "score",
+      "primitive": "unicon/icpc-score@v1",
+      "inputs": {
+        "results": "steps.check.outputs"
+      }
+    }
+  ]
+}

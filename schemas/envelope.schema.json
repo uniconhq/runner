@@ -1,0 +1,197 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/uniconhq/runner/main/schemas/envelope.schema.json",
+  "title": "Unicon grading envelope",
+  "description": "The small file the backend writes to object storage before it dispatches a grading job. Woodpecker starts the grading image with a URL to this file; the harness fetches it and learns everything else from it. It holds presigned URLs and a one-job callback token and nothing that outlives the job, because the harness may run on a machine we do not own.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "judging_id",
+    "submission",
+    "stage",
+    "attempt",
+    "task",
+    "task_published_tag",
+    "task_published_sha",
+    "urls",
+    "callback",
+    "deadline"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "description": "The envelope shape this file is written against. The harness refuses a version it does not speak instead of guessing at the fields.",
+      "type": "integer",
+      "const": 1
+    },
+    "judging_id": {
+      "description": "The judgings row this job belongs to. Also passed to the image as UNICON_JUDGING_ID; the harness refuses an envelope whose id disagrees with its environment.",
+      "type": "string",
+      "format": "uuid"
+    },
+    "submission": { "$ref": "#/$defs/submission" },
+    "stage": {
+      "description": "Which grading stage this attempt is, for example public or final. Stage names are the contest's, not the platform's.",
+      "type": "string",
+      "minLength": 1
+    },
+    "attempt": {
+      "description": "1 for the first grading of this submission in this stage, higher for a rejudge. Part of the result key, so a rejudge overwrites nothing.",
+      "type": "integer",
+      "minimum": 1
+    },
+    "task": { "$ref": "#/$defs/task" },
+    "task_published_tag": {
+      "description": "The tag on the task repo whose published plan this job runs. The harness copies it, and the task identity above, into the verdict: that file is the only record of a grading run that survives a loss of the Unicon database, and a tag with no repo named beside it identifies nothing.",
+      "type": "string",
+      "minLength": 1
+    },
+    "task_published_sha": {
+      "description": "Full commit sha the published tag points at. A tag can be moved; the sha is what was actually graded against.",
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "urls": {
+      "description": "Presigned URLs, one per thing the job reads or writes. The harness never chooses an object key; the backend does.",
+      "type": "object",
+      "required": [
+        "task_bundle",
+        "submission_bundle",
+        "plan",
+        "result_put",
+        "log_put"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "task_bundle": {
+          "description": "GET the task's tests, checker and data, built once at publish.",
+          "type": "string",
+          "format": "uri"
+        },
+        "submission_bundle": {
+          "description": "GET the contestant's files, with large files already resolved to real bytes.",
+          "type": "string",
+          "format": "uri"
+        },
+        "plan": {
+          "description": "GET the compiled plan, matching plan.schema.json.",
+          "type": "string",
+          "format": "uri"
+        },
+        "result_put": {
+          "description": "PUT verdict.json, matching verdict.schema.json.",
+          "type": "string",
+          "format": "uri"
+        },
+        "log_put": {
+          "description": "PUT the job log.",
+          "type": "string",
+          "format": "uri"
+        }
+      }
+    },
+    "callback": {
+      "description": "Where the harness posts started, progress events and the result. The token is good for this job only.",
+      "type": "object",
+      "required": ["base_url", "token"],
+      "additionalProperties": false,
+      "properties": {
+        "base_url": {
+          "description": "Base of the backend's internal judging endpoints for this job.",
+          "type": "string",
+          "format": "uri"
+        },
+        "token": {
+          "description": "Bearer token scoped to this judging id and expiring with the deadline. The only credential the harness ever holds.",
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "digests": {
+      "description": "sha256 of the three objects the harness downloads, so it can check every byte before it trusts any. Optional until Task 6 writes them; present here so filling them is a value change, not a schema_version bump.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "task_bundle": { "$ref": "#/$defs/sha256" },
+        "submission_bundle": { "$ref": "#/$defs/sha256" },
+        "plan": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "deadline": {
+      "description": "After this instant the callback token is dead and the backend treats the job as lost. The harness stops rather than posting a result it cannot deliver.",
+      "type": "string",
+      "format": "date-time"
+    },
+    "limits": {
+      "description": "Job-wide limits. Open on purpose: the sandbox work in Task 6 decides what else belongs here, and per-step limits live in the plan.",
+      "type": "object",
+      "required": ["wall_seconds"],
+      "additionalProperties": true,
+      "properties": {
+        "wall_seconds": {
+          "description": "Wall clock for the whole job, the outermost of the three timers. Per-test CPU and wall limits are in the plan.",
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "description": "A content digest, as sha256:<64 hex>.",
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "task": {
+      "description": "The Forgejo identity of the task being graded against. The harness needs it only to copy into the verdict, which is why the envelope carries it rather than leaving the harness to guess it from an object key.",
+      "type": "object",
+      "required": ["org", "repo"],
+      "additionalProperties": false,
+      "properties": {
+        "org": {
+          "description": "Forgejo organisation that owns the task repo, the same org the submission repo is in.",
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+        },
+        "repo": {
+          "description": "The task repo, the one carrying task.yaml and the tests.",
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+        }
+      }
+    },
+    "submission": {
+      "description": "The Forgejo identity of what is being graded. Forgejo survives a loss of the Unicon database, so this identity is what lets results be matched back to submissions without a rejudge.",
+      "type": "object",
+      "required": ["org", "repo", "tag", "commit"],
+      "additionalProperties": false,
+      "properties": {
+        "org": {
+          "description": "Forgejo organisation that owns the submission repo.",
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+        },
+        "repo": {
+          "description": "The contestant's submission repo for one task.",
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+        },
+        "tag": {
+          "description": "The protected tag that is the submission. May contain a slash, for example submission/14.",
+          "type": "string",
+          "minLength": 1
+        },
+        "commit": {
+          "description": "Full commit sha the tag points at. Forgejo repos are SHA-1 today, so 40 hex characters.",
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        }
+      }
+    }
+  }
+}
