@@ -27,22 +27,28 @@ jobs:
 
   image:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        name: [harness, worker, clone, socket-filter]
     steps:
       - uses: actions/checkout@v7
       - uses: docker/setup-buildx-action@v4
       - uses: docker/build-push-action@v7
         with:
           context: .
+          file: images/${{ matrix.name }}/Dockerfile
           push: false
           load: true
-          tags: unicon-grading:ci
+          tags: unicon-${{ matrix.name }}:ci
 
-      # Run the image the way Woodpecker does, with nothing set: exit 2, and the
+      # Run the harness the way the CI does, with nothing set: exit 2, and the
       # code first on stderr.
-      - name: The image refuses an empty environment
+      - name: The harness refuses an empty environment
+        if: matrix.name == 'harness'
         run: |
           set +e
-          stderr="$(docker run --rm unicon-grading:ci 2>&1 >/dev/null)"
+          stderr="$(docker run --rm unicon-harness:ci 2>&1 >/dev/null)"
           status=$?
           set -e
           echo "$stderr"
@@ -53,4 +59,15 @@ jobs:
           case "$stderr" in
             "unicon-harness: missing_environment:"*) ;;
             *) echo "expected a missing_environment line"; exit 1 ;;
+          esac
+
+      # The other three carry a placeholder that names the image and exits 0.
+      - name: The placeholder runs
+        if: matrix.name != 'harness'
+        run: |
+          output="$(docker run --rm unicon-${{ matrix.name }}:ci)"
+          echo "$output"
+          case "$output" in
+            "unicon-${{ matrix.name }}: placeholder"*) ;;
+            *) echo "expected the placeholder line"; exit 1 ;;
           esac

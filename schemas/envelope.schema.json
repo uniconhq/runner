@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://raw.githubusercontent.com/uniconhq/runner/main/schemas/envelope.schema.json",
   "title": "Unicon grading envelope",
-  "description": "The small file the backend writes to object storage before it dispatches a grading job. Woodpecker starts the grading image with a URL to this file; the harness fetches it and learns everything else from it. It holds presigned URLs and a one-job callback token and nothing that outlives the job, because the harness may run on a machine we do not own.",
+  "description": "The small file the backend writes to object storage before it dispatches a grading job. Woodpecker starts the harness image with a URL to this file; the harness fetches it and learns everything else from it. It holds presigned URLs and a one-job callback token and nothing that outlives the job, because the harness may run on a machine we do not own.",
   "type": "object",
   "required": [
     "schema_version",

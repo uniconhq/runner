@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "step": "compile",
+  "inputs": {
+    "source": { "file": "in/main.cpp" },
+    "headers": [{ "file": "in/lib/util.h" }],
+    "language": "cpp",
+    "optimise": true,
+    "stack_mb": 256
+  }
+}
