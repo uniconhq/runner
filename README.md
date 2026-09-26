@@ -3,19 +3,27 @@
 The part of Unicon that runs contestant code, and the contract files that
 describe what it accepts and what it returns.
 
-This repo produces the grading image, `ghcr.io/uniconhq/grading`, and four
-files published as assets on every release: `plan.schema.json`,
-`envelope.schema.json`, `verdict.schema.json` and `registry.json`. The backend
-pins one release and generates its models from those files.
+This repo produces four images and four contract files. The images are
+`ghcr.io/uniconhq/harness`, the program that runs a plan by starting one
+sandboxed container per step; `ghcr.io/uniconhq/worker`, the supervisor that
+sets a grading machine up; `ghcr.io/uniconhq/clone`, what the CI checks code
+out with; and `ghcr.io/uniconhq/socket-filter`, the policy that stands between
+the harness and Docker. All four build from `python:3.14-slim` pinned by
+digest, under `images/`. The contract files are `plan.schema.json`,
+`envelope.schema.json`, `verdict.schema.json` and `primitive.schema.json`,
+published as assets on every release. The rest of the platform pins one
+release and reads them from it.
 
-Today the image contains a harness that reads the envelope it is handed,
-checks it against the contract and stops. It does not download bundles, run a
-plan, start a sandbox or write a verdict. Those are Task 6. `unicon-worker`,
-the image a bring-your-own-compute operator installs, is Task 12.
+Today the harness reads the envelope it is handed, checks it against the
+contract and stops. It does not download bundles, run a plan, start a sandbox
+or write a verdict. The other three images carry a placeholder entrypoint that
+names the image and exits 0; their programs come with the features that need
+them. This repo holds no primitive: each primitive is its own repo,
+`primitive-<name>`, built against the primitive contract published here.
 
 ## How a grading job will work
 
-Woodpecker starts the grading image once per submission with two values in its
+Woodpecker starts the harness image once per submission with two values in its
 environment: `UNICON_JUDGING_ID` and `UNICON_ENVELOPE_URL`, a URL to a small
 file the backend wrote to object storage. The harness fetches the envelope and
 learns everything else from it: presigned URLs for the task bundle, the
@@ -29,7 +37,7 @@ It then reads the plan, runs the steps in order, starts a sandbox for any step
 that runs contestant code, posts progress as tests finish, writes
 `verdict.json`, and exits zero only once the backend has accepted the result.
 
-## The three contracts
+## The four contracts
 
 **`schemas/envelope.schema.json`.** Written by the backend when it dispatches a
 job; read by the harness at startup. It is the only thing the harness is told,
@@ -60,11 +68,11 @@ image by digest. The harness never reads workflow YAML.
 | Field | What it carries |
 |---|---|
 | `schema_version` | `1` |
-| `image_digest` | The grading image this plan was compiled against, `sha256:...`, never a tag |
+| `image_digest` | The harness image this plan was compiled against, `sha256:...`, never a tag |
 | `stage` | The stage this plan belongs to; a task may compile one plan per stage |
 | `steps[].id` | Unique in the plan; how later steps name this one |
-| `steps[].primitive` | `owner/name@version`, listed in the `registry.json` of the pinned release |
-| `steps[].inputs` | Arguments, keyed by the input names in the registry. Open: the value grammar is Task 10's |
+| `steps[].primitive` | `owner/name@version`, a primitive the forge holds at that version |
+| `steps[].inputs` | Arguments, keyed by the input names the primitive declares. Open: the value grammar is settled with the compiler |
 | `steps[].for_each` | Optional. Run the step once per item of the named list and collect the outputs |
 | `steps[].limits` | Optional. `time_ms`, `cpu_ms`, `memory_mb`, `pids`, `output_mb` for one run |
 
@@ -102,37 +110,34 @@ narrow on purpose, since the backend parses it once into the numeric column the
 leaderboard sorts on, and a value it cannot parse arrives long after the
 grading, when nobody can fix it.
 
-`registry.json` is the fourth file. It lists every primitive the grading image
-offers, and the compiler validates a workflow against it at publish, so a typo
-or a wrong type is the setter's error at the click rather than a green pipeline
-that marks everyone wrong. It is empty today; Task 10 fills it. The entry shape:
+**`schemas/primitive.schema.json`.** How the harness and a primitive image
+talk. The harness starts one sandboxed container from the step's image and
+mounts one working directory into it. `inputs.json` and the input files under
+`in/` go in; `outputs.json` and the output files under `out/` come back when
+the container exits. The schema describes both files, and a primitive reads
+one directory and writes one directory and sees nothing else: not the forge,
+not the plan, not the network.
 
-```json
-{
-  "schema_version": 1,
-  "primitives": [
-    {
-      "name": "unicon/diff-check@v1",
-      "description": "Compare a run's output with the expected answer.",
-      "inputs": [
-        { "id": "actual", "type": "file", "required": true },
-        { "id": "expected", "type": "file", "required": true }
-      ],
-      "outputs": [
-        { "id": "verdict", "type": "text" },
-        { "id": "score", "type": "number" }
-      ]
-    }
-  ]
-}
-```
+| File | Field | What it carries |
+|---|---|---|
+| `inputs.json` | `schema_version` | `1` |
+| | `step` | The plan step this container runs, for the primitive's own log |
+| | `inputs` | One value per declared input, keyed by name |
+| `outputs.json` | `schema_version` | `1` |
+| | `outputs` | One value per declared output, keyed by name |
+| | `error` | Optional. One sentence when the primitive could not do its work at all; a failed compile is an outcome, not an error |
 
-Types are the task input types in `TASK-FORMAT.md`, section 2.
+A value is text, a number or a boolean carried as itself, a file as
+`{"file": "in/main.cpp"}`, or a list of files as a list of those objects.
+File paths are relative to the working directory, under `in/` for inputs and
+`out/` for outputs. There is no registry file: the forge holds every
+primitive and its declaration, and the compiler reads them from there.
 
-Every schema field is set by the matching file in `examples/`, and
+Every schema field is set by a file in `examples/`, and
 `scripts/check_contract_files.py` fails if one is not. A field no example fills
 in is a field nothing writes, and it stays plausible for years because the
-schema still describes it.
+schema still describes it. The primitive contract has three examples, one per
+file it describes and one for the error case.
 
 ## Rules that are cheap now and expensive later
 
@@ -152,29 +157,34 @@ daemon resolves bind-mount sources on the host. A harness that mounts its own
 `/work/sandbox` into a sibling container gets an empty directory and a silently
 wrong verdict. It must ask the daemon for its own mounts once at startup and
 translate every sandbox path through that. Measured and confirmed in
-`stack-test-findings.md` section 1.1. Not implemented yet; Task 6 builds it.
+`stack-test-findings.md` section 1.1. Not implemented yet.
 
 **Every sandbox carries a label with the judging id.** If the harness dies
 mid-job its sandbox containers keep running and nothing cleans them up. The
 harness kills its own in a `finally` block, and a reaper on the machine removes
 any `unicon.judging=*` container older than the maximum job time, for the case
 where the harness is not there to do it. `stack-test-findings.md` section 1.2.
-Task 6 and Task 12.
+Not implemented yet.
 
-**The image is never released as `:latest`.** Plans pin the grading image by
-content digest so a task keeps grading the way it was published. A moving tag
-invites someone to run a plan against an image it was not compiled for. The
-base image is pinned by digest for the same reason; bumping it is a deliberate
-commit.
+**No image is ever released as `:latest`.** Plans pin the harness image by
+content digest so a task keeps grading the way it was published, and a grading
+machine pins the other three the same way. A moving tag invites someone to run
+a plan against an image it was not compiled for. The base image is pinned by
+digest for the same reason; bumping it is one commit that changes all four
+Dockerfiles.
 
 ## Layout
 
 ```
-harness/unicon_harness/   the program in the image
+images/harness/           the harness Dockerfile; the program is harness/
+images/worker/            the worker Dockerfile, placeholder entrypoint
+images/clone/             the clone Dockerfile, placeholder entrypoint
+images/socket-filter/     the socket filter Dockerfile, placeholder entrypoint
+images/placeholder.py     what the three placeholder images run
+harness/unicon_harness/   the program in the harness image
 harness/tests/            its tests
-schemas/                  the three contract schemas, published on each release
-registry.json             the primitive registry, published on each release
-examples/                 one valid plan, envelope and verdict, checked in CI
+schemas/                  the four contract schemas, published on each release
+examples/                 valid documents for every schema, checked in CI
 scripts/                  the check that keeps the examples and schemas in step
 ```
 
@@ -191,19 +201,26 @@ uv run pytest
 uv run python scripts/check_contract_files.py
 ```
 
-CI runs exactly those six commands, then builds the image and starts it once
-with an empty environment to see that the entrypoint refuses it.
+CI runs exactly those six commands, then builds the four images from the repo
+root, starts the harness once with an empty environment to see that it refuses
+it, and starts each of the other three to see that its placeholder runs.
+
+```
+docker build -f images/harness/Dockerfile -t unicon-harness:dev .
+docker build -f images/worker/Dockerfile -t unicon-worker:dev .
+docker build -f images/clone/Dockerfile -t unicon-clone:dev .
+docker build -f images/socket-filter/Dockerfile -t unicon-socket-filter:dev .
+```
 
 To run the harness against a real envelope over HTTP, serve one and point the
 image at it:
 
 ```
 python -m http.server 8799 --directory examples
-docker build -t unicon-grading:dev .
 docker run --rm --add-host=host.docker.internal:host-gateway \
   -e UNICON_ENVELOPE_URL=http://host.docker.internal:8799/envelope.json \
   -e UNICON_JUDGING_ID=0199a2c1-6b7e-7c3a-9f10-5d2e4b8a6c31 \
-  unicon-grading:dev
+  unicon-harness:dev
 ```
 
 It exits 0 and prints one line for an envelope it accepts. For anything else it
@@ -220,8 +237,8 @@ exits 2 and prints one line to stderr that starts with
 | `judging_id_mismatch` | The envelope is for a different judging than the environment says |
 | `schemas_missing` | The image was built without the contract files. A packaging fault, not a job fault |
 
-Exit 2 means the job never began; Task 6 reports that to the backend as a
-`system_error`. There is one exit code for every refusal because the backend's
+Exit 2 means the job never began, and is reported to the backend as a
+`system_error` once the harness runs plans. There is one exit code for every refusal because the backend's
 only decision is whether to alert; the code in the line is for the person
 reading the log.
 
@@ -229,13 +246,16 @@ reading the log.
 
 Push a tag `v1.2.3` on `main`. The release workflow refuses a tag whose commit
 is not on `main`, checks the tag against the version in `pyproject.toml`, runs
-the same checks as CI, pushes `ghcr.io/uniconhq/grading:v1.2.3`, and creates a
-GitHub release with the four contract files attached and the image digest in
-the notes. The backend pins that release and that digest.
+the same checks as CI, pushes the four images as `ghcr.io/uniconhq/harness:v1.2.3`,
+`worker:v1.2.3`, `clone:v1.2.3` and `socket-filter:v1.2.3`, and creates a
+GitHub release with the four contract files and `images.json` attached, which
+names each image by digest, and the same four digests in the notes. `deploy`
+pins that release and those digests.
 
-The first push creates the `grading` package on the organisation as **private**,
-whatever the repo's visibility is. Grading agents pull it anonymously, so
-someone has to open the package on the organisation's Packages page once and
-set its visibility to public, and add the `runner` repo under Manage Actions
-access so later releases can keep pushing to it. Until that is done the first
-`docker pull` from an agent fails with a 403 that reads like a missing tag.
+The first push creates each package on the organisation as **private**,
+whatever the repo's visibility is. Grading machines pull them anonymously, so
+someone has to open each of the four packages on the organisation's Packages
+page once and set its visibility to public, and add the `runner` repo under
+Manage Actions access so later releases can keep pushing to it. Until that is
+done the first `docker pull` from a machine fails with a 403 that reads like a
+missing tag.

@@ -1,0 +1,80 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/uniconhq/runner/main/schemas/primitive.schema.json",
+  "title": "Unicon primitive contract",
+  "description": "How the harness and a primitive image talk. The harness starts one sandboxed container from the step's image and mounts one working directory into it: inputs.json and the input files under in/ go in, and outputs.json and the output files under out/ come back when the container exits. This schema describes both files. A primitive reads one directory and writes one directory; it never sees the forge, the plan or the network.",
+  "oneOf": [
+    { "$ref": "#/$defs/inputs_file" },
+    { "$ref": "#/$defs/outputs_file" }
+  ],
+  "$defs": {
+    "inputs_file": {
+      "description": "inputs.json, written by the harness before the container starts.",
+      "type": "object",
+      "required": ["schema_version", "step", "inputs"],
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "description": "The contract version this file is written against. A primitive refuses a version it does not speak.",
+          "type": "integer",
+          "const": 1
+        },
+        "step": {
+          "description": "The id of the plan step this container runs, for the primitive's own log.",
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9_-]*$"
+        },
+        "inputs": {
+          "description": "One entry per input the primitive declares, keyed by the input name.",
+          "type": "object",
+          "additionalProperties": { "$ref": "#/$defs/value" }
+        }
+      }
+    },
+    "outputs_file": {
+      "description": "outputs.json, written by the primitive before it exits. The harness checks it against the outputs the primitive declares before any later step sees it.",
+      "type": "object",
+      "required": ["schema_version", "outputs"],
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "description": "The contract version this file is written against, the same number as in inputs.json.",
+          "type": "integer",
+          "const": 1
+        },
+        "outputs": {
+          "description": "One entry per output the primitive declares, keyed by the output name. A file output names a path under out/.",
+          "type": "object",
+          "additionalProperties": { "$ref": "#/$defs/value" }
+        },
+        "error": {
+          "description": "Set when the primitive could not do its work at all, in one sentence for a person. A failed compile is an outcome, not an error; this is for a missing input or a broken image.",
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "value": {
+      "description": "One input or output value. Text, a number and a boolean are carried as themselves; a file is an object naming its path; a list of files is a list of those objects.",
+      "oneOf": [
+        { "type": "string" },
+        { "type": "number" },
+        { "type": "boolean" },
+        { "$ref": "#/$defs/file" },
+        { "type": "array", "items": { "$ref": "#/$defs/file" } }
+      ]
+    },
+    "file": {
+      "description": "A file in the working directory. The path is relative to the directory root: under in/ for an input, under out/ for an output.",
+      "type": "object",
+      "required": ["file"],
+      "additionalProperties": false,
+      "properties": {
+        "file": {
+          "type": "string",
+          "pattern": "^(in|out)/[^\\0]+$"
+        }
+      }
+    }
+  }
+}

@@ -1,4 +1,4 @@
-"""The grading image entrypoint. Woodpecker starts the image once per submission
+"""The harness image entrypoint. Woodpecker starts the image once per submission
 with a URL to the envelope and the judging id. Today it fetches the envelope,
 checks it against the contract and stops; running the plan is Task 6.
 """
