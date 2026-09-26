@@ -1,6 +1,11 @@
 """Check that the published examples still match the published schemas. An example
 that drifts from its schema is the first warning that the backend and the
 harness have parted company.
+
+`CONTRACTS` maps each contract to the examples that exercise it. The primitive
+contract describes two files, so each of its examples is checked against the
+branch it is an instance of, and a branch's fields are exercised by its
+examples together.
 """
 
 from __future__ import annotations
@@ -19,52 +24,92 @@ REPO_ROOT = Path(__file__).parents[1]
 SCHEMAS = REPO_ROOT / "schemas"
 EXAMPLES = REPO_ROOT / "examples"
 
-CONTRACTS = ["plan", "envelope", "verdict"]
+CONTRACTS: dict[str, list[tuple[str, str | None]]] = {
+    "plan": [("plan", None)],
+    "envelope": [("envelope", None)],
+    "verdict": [("verdict", None)],
+    "primitive": [
+        ("primitive-inputs", "inputs_file"),
+        ("primitive-outputs", "outputs_file"),
+        ("primitive-outputs-error", "outputs_file"),
+    ],
+}
 
 
 def main() -> int:
-    problems = [problem for name in CONTRACTS for problem in _check(name)]
-    problems += _check_registry()
+    problems = [
+        problem
+        for name, examples in CONTRACTS.items()
+        for problem in _check(name, examples)
+    ]
 
     for problem in problems:
         print(problem, file=sys.stderr)
     if problems:
         return 1
 
-    print(f"contract files ok: {', '.join(CONTRACTS)}, registry")
+    print(f"contract files ok: {', '.join(CONTRACTS)}")
     return 0
 
 
-def _check(name: str) -> list[str]:
+def _check(name: str, examples: list[tuple[str, str | None]]) -> list[str]:
     schema = _read(SCHEMAS / f"{name}.schema.json")
-    example = _read(EXAMPLES / f"{name}.json")
     Draft202012Validator.check_schema(schema)
-    declared = schema["properties"]["schema_version"].get("const")
+    problems = _version_pinned(name, schema)
+    validator = Draft202012Validator(schema, format_checker=FormatChecker())
+
+    exercised: dict[str | None, set[str]] = {}
+    for example_name, branch in examples:
+        example = _read(EXAMPLES / f"{example_name}.json")
+        problems += [
+            f"examples/{example_name}.json does not match "
+            f"schemas/{name}.schema.json at "
+            f"{'/'.join(str(part) for part in error.absolute_path) or 'the document'}: "
+            f"{error.message}"
+            for error in validator.iter_errors(example)
+        ]
+        exercised.setdefault(branch, set()).update(_document_fields(example))
+
+    for branch, present in exercised.items():
+        node = schema if branch is None else schema["$defs"][branch]
+        problems += _unexercised(name, branch, node, schema, present)
+    return problems
+
+
+def _version_pinned(name: str, schema: Any) -> list[str]:
+    """Every contract file pins the schema_version the harness speaks."""
+    declared = _schema_version_const(schema, schema)
     if declared != SCHEMA_VERSION:
         return [
             f"schemas/{name}.schema.json pins schema_version {declared}, "
             f"but the harness speaks {SCHEMA_VERSION}"
         ]
-    validator = Draft202012Validator(schema, format_checker=FormatChecker())
-    problems = [
-        f"examples/{name}.json does not match schemas/{name}.schema.json at "
-        f"{'/'.join(str(part) for part in error.absolute_path) or 'the document'}: "
-        f"{error.message}"
-        for error in validator.iter_errors(example)
-    ]
-    return problems + _unexercised(name, schema, example)
+    return []
 
 
-def _unexercised(name: str, schema: Any, example: Any) -> list[str]:
-    """Name every schema field the example never fills in. A field nobody writes
+def _schema_version_const(node: Any, root: Any) -> Any:
+    """The `const` on schema_version, at the root or in every root branch."""
+    properties = node.get("properties", {})
+    if "schema_version" in properties:
+        return properties["schema_version"].get("const")
+    found = {
+        _schema_version_const(_resolved(branch, root), root)
+        for branch in node.get("oneOf", [])
+    }
+    return found.pop() if len(found) == 1 else None
+
+
+def _unexercised(
+    name: str, branch: str | None, node: Any, root: Any, present: set[str]
+) -> list[str]:
+    """Name every schema field the examples never fill in. A field nobody writes
     is a field nobody reads, and it stays plausible for years because the
     schema still describes it.
     """
-    present = set(_document_fields(example))
+    where = f"schemas/{name}.schema.json" + (f" ({branch})" if branch else "")
     return [
-        f"schemas/{name}.schema.json declares {field}, "
-        f"which examples/{name}.json never sets"
-        for field in _schema_fields(schema, schema)
+        f"{where} declares {field}, which no example under examples/ sets"
+        for field in _schema_fields(node, root)
         if field not in present
     ]
 
@@ -75,13 +120,18 @@ def _schema_fields(node: Any, root: Any, prefix: str = "") -> Iterator[str]:
     """
     if not isinstance(node, dict):
         return
-    reference = node.get("$ref")
-    if isinstance(reference, str):
-        node = root["$defs"][reference.rsplit("/", 1)[-1]]
+    node = _resolved(node, root)
     for field, child in node.get("properties", {}).items():
         yield f"{prefix}{field}"
         yield from _schema_fields(child, root, f"{prefix}{field}.")
     yield from _schema_fields(node.get("items"), root, prefix)
+
+
+def _resolved(node: Any, root: Any) -> Any:
+    reference = node.get("$ref")
+    if isinstance(reference, str):
+        return root["$defs"][reference.rsplit("/", 1)[-1]]
+    return node
 
 
 def _document_fields(value: Any, prefix: str = "") -> Iterator[str]:
@@ -92,16 +142,6 @@ def _document_fields(value: Any, prefix: str = "") -> Iterator[str]:
     elif isinstance(value, list):
         for item in value:
             yield from _document_fields(item, prefix)
-
-
-def _check_registry() -> list[str]:
-    """The registry has no schema of its own; Task 10 fills it and may add one."""
-    registry = _read(REPO_ROOT / "registry.json")
-    if registry.get("schema_version") != SCHEMA_VERSION:
-        return [f"registry.json must declare schema_version {SCHEMA_VERSION}"]
-    if not isinstance(registry.get("primitives"), list):
-        return ["registry.json must have a primitives list"]
-    return []
 
 
 def _read(path: Path) -> dict[str, Any]:

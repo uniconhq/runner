@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://raw.githubusercontent.com/uniconhq/runner/main/schemas/plan.schema.json",
   "title": "Unicon grading plan",
-  "description": "What the backend's compiler emits when a task is published: a flat list of primitive calls with every workflow reference already resolved, pinned to one grading image by digest. The harness executes a plan; it never reads workflow YAML.",
+  "description": "What the backend's compiler emits when a task is published: a flat list of primitive calls with every workflow reference already resolved, pinned to one harness image by digest. The harness executes a plan; it never reads workflow YAML.",
   "type": "object",
   "required": ["schema_version", "image_digest", "stage", "steps"],
   "additionalProperties": false,
@@ -13,7 +13,7 @@
       "const": 1
     },
     "image_digest": {
-      "description": "The grading image this plan was compiled against, by content digest and never by tag, so a task keeps grading on the image it was published with.",
+      "description": "The harness image this plan was compiled against, by content digest and never by tag, so a task keeps grading on the image it was published with.",
       "type": "string",
       "pattern": "^sha256:[0-9a-f]{64}$"
     },
@@ -41,12 +41,12 @@
           "pattern": "^[a-z0-9][a-z0-9_-]*$"
         },
         "primitive": {
-          "description": "Which tool in the grading image to call, as owner/name@version, for example unicon/sandbox-run@v1. Must be a primitive listed in the registry.json of the pinned runner release; composed workflows are already inlined by the compiler.",
+          "description": "Which primitive this step runs, as owner/name@version, for example unicon/sandbox-run@v1. A primitive the forge holds at that version; composed workflows are already inlined by the compiler.",
           "type": "string",
           "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*@[A-Za-z0-9][A-Za-z0-9._-]*$"
         },
         "inputs": {
-          "description": "Arguments for the primitive, keyed by the input names in the registry. Deliberately open: the value grammar for naming bundle paths and earlier step outputs is settled by the compiler and the primitives in Task 10.",
+          "description": "Arguments for the primitive, keyed by the input names its declaration lists. Deliberately open: the value grammar for naming bundle paths and earlier step outputs is settled by the compiler and the primitives in Task 10.",
           "type": "object",
           "additionalProperties": true
         },

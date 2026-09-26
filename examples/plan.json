@@ -44,7 +44,7 @@
     },
     {
       "id": "score",
-      "primitive": "unicon/icpc-score@v1",
+      "primitive": "unicon/subtask-score@v1",
       "inputs": {
         "results": "steps.check.outputs"
       }
