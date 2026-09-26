@@ -17,7 +17,7 @@ jobs:
           # The ancestry check below needs main's history, not the tag alone.
           fetch-depth: 0
 
-      # A release is what the backend pins, so it comes from the reviewed branch.
+      # A release is what deploy pins, so it comes from the reviewed branch.
       - name: Check the tag is on main
         run: |
           git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
@@ -56,24 +56,70 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # No :latest. Compiled plans pin the grading image by digest, and a moving
-      # tag would run a plan against an image it was not compiled for.
-      - id: build
+      # Four images, each tagged with the release and never :latest. A plan
+      # pins the harness by digest and a grading machine pins the other three
+      # the same way, so a moving tag would run a plan against an image it was
+      # not compiled for.
+      - id: harness
         uses: docker/build-push-action@v7
         with:
           context: .
+          file: images/harness/Dockerfile
           push: true
-          tags: ghcr.io/uniconhq/grading:${{ github.ref_name }}
+          tags: ghcr.io/uniconhq/harness:${{ github.ref_name }}
+      - id: worker
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: images/worker/Dockerfile
+          push: true
+          tags: ghcr.io/uniconhq/worker:${{ github.ref_name }}
+      - id: clone
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: images/clone/Dockerfile
+          push: true
+          tags: ghcr.io/uniconhq/clone:${{ github.ref_name }}
+      - id: socket-filter
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: images/socket-filter/Dockerfile
+          push: true
+          tags: ghcr.io/uniconhq/socket-filter:${{ github.ref_name }}
 
-      # The four contract files are what the backend pins, and a compiled plan
-      # records the digest.
+      # One file naming every image by digest, so deploy pins one release and
+      # reads the four digests from it.
+      - name: Write images.json
+        run: |
+          cat > images.json <<EOF
+          {
+            "release": "${{ github.ref_name }}",
+            "images": {
+              "harness": "ghcr.io/uniconhq/harness@${{ steps.harness.outputs.digest }}",
+              "worker": "ghcr.io/uniconhq/worker@${{ steps.worker.outputs.digest }}",
+              "clone": "ghcr.io/uniconhq/clone@${{ steps.clone.outputs.digest }}",
+              "socket-filter": "ghcr.io/uniconhq/socket-filter@${{ steps.socket-filter.outputs.digest }}"
+            }
+          }
+          EOF
+          cat images.json
+
+      # The four contract files and the four digests are what the rest of the
+      # platform pins.
       - uses: softprops/action-gh-release@v3
         with:
           body: |
-            Grading image: `ghcr.io/uniconhq/grading:${{ github.ref_name }}`
-            Digest: `${{ steps.build.outputs.digest }}`
+            | Image | Digest |
+            |---|---|
+            | `ghcr.io/uniconhq/harness:${{ github.ref_name }}` | `${{ steps.harness.outputs.digest }}` |
+            | `ghcr.io/uniconhq/worker:${{ github.ref_name }}` | `${{ steps.worker.outputs.digest }}` |
+            | `ghcr.io/uniconhq/clone:${{ github.ref_name }}` | `${{ steps.clone.outputs.digest }}` |
+            | `ghcr.io/uniconhq/socket-filter:${{ github.ref_name }}` | `${{ steps.socket-filter.outputs.digest }}` |
           files: |
             schemas/plan.schema.json
             schemas/envelope.schema.json
             schemas/verdict.schema.json
-            registry.json
+            schemas/primitive.schema.json
+            images.json
