@@ -1,36 +1,31 @@
 {
   "schema_version": 1,
-  "judging_id": "0199a2c1-6b7e-7c3a-9f10-5d2e4b8a6c31",
+  "grading_id": "0199a2c1-6b7e-7c3a-9f10-5d2e4b8a6c31",
   "submission": {
-    "org": "acme-open-2026",
-    "repo": "alice-two-sum",
+    "org": "acme",
+    "repo": "spring.sum.alice.sub",
     "tag": "submission/3",
     "commit": "6f1b0d0c4d2a9e8f7b6a5c4d3e2f1a0b9c8d7e6f"
   },
   "stage": "public",
   "attempt": 1,
   "task": {
-    "org": "acme-open-2026",
-    "repo": "two-sum"
+    "org": "acme",
+    "repo": "spring.sum.task"
   },
-  "task_published_tag": "v3",
-  "task_published_sha": "9c3d2e1f0a9b8c7d6e5f4a3b2c1d0e9f8a7b6c5d",
-  "urls": {
-    "task_bundle": "http://garage.invalid/unicon-bundles/tasks/acme-open-2026/two-sum/v3.tar.zst?X-Amz-Expires=3600&X-Amz-Signature=example",
-    "submission_bundle": "http://garage.invalid/unicon-bundles/submissions/acme-open-2026/alice-two-sum/submission/3.tar.zst?X-Amz-Expires=3600&X-Amz-Signature=example",
-    "plan": "http://garage.invalid/unicon-bundles/plans/acme-open-2026/two-sum/v3/public.json?X-Amz-Expires=3600&X-Amz-Signature=example",
-    "result_put": "http://garage.invalid/unicon-results/acme-open-2026/alice-two-sum/submission/3/public/1/verdict.json?X-Amz-Expires=3600&X-Amz-Signature=example",
-    "log_put": "http://garage.invalid/unicon-results/acme-open-2026/alice-two-sum/submission/3/public/1/log.txt?X-Amz-Expires=3600&X-Amz-Signature=example"
+  "publication": {
+    "tag": "published/3",
+    "commit": "9c3d2e1f0a9b8c7d6e5f4a3b2c1d0e9f8a7b6c5d"
+  },
+  "checkouts": {
+    "task": "/woodpecker/task",
+    "submission": "/woodpecker/submission"
   },
   "callback": {
-    "base_url": "http://unicon.invalid/api/v1/internal/judgings/0199a2c1-6b7e-7c3a-9f10-5d2e4b8a6c31",
-    "token": "example-one-job-callback-token"
+    "url": "http://unicon.invalid/api/v1/internal/gradings/0199a2c1-6b7e-7c3a-9f10-5d2e4b8a6c31",
+    "token": "example-one-run-callback-token"
   },
-  "digests": {
-    "task_bundle": "sha256:1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f809",
-    "submission_bundle": "sha256:2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a",
-    "plan": "sha256:3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2b"
-  },
+  "log_put": "http://garage.invalid/unicon-results/acme/spring.sum.alice.sub/submission/3/public/1/log.txt?X-Amz-Expires=3600&X-Amz-Signature=example",
   "deadline": "2026-09-17T09:30:00Z",
   "limits": {
     "wall_seconds": 900

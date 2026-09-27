@@ -43,13 +43,28 @@ def test_a_missing_schema_version_is_refused_as_a_version_problem(
 def test_a_missing_field_is_refused_and_named(
     example_envelope: dict[str, Any],
 ) -> None:
-    del example_envelope["urls"]["plan"]
+    del example_envelope["checkouts"]["task"]
 
     with pytest.raises(EnvelopeError) as refusal:
         load(_serialise(example_envelope))
 
     assert refusal.value.code == "schema_violation"
-    assert "plan" in refusal.value.message
+    assert "task" in refusal.value.message
+
+
+def test_an_envelope_carrying_a_bundle_url_is_refused(
+    example_envelope: dict[str, Any],
+) -> None:
+    """The harness downloads nothing but the envelope: a field naming a bundle
+    to fetch is the dropped design, not a newer one.
+    """
+    example_envelope["urls"] = {"task_bundle": "http://garage.invalid/x"}
+
+    with pytest.raises(EnvelopeError) as refusal:
+        load(_serialise(example_envelope))
+
+    assert refusal.value.code == "schema_violation"
+    assert "urls" in refusal.value.message
 
 
 def test_an_unknown_field_is_refused(example_envelope: dict[str, Any]) -> None:
@@ -63,13 +78,23 @@ def test_an_unknown_field_is_refused(example_envelope: dict[str, Any]) -> None:
 
 
 def test_a_malformed_url_is_refused(example_envelope: dict[str, Any]) -> None:
-    example_envelope["urls"]["result_put"] = "not a url"
+    example_envelope["log_put"] = "not a url"
 
     with pytest.raises(EnvelopeError) as refusal:
         load(_serialise(example_envelope))
 
     assert refusal.value.code == "schema_violation"
-    assert "result_put" in refusal.value.message
+    assert "log_put" in refusal.value.message
+
+
+def test_a_relative_checkout_path_is_refused(example_envelope: dict[str, Any]) -> None:
+    example_envelope["checkouts"]["submission"] = "submission"
+
+    with pytest.raises(EnvelopeError) as refusal:
+        load(_serialise(example_envelope))
+
+    assert refusal.value.code == "schema_violation"
+    assert "submission" in refusal.value.message
 
 
 def test_bytes_that_are_not_json_are_refused() -> None:

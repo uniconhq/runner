@@ -2,9 +2,9 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://raw.githubusercontent.com/uniconhq/runner/main/schemas/plan.schema.json",
   "title": "Unicon grading plan",
-  "description": "What the backend's compiler emits when a task is published: a flat list of primitive calls with every workflow reference already resolved, pinned to one harness image by digest. The harness executes a plan; it never reads workflow YAML.",
+  "description": "What the compiler in the forge repo writes at every valid save of a task, as plans/<stage>.json in the task repo, in the commit its publication points at: a flat list of primitive calls with every workflow reference resolved and every list expanded. Every step carries its primitive image by digest, its entrypoint and its limits; the plan names the harness image by digest; nothing is left to resolve at grade time, because the harness may not talk to the forge. The harness executes a plan and never reads workflow YAML or a primitive's declaration.",
   "type": "object",
-  "required": ["schema_version", "image_digest", "stage", "steps"],
+  "required": ["schema_version", "harness_image", "stage", "steps"],
   "additionalProperties": false,
   "properties": {
     "schema_version": {
@@ -12,15 +12,23 @@
       "type": "integer",
       "const": 1
     },
-    "image_digest": {
-      "description": "The harness image this plan was compiled against, by content digest and never by tag, so a task keeps grading on the image it was published with.",
-      "type": "string",
-      "pattern": "^sha256:[0-9a-f]{64}$"
+    "harness_image": {
+      "description": "The harness image this plan was compiled for, as a full reference by content digest and never by tag, so a task keeps grading on the image it was published with. The forge repo tells the CI to run exactly this image.",
+      "$ref": "#/$defs/image"
     },
     "stage": {
-      "description": "The grading stage this plan belongs to. A task may compile a different plan per stage.",
+      "description": "The grading stage this plan belongs to. A task compiles one plan per stage.",
       "type": "string",
       "minLength": 1
+    },
+    "lists": {
+      "description": "The lists a step's for_each names, already expanded by the compiler from the task's actual files, for example the test list. Keyed by the name the step uses; each item is what one run of the step sees as item.",
+      "type": "object",
+      "propertyNames": { "pattern": "^[a-z][a-z0-9_.]*$" },
+      "additionalProperties": {
+        "type": "array",
+        "items": { "type": "object" }
+      }
     },
     "steps": {
       "description": "Run in order. Each step may read the outputs of earlier steps.",
@@ -30,35 +38,51 @@
     }
   },
   "$defs": {
+    "image": {
+      "description": "A container image by content digest: a registry path followed by @sha256: and 64 hex characters.",
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9._/-]*@sha256:[0-9a-f]{64}$"
+    },
     "step": {
       "type": "object",
-      "required": ["id", "primitive", "inputs"],
+      "required": ["id", "primitive", "image", "entrypoint", "inputs", "limits"],
       "additionalProperties": false,
       "properties": {
         "id": {
-          "description": "Unique within the plan. Earlier steps are referred to by this id.",
+          "description": "Unique within the plan; the harness refuses a plan that repeats one. Later steps name this one by it.",
           "type": "string",
           "pattern": "^[a-z0-9][a-z0-9_-]*$"
         },
         "primitive": {
-          "description": "Which primitive this step runs, as owner/name@version, for example unicon/sandbox-run@v1. A primitive the forge holds at that version; composed workflows are already inlined by the compiler.",
+          "description": "Which primitive this step runs, as name@version, for example sandbox-run@v1, for the log and the per-test table. The image below is what actually runs; the name is never resolved at grade time.",
           "type": "string",
-          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*@[A-Za-z0-9][A-Za-z0-9._-]*$"
+          "pattern": "^[a-z0-9][a-z0-9_-]*@[A-Za-z0-9][A-Za-z0-9._-]*$"
+        },
+        "image": {
+          "description": "The primitive's image at that version, by digest, read from its declaration when the plan was compiled.",
+          "$ref": "#/$defs/image"
+        },
+        "entrypoint": {
+          "description": "The program the container runs, as the declaration names it. The harness starts the container with exactly this and the working directory mounted under the primitive contract.",
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string", "minLength": 1 }
         },
         "inputs": {
-          "description": "Arguments for the primitive, keyed by the input names its declaration lists. Deliberately open: the value grammar for naming bundle paths and earlier step outputs is settled by the compiler and the primitives in Task 10.",
+          "description": "Arguments for the primitive, keyed by the input names its declaration lists. A value is a literal, a path into the publication or submission checkout, an earlier step's output as steps.<id>.<output>, or a field of the current item as item.<field>.",
           "type": "object",
           "additionalProperties": true
         },
         "for_each": {
-          "description": "Run this step once per item of the named list and collect the outputs into an array. The reference grammar is the compiler's; the harness only needs it to name a list it can already see.",
+          "description": "Run this step once per item of the named list under lists, and collect the outputs into an array. Absent for a step that runs once.",
           "type": "string",
-          "minLength": 1
+          "pattern": "^[a-z][a-z0-9_.]*$"
         },
         "limits": {
-          "description": "Sandbox limits for one run of this step. Open on purpose: Task 6 decides what else the sandbox enforces.",
+          "description": "Sandbox limits for one run of this step, all of them, so the socket filter can refuse a container that carries less.",
           "type": "object",
-          "additionalProperties": true,
+          "required": ["time_ms", "cpu_ms", "memory_mb", "pids", "output_mb"],
+          "additionalProperties": false,
           "properties": {
             "time_ms": {
               "description": "Wall clock for one run. The sandbox is killed when it passes.",
@@ -66,7 +90,7 @@
               "minimum": 1
             },
             "cpu_ms": {
-              "description": "CPU time for one run, the innermost of the three timers in TASK-FORMAT.md. Usually below time_ms.",
+              "description": "CPU time for one run, the innermost of the timers. Usually below time_ms.",
               "type": "integer",
               "minimum": 1
             },

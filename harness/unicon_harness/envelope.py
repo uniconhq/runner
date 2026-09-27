@@ -1,5 +1,5 @@
-"""Reading the envelope a grading job is handed, and refusing a bad one. The only
-module that knows where the envelope schema lives.
+"""Reading the envelope a grading run is handed, and refusing a bad one. The
+only module that knows where the envelope schema lives.
 """
 
 from __future__ import annotations
@@ -55,8 +55,8 @@ def _parse(raw: bytes) -> dict[str, Any]:
 
 def _require_known_schema_version(document: dict[str, Any]) -> None:
     """Check the version before the shape. Running the whole schema first would
-    report a dozen field errors for what is really one problem: the backend and
-    the image are different releases.
+    report a dozen field errors for what is really one problem: the forge repo
+    and the image are different releases.
     """
     declared = document.get("schema_version")
     if declared != SCHEMA_VERSION:

@@ -1,6 +1,6 @@
-"""The harness image entrypoint. Woodpecker starts the image once per submission
-with a URL to the envelope and the judging id. Today it fetches the envelope,
-checks it against the contract and stops; running the plan is Task 6.
+"""The harness image entrypoint. The CI starts the image once per grading run
+with a URL to the envelope and the grading id. Today it fetches the envelope,
+checks it against the contract and stops; running the plan is feature 06.
 """
 
 from __future__ import annotations
@@ -16,7 +16,7 @@ from unicon_harness.contracts import SCHEMA_VERSION, SchemasMissingError
 from unicon_harness.envelope import EnvelopeError, load
 
 ENVELOPE_URL_VARIABLE = "UNICON_ENVELOPE_URL"
-JUDGING_ID_VARIABLE = "UNICON_JUDGING_ID"
+GRADING_ID_VARIABLE = "UNICON_GRADING_ID"
 
 FETCH_IO_TIMEOUT_SECONDS = 30.0
 
@@ -29,9 +29,9 @@ def main() -> int:
     if not envelope_url:
         return _refuse("missing_environment", f"{ENVELOPE_URL_VARIABLE} is not set")
 
-    judging_id = os.environ.get(JUDGING_ID_VARIABLE, "")
-    if not judging_id:
-        return _refuse("missing_environment", f"{JUDGING_ID_VARIABLE} is not set")
+    grading_id = os.environ.get(GRADING_ID_VARIABLE, "")
+    if not grading_id:
+        return _refuse("missing_environment", f"{GRADING_ID_VARIABLE} is not set")
 
     try:
         raw = _fetch(envelope_url)
@@ -55,11 +55,11 @@ def main() -> int:
     except SchemasMissingError as exc:
         return _refuse("schemas_missing", str(exc))
 
-    if not _same_judging(judging_id, envelope["judging_id"]):
+    if not _same_grading(grading_id, envelope["grading_id"]):
         return _refuse(
-            "judging_id_mismatch",
-            f"{JUDGING_ID_VARIABLE} is {judging_id} but the envelope is for "
-            f"{envelope['judging_id']}",
+            "grading_id_mismatch",
+            f"{GRADING_ID_VARIABLE} is {grading_id} but the envelope is for "
+            f"{envelope['grading_id']}",
         )
 
     print(_summary(envelope))
@@ -73,7 +73,7 @@ def _fetch(url: str) -> bytes:
     return response.content
 
 
-def _same_judging(from_environment: str, from_envelope: str) -> bool:
+def _same_grading(from_environment: str, from_envelope: str) -> bool:
     """Compare the two ids as uuids, so case and dash style agree. An unparseable
     value is a mismatch rather than a traceback: whoever started the image got
     the id wrong either way.
@@ -97,7 +97,7 @@ def _redacted(url: str) -> str:
 def _summary(envelope: dict[str, Any]) -> str:
     submission = envelope["submission"]
     return (
-        f"envelope accepted: judging={envelope['judging_id']} "
+        f"envelope accepted: grading={envelope['grading_id']} "
         f"submission={submission['org']}/{submission['repo']}@{submission['tag']} "
         f"stage={envelope['stage']} attempt={envelope['attempt']} "
         f"schema_version={SCHEMA_VERSION}"
