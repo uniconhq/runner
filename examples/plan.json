@@ -1,13 +1,22 @@
 {
   "schema_version": 1,
-  "image_digest": "sha256:3f1c0a8b5d6e4f2a1b0c9d8e7f6a5b4c3d2e1f0a9b8c7d6e5f4a3b2c1d0e9f8a",
+  "harness_image": "ghcr.io/uniconhq/harness@sha256:3f1c0a8b5d6e4f2a1b0c9d8e7f6a5b4c3d2e1f0a9b8c7d6e5f4a3b2c1d0e9f8a",
   "stage": "public",
+  "lists": {
+    "tests": [
+      { "id": "01-sample", "input": "data/01-sample.in", "answer": "data/01-sample.ans" },
+      { "id": "02-small", "input": "data/02-small.in", "answer": "data/02-small.ans" },
+      { "id": "03-duplicates", "input": "data/03-duplicates.in", "answer": "data/03-duplicates.ans" }
+    ]
+  },
   "steps": [
     {
       "id": "compile",
-      "primitive": "unicon/compile@v1",
+      "primitive": "compile@v1",
+      "image": "ghcr.io/uniconhq/primitive-compile@sha256:1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f809",
+      "entrypoint": ["/usr/local/bin/compile"],
       "inputs": {
-        "source": "submission/main.cpp",
+        "source": "submission:files/main.cpp",
         "language": "cpp20"
       },
       "limits": {
@@ -20,14 +29,17 @@
     },
     {
       "id": "run",
-      "primitive": "unicon/sandbox-run@v1",
-      "for_each": "task.testcases",
+      "primitive": "sandbox-run@v1",
+      "image": "ghcr.io/uniconhq/primitive-sandbox-run@sha256:2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a",
+      "entrypoint": ["/usr/local/bin/sandbox-run"],
+      "for_each": "tests",
       "inputs": {
         "binary": "steps.compile.binary",
         "input": "item.input"
       },
       "limits": {
         "time_ms": 2000,
+        "cpu_ms": 1000,
         "memory_mb": 256,
         "pids": 16,
         "output_mb": 8
@@ -35,18 +47,36 @@
     },
     {
       "id": "check",
-      "primitive": "unicon/diff-check@v1",
-      "for_each": "task.testcases",
+      "primitive": "diff-check@v1",
+      "image": "ghcr.io/uniconhq/primitive-diff-check@sha256:3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2b",
+      "entrypoint": ["/usr/local/bin/diff-check"],
+      "for_each": "tests",
       "inputs": {
         "actual": "steps.run.stdout",
         "expected": "item.answer"
+      },
+      "limits": {
+        "time_ms": 5000,
+        "cpu_ms": 5000,
+        "memory_mb": 128,
+        "pids": 8,
+        "output_mb": 8
       }
     },
     {
       "id": "score",
-      "primitive": "unicon/subtask-score@v1",
+      "primitive": "subtask-score@v1",
+      "image": "ghcr.io/uniconhq/primitive-subtask-score@sha256:4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c",
+      "entrypoint": ["/usr/local/bin/subtask-score"],
       "inputs": {
         "results": "steps.check.outputs"
+      },
+      "limits": {
+        "time_ms": 5000,
+        "cpu_ms": 5000,
+        "memory_mb": 128,
+        "pids": 8,
+        "output_mb": 8
       }
     }
   ]

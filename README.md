@@ -15,100 +15,105 @@ published as assets on every release. The rest of the platform pins one
 release and reads them from it.
 
 Today the harness reads the envelope it is handed, checks it against the
-contract and stops. It does not download bundles, run a plan, start a sandbox
-or write a verdict. The other three images carry a placeholder entrypoint that
-names the image and exits 0; their programs come with the features that need
-them. This repo holds no primitive: each primitive is its own repo,
-`primitive-<name>`, built against the primitive contract published here.
+contract and stops. It does not run a plan, start a sandbox or post a verdict.
+The other three images carry a placeholder entrypoint that names the image and
+exits 0; their programs come with the features that need them. This repo holds
+no primitive: each primitive is its own repo, `primitive-<name>`, built against
+the primitive contract published here.
 
-## How a grading job will work
+## How a grading run will work
 
-Woodpecker starts the harness image once per submission with two values in its
-environment: `UNICON_JUDGING_ID` and `UNICON_ENVELOPE_URL`, a URL to a small
-file the backend wrote to object storage. The harness fetches the envelope and
-learns everything else from it: presigned URLs for the task bundle, the
-submission bundle and the compiled plan, presigned URLs to write the verdict
-and the log back to, a callback address with a one-job token, and a deadline.
-The callback address is under `/api/v1/`, the prefix the proxy sends to the
-backend, so an agent outside the compose network reaches it the same way a
-browser does.
+The `forge` repo starts a grading run at the CI as the org's own account and
+tells the CI the same three steps for every run: check out the publication
+with its large files, check out the submission, run the harness image by the
+digest in the plan. The harness starts with two values in its environment:
+`UNICON_GRADING_ID` and `UNICON_ENVELOPE_URL`, a URL to a small file the
+`forge` repo wrote. The harness fetches the envelope and learns the rest from
+it: which run this is, where the two checkouts are, a callback address with a
+one-run token, a presigned URL to write the log to, and a deadline. Nothing
+else is downloaded: the plan and the task files are in the publication
+checkout, the contestant's files in the submission checkout. The callback
+address is under `/api/`, the prefix the proxy sends to the backend, so a
+machine outside the compose network reaches it the same way a browser does.
 
-It then reads the plan, runs the steps in order, starts a sandbox for any step
-that runs contestant code, posts progress as tests finish, writes
-`verdict.json`, and exits zero only once the backend has accepted the result.
+It then reads `plans/<stage>.json` from the publication checkout, runs the
+steps in order, one sandboxed container per step from the step's image by
+digest, posts progress as tests finish, writes the log by the presigned URL,
+posts the verdict through the callback, and exits zero only once the `forge`
+repo has accepted it.
 
 ## The four contracts
 
-**`schemas/envelope.schema.json`.** Written by the backend when it dispatches a
-job; read by the harness at startup. It is the only thing the harness is told,
-so everything a job needs is in it and nothing that outlives the job is.
+**`schemas/envelope.schema.json`.** Written by the `forge` repo when it
+dispatches a run; read by the harness at startup. It is the only thing the
+harness is told, so everything a run needs is in it and nothing that outlives
+the run is.
 
 | Field | What it carries |
 |---|---|
 | `schema_version` | `1`. A version the harness does not speak is refused, not guessed at |
-| `judging_id` | The judgings row. Must equal `UNICON_JUDGING_ID` |
-| `submission` | `org`, `repo`, `tag`, `commit`: the Forgejo identity of what is graded |
-| `stage`, `attempt` | The contest's stage name, and 1 or higher for a rejudge |
-| `task` | `org`, `repo`: the Forgejo identity of the task graded against |
-| `task_published_tag`, `task_published_sha` | The published tag of that task repo, and the commit it pointed at |
-| `urls` | Presigned: `task_bundle`, `submission_bundle`, `plan` to read; `result_put`, `log_put` to write |
-| `callback` | `base_url`, the backend's `/api/v1/internal/judgings/<judging_id>`, and a `token` good for this job only |
-| `digests` | Optional. sha256 of the three objects downloaded, so bytes can be checked before they are trusted |
-| `deadline` | After this instant the token is dead and the backend treats the job as lost |
-| `limits` | Optional. `wall_seconds` for the whole job; per-step limits live in the plan |
+| `grading_id` | The gradings row. Must equal `UNICON_GRADING_ID` |
+| `submission` | `org`, `repo`, `tag`, `commit`: the forge identity of what is graded |
+| `stage`, `attempt` | The contest's stage name, and 1 or higher for a rejudge. The plan is `plans/<stage>.json` in the publication checkout |
+| `task` | `org`, `repo`: the forge identity of the task graded against |
+| `publication` | `tag`, `commit`: the publication of that task, and the commit it pointed at, which is what was checked out |
+| `checkouts` | `task`, `submission`: absolute paths inside the harness container where the CI put the two checkouts |
+| `callback` | `url`, the `forge` repo's address for this run, and a `token` good for this run only |
+| `log_put` | Presigned PUT for the run log, the one thing the harness writes to object storage |
+| `deadline` | After this instant the token is dead and the run is treated as lost |
+| `limits` | Optional. `wall_seconds` for the whole run; per-step limits live in the plan |
 
-The task fields are there because the harness copies them into the verdict; it
-does not otherwise use them.
+The task and publication fields are there because the harness copies them into
+the verdict; it does not otherwise use them.
 
-**`schemas/plan.schema.json`.** Written by the backend's compiler when a task is
-published; read by the harness at grade time. A plan is a flat list of
-primitive calls with every workflow reference resolved, pinned to one grading
-image by digest. The harness never reads workflow YAML.
+**`schemas/plan.schema.json`.** Written by the `forge` repo's compiler at every
+valid save of a task, into the task repo as `plans/<stage>.json`, in the
+commit its publication points at; read by the harness at grade time. A plan
+is a flat list of primitive calls with every workflow reference resolved and
+every list expanded, and every step carries the image it runs from by digest,
+its entrypoint and all its limits, so nothing is resolved at grade time and
+the harness never talks to the forge or reads workflow YAML.
 
 | Field | What it carries |
 |---|---|
 | `schema_version` | `1` |
-| `image_digest` | The harness image this plan was compiled against, `sha256:...`, never a tag |
-| `stage` | The stage this plan belongs to; a task may compile one plan per stage |
+| `harness_image` | The harness image this plan was compiled for, as a full reference by digest, never a tag |
+| `stage` | The stage this plan belongs to; a task compiles one plan per stage |
+| `lists` | The lists a `for_each` names, already expanded from the task's files, for example the test list |
 | `steps[].id` | Unique in the plan; how later steps name this one |
-| `steps[].primitive` | `owner/name@version`, a primitive the forge holds at that version |
-| `steps[].inputs` | Arguments, keyed by the input names the primitive declares. Open: the value grammar is settled with the compiler |
+| `steps[].primitive` | `name@version`, for the log and the per-test table; never resolved at grade time |
+| `steps[].image`, `steps[].entrypoint` | The primitive's image at that version by digest, and the program the container runs |
+| `steps[].inputs` | Arguments, keyed by the input names the primitive declares: a literal, a path into a checkout, `steps.<id>.<output>` or `item.<field>` |
 | `steps[].for_each` | Optional. Run the step once per item of the named list and collect the outputs |
-| `steps[].limits` | Optional. `time_ms`, `cpu_ms`, `memory_mb`, `pids`, `output_mb` for one run |
+| `steps[].limits` | `time_ms`, `cpu_ms`, `memory_mb`, `pids`, `output_mb` for one run, all of them, so the socket filter can refuse a container carrying less |
 
-**`schemas/verdict.schema.json`.** Written by the harness at the end of a job;
-read by the backend when the result callback arrives, and read again by
-reconciliation if the Unicon database is ever lost. That second reader is why
-the file repeats the Forgejo identity of both sides: Forgejo survives what
-Postgres does not, so a verdict that names its own `submission` and `task` can
-be matched back without rejudging everything. `DATA-MAP.md` puts the link from
-a judging to its task in the Unicon database, which is exactly the link this
-file has to carry on its own.
+**`schemas/verdict.schema.json`.** Posted by the harness through the callback
+at the end of a run; checked by the `forge` repo against this schema and kept
+on the gradings row, and read again by reconciliation if the Unicon database
+is ever lost. That second reader is why the verdict repeats the forge identity
+of both sides: the forge survives what Postgres does not, so a verdict that
+names its own `submission`, `task` and `publication` can be matched back
+without rejudging everything.
 
 | Field | What it carries |
 |---|---|
 | `schema_version` | `1` |
-| `judging_id`, `submission`, `stage`, `attempt` | Copied from the envelope |
-| `task`, `task_published_tag` | The task repo and the published tag this was graded against |
-| `outcome` | `verdict`, `contestant_error` or `system_error`: who owns the failure |
-| `verdict` | The workflow's own word, for example `AC`. Null unless the outcome is `verdict` |
-| `score` | Text, not a number: `-?digits(.digits)?`. Null unless the outcome is `verdict` |
-| `metrics` | Optional measurements; keys and types belong to the workflow |
-| `summary` | The per-test table: `id`, `verdict`, `time_ms`, `memory_kb`, optional `message` |
+| `grading_id`, `submission`, `stage`, `attempt`, `task`, `publication` | Copied from the envelope |
+| `outcome` | One of `accepted`, `partial`, `wrong_answer`, `time_limit`, `memory_limit`, `output_limit`, `runtime_error`, `compile_error`, `skipped`, `system_error` |
+| `metrics` | Named numbers over the whole run, for example `points` or `accuracy`. A leaderboard ranks on one of these by name |
+| `tests` | One row per test: `id`, its own `outcome`, `time_ms`, `memory_kb`, `metrics`, optional `message` |
+| `summary` | A few lines for the contestant, as the task's visibility allows |
+| `resources` | `wall_ms`, `cpu_ms`, `peak_memory_kb` over the whole run |
+| `log` | The object URL the log went to, without the presigned query, or null |
 | `started_at`, `finished_at` | When the harness accepted the envelope and finished the last step |
-| `error_message` | One sentence for a human when the outcome is not `verdict`; null when it is |
 
-The outcome decides the shape, and the schema enforces it: a `verdict` outcome
-carries a verdict, a score and a summary and no error message; the other two
-carry an error message and no verdict or score. A harness that crashed and
-still filed a `WA` against a contestant is the failure that rule prevents.
-
-`score` is a string because JSON numbers are binary floats: a decimal score
-would not survive the round trip byte for byte, and a leaderboard that
-disagrees with the number the contestant was shown is a protest. The grammar is
-narrow on purpose, since the backend parses it once into the numeric column the
-leaderboard sorts on, and a value it cannot parse arrives long after the
-grading, when nobody can fix it.
+There is no separate score: whatever number a task is ranked on is a metric
+the leaderboard names, so a scorer that emits `points` and one that emits
+`accuracy` are the same shape, and the `forge` repo needs to understand only
+the outcome list and the per-test rows. `system_error` means nobody graded:
+the schema then allows no test rows and no metrics, and the summary says what
+went wrong for staff. A harness that crashed and still filed a wrong answer
+against a contestant is the failure that rule prevents.
 
 **`schemas/primitive.schema.json`.** How the harness and a primitive image
 talk. The harness starts one sandboxed container from the step's image and
@@ -141,10 +146,10 @@ file it describes and one for the error case.
 
 ## Rules that are cheap now and expensive later
 
-**The harness runs on machines we do not own.** It never talks to Forgejo, and
-the only credential it ever holds is the callback token for the one job it is
-running, which dies at the deadline in the envelope. Anything that needs a
-long-lived secret belongs in the backend, not here.
+**The harness runs on machines we do not own.** It never talks to the forge,
+and the only credential it ever holds is the callback token for the one run it
+is running, which dies at the deadline in the envelope. Anything that needs a
+long-lived secret belongs in the `forge` repo, not here.
 
 **Every plan and envelope carries `schema_version`, and a mismatch is refused.**
 A compiler that emits a shape the harness reads differently produces a wrong
@@ -157,14 +162,13 @@ daemon resolves bind-mount sources on the host. A harness that mounts its own
 `/work/sandbox` into a sibling container gets an empty directory and a silently
 wrong verdict. It must ask the daemon for its own mounts once at startup and
 translate every sandbox path through that. Measured and confirmed in
-`stack-test-findings.md` section 1.1. Not implemented yet.
-
-**Every sandbox carries a label with the judging id.** If the harness dies
-mid-job its sandbox containers keep running and nothing cleans them up. The
-harness kills its own in a `finally` block, and a reaper on the machine removes
-any `unicon.judging=*` container older than the maximum job time, for the case
-where the harness is not there to do it. `stack-test-findings.md` section 1.2.
 Not implemented yet.
+
+**Every sandbox carries a label with the grading id.** If the harness dies
+mid-run its sandbox containers keep running and nothing cleans them up. The
+harness kills its own in a `finally` block, and a reaper on the machine removes
+any `unicon.grading=*` container older than the maximum run time, for the case
+where the harness is not there to do it. Not implemented yet.
 
 **No image is ever released as `:latest`.** Plans pin the harness image by
 content digest so a task keeps grading the way it was published, and a grading
@@ -219,7 +223,7 @@ image at it:
 python -m http.server 8799 --directory examples
 docker run --rm --add-host=host.docker.internal:host-gateway \
   -e UNICON_ENVELOPE_URL=http://host.docker.internal:8799/envelope.json \
-  -e UNICON_JUDGING_ID=0199a2c1-6b7e-7c3a-9f10-5d2e4b8a6c31 \
+  -e UNICON_GRADING_ID=0199a2c1-6b7e-7c3a-9f10-5d2e4b8a6c31 \
   unicon-harness:dev
 ```
 
@@ -229,18 +233,18 @@ exits 2 and prints one line to stderr that starts with
 
 | Code | What happened |
 |---|---|
-| `missing_environment` | `UNICON_ENVELOPE_URL` or `UNICON_JUDGING_ID` is not set |
+| `missing_environment` | `UNICON_ENVELOPE_URL` or `UNICON_GRADING_ID` is not set |
 | `envelope_unreachable` | The envelope URL did not answer, answered an error, or is not a URL |
 | `envelope_not_json` | What came back is not a JSON object |
 | `schema_version_mismatch` | The envelope is written against a version this image does not speak |
 | `schema_violation` | The envelope does not match `envelope.schema.json` |
-| `judging_id_mismatch` | The envelope is for a different judging than the environment says |
+| `grading_id_mismatch` | The envelope is for a different grading run than the environment says |
 | `schemas_missing` | The image was built without the contract files. A packaging fault, not a job fault |
 
-Exit 2 means the job never began, and is reported to the backend as a
-`system_error` once the harness runs plans. There is one exit code for every refusal because the backend's
-only decision is whether to alert; the code in the line is for the person
-reading the log.
+Exit 2 means the run never began, and is reported to the `forge` repo as a
+`system_error` verdict once the harness runs plans. There is one exit code for
+every refusal because the `forge` repo's only decision is whether to alert;
+the code in the line is for the person reading the log.
 
 ## Releasing
 
