@@ -15,7 +15,7 @@ from unicon_harness.main import (
     ENVELOPE_URL_VARIABLE,
     EXIT_CANNOT_START,
     EXIT_OK,
-    JUDGING_ID_VARIABLE,
+    GRADING_ID_VARIABLE,
     main,
 )
 
@@ -25,14 +25,14 @@ UNUSED_PORT_URL = "http://127.0.0.1:9/envelope.json"
 @pytest.fixture(autouse=True)
 def clean_environment(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv(ENVELOPE_URL_VARIABLE, raising=False)
-    monkeypatch.delenv(JUDGING_ID_VARIABLE, raising=False)
+    monkeypatch.delenv(GRADING_ID_VARIABLE, raising=False)
 
 
 def _set_environment(
-    monkeypatch: pytest.MonkeyPatch, url: str, judging_id: str
+    monkeypatch: pytest.MonkeyPatch, url: str, grading_id: str
 ) -> None:
     monkeypatch.setenv(ENVELOPE_URL_VARIABLE, url)
-    monkeypatch.setenv(JUDGING_ID_VARIABLE, judging_id)
+    monkeypatch.setenv(GRADING_ID_VARIABLE, grading_id)
 
 
 def test_a_good_envelope_exits_zero_with_a_one_line_summary(
@@ -42,14 +42,14 @@ def test_a_good_envelope_exits_zero_with_a_one_line_summary(
     example_envelope: dict[str, Any],
 ) -> None:
     envelope_server.serve(json.dumps(example_envelope).encode("utf-8"))
-    _set_environment(monkeypatch, envelope_server.url, example_envelope["judging_id"])
+    _set_environment(monkeypatch, envelope_server.url, example_envelope["grading_id"])
 
     assert main() == EXIT_OK
 
     printed = capsys.readouterr().out.splitlines()
     assert len(printed) == 1
-    assert example_envelope["judging_id"] in printed[0]
-    assert "acme-open-2026/alice-two-sum@submission/3" in printed[0]
+    assert example_envelope["grading_id"] in printed[0]
+    assert "acme/spring.sum.alice.sub@submission/3" in printed[0]
 
 
 def test_a_missing_envelope_url_names_the_variable(
@@ -59,13 +59,13 @@ def test_a_missing_envelope_url_names_the_variable(
     assert ENVELOPE_URL_VARIABLE in capsys.readouterr().err
 
 
-def test_a_missing_judging_id_names_the_variable(
+def test_a_missing_grading_id_names_the_variable(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     monkeypatch.setenv(ENVELOPE_URL_VARIABLE, UNUSED_PORT_URL)
 
     assert main() == EXIT_CANNOT_START
-    assert JUDGING_ID_VARIABLE in capsys.readouterr().err
+    assert GRADING_ID_VARIABLE in capsys.readouterr().err
 
 
 def test_an_unreachable_url_is_refused(
@@ -101,13 +101,13 @@ def test_a_skewed_schema_version_is_refused(
 ) -> None:
     example_envelope["schema_version"] = 99
     envelope_server.serve(json.dumps(example_envelope).encode("utf-8"))
-    _set_environment(monkeypatch, envelope_server.url, example_envelope["judging_id"])
+    _set_environment(monkeypatch, envelope_server.url, example_envelope["grading_id"])
 
     assert main() == EXIT_CANNOT_START
     assert "schema_version_mismatch" in capsys.readouterr().err
 
 
-def test_an_envelope_for_another_job_is_refused(
+def test_an_envelope_for_another_run_is_refused(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
     envelope_server: EnvelopeServer,
@@ -119,24 +119,24 @@ def test_an_envelope_for_another_job_is_refused(
     )
 
     assert main() == EXIT_CANNOT_START
-    assert "judging_id_mismatch" in capsys.readouterr().err
+    assert "grading_id_mismatch" in capsys.readouterr().err
 
 
-def test_the_judging_id_is_compared_as_a_uuid_not_as_text(
+def test_the_grading_id_is_compared_as_a_uuid_not_as_text(
     monkeypatch: pytest.MonkeyPatch,
     envelope_server: EnvelopeServer,
     example_envelope: dict[str, Any],
 ) -> None:
-    """Woodpecker may pass the id in whatever case its own storage kept."""
+    """The CI may pass the id in whatever case its own storage kept."""
     envelope_server.serve(json.dumps(example_envelope).encode("utf-8"))
     _set_environment(
-        monkeypatch, envelope_server.url, example_envelope["judging_id"].upper()
+        monkeypatch, envelope_server.url, example_envelope["grading_id"].upper()
     )
 
     assert main() == EXIT_OK
 
 
-def test_a_judging_id_that_is_not_a_uuid_is_a_mismatch_not_a_traceback(
+def test_a_grading_id_that_is_not_a_uuid_is_a_mismatch_not_a_traceback(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
     envelope_server: EnvelopeServer,
@@ -146,7 +146,7 @@ def test_a_judging_id_that_is_not_a_uuid_is_a_mismatch_not_a_traceback(
     _set_environment(monkeypatch, envelope_server.url, "the-third-one")
 
     assert main() == EXIT_CANNOT_START
-    assert "judging_id_mismatch" in capsys.readouterr().err
+    assert "grading_id_mismatch" in capsys.readouterr().err
 
 
 def test_storage_that_stops_answering_is_refused_on_the_timeout(
@@ -160,7 +160,7 @@ def test_storage_that_stops_answering_is_refused_on_the_timeout(
     """
     monkeypatch.setattr(entrypoint, "FETCH_IO_TIMEOUT_SECONDS", 0.05)
     envelope_server.serve(json.dumps(example_envelope).encode("utf-8"), delay=0.5)
-    _set_environment(monkeypatch, envelope_server.url, example_envelope["judging_id"])
+    _set_environment(monkeypatch, envelope_server.url, example_envelope["grading_id"])
 
     assert main() == EXIT_CANNOT_START
     assert "envelope_unreachable" in capsys.readouterr().err
@@ -173,7 +173,7 @@ def test_an_image_built_without_the_schemas_says_so(
     example_envelope: dict[str, Any],
 ) -> None:
     envelope_server.serve(json.dumps(example_envelope).encode("utf-8"))
-    _set_environment(monkeypatch, envelope_server.url, example_envelope["judging_id"])
+    _set_environment(monkeypatch, envelope_server.url, example_envelope["grading_id"])
     monkeypatch.setattr(contracts, "SCHEMA_CANDIDATES", (Path("nowhere/schemas"),))
     _forget_resolved_schemas()
 
