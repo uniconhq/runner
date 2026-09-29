@@ -22,7 +22,7 @@
     "schema_version": {
       "description": "The envelope shape this file is written against. The harness refuses a version it does not speak instead of guessing at the fields.",
       "type": "integer",
-      "const": 1
+      "const": 2
     },
     "grading_id": {
       "description": "The gradings row this run belongs to. Also passed to the image as UNICON_GRADING_ID; the harness refuses an envelope whose id disagrees with its environment.",

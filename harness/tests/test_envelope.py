@@ -19,14 +19,14 @@ def test_the_published_example_is_accepted(example_envelope: dict[str, Any]) -> 
 
 
 def test_a_future_schema_version_is_refused(example_envelope: dict[str, Any]) -> None:
-    example_envelope["schema_version"] = 2
+    example_envelope["schema_version"] = 3
 
     with pytest.raises(EnvelopeError) as refusal:
         load(_serialise(example_envelope))
 
     assert refusal.value.code == "schema_version_mismatch"
+    assert "3" in refusal.value.message
     assert "2" in refusal.value.message
-    assert "1" in refusal.value.message
 
 
 def test_a_missing_schema_version_is_refused_as_a_version_problem(

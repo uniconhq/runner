@@ -10,7 +10,7 @@
     "schema_version": {
       "description": "The plan shape this file is written against. The harness refuses a version it does not speak, because a compiler that emits a shape the harness reads differently produces a wrong verdict rather than an error.",
       "type": "integer",
-      "const": 1
+      "const": 2
     },
     "harness_image": {
       "description": "The harness image this plan was compiled for, as a full reference by content digest and never by tag, so a task keeps grading on the image it was published with. The forge repo tells the CI to run exactly this image.",
