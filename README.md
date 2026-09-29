@@ -44,6 +44,11 @@ repo has accepted it.
 
 ## The four contracts
 
+The four share one `schema_version`, the one a runner release publishes them
+at. A release that changes the shape of any of them raises it, so a harness
+refuses a file written for a shape it does not read rather than reading it
+wrongly; `scripts/check_contract_files.py` fails CI when a file pins another.
+
 **`schemas/envelope.schema.json`.** Written by the `forge` repo when it
 dispatches a run; read by the harness at startup. It is the only thing the
 harness is told, so everything a run needs is in it and nothing that outlives
@@ -51,7 +56,7 @@ the run is.
 
 | Field | What it carries |
 |---|---|
-| `schema_version` | `1`. A version the harness does not speak is refused, not guessed at |
+| `schema_version` | `2`. A version the harness does not speak is refused, not guessed at |
 | `grading_id` | The gradings row. Must equal `UNICON_GRADING_ID` |
 | `submission` | `org`, `repo`, `tag`, `commit`: the forge identity of what is graded |
 | `stage`, `attempt` | The contest's stage name, and 1 or higher for a rejudge. The plan is `plans/<stage>.json` in the publication checkout |
@@ -76,7 +81,7 @@ the harness never talks to the forge or reads workflow YAML.
 
 | Field | What it carries |
 |---|---|
-| `schema_version` | `1` |
+| `schema_version` | `2` |
 | `harness_image` | The harness image this plan was compiled for, as a full reference by digest, never a tag |
 | `stage` | The stage this plan belongs to; a task compiles one plan per stage |
 | `lists` | The lists a `for_each` names, already expanded from the task's files, for example the test list |
@@ -97,7 +102,7 @@ without rejudging everything.
 
 | Field | What it carries |
 |---|---|
-| `schema_version` | `1` |
+| `schema_version` | `2` |
 | `grading_id`, `submission`, `stage`, `attempt`, `task`, `publication` | Copied from the envelope |
 | `outcome` | One of `accepted`, `partial`, `wrong_answer`, `time_limit`, `memory_limit`, `output_limit`, `runtime_error`, `compile_error`, `skipped`, `system_error` |
 | `metrics` | Named numbers over the whole run, for example `points` or `accuracy`. A leaderboard ranks on one of these by name |
@@ -125,10 +130,10 @@ not the plan, not the network.
 
 | File | Field | What it carries |
 |---|---|---|
-| `inputs.json` | `schema_version` | `1` |
+| `inputs.json` | `schema_version` | `2` |
 | | `step` | The plan step this container runs, for the primitive's own log |
 | | `inputs` | One value per declared input, keyed by name |
-| `outputs.json` | `schema_version` | `1` |
+| `outputs.json` | `schema_version` | `2` |
 | | `outputs` | One value per declared output, keyed by name |
 | | `error` | Optional. One sentence when the primitive could not do its work at all; a failed compile is an outcome, not an error |
 

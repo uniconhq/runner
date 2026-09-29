@@ -6,7 +6,7 @@ the four images, and the rest of the platform pins one runner release.
 from functools import cache
 from pathlib import Path
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 SCHEMA_CANDIDATES = (
     Path(__file__).parent / "schemas",
