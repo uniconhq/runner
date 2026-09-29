@@ -1,5 +1,5 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "harness_image": "ghcr.io/uniconhq/harness@sha256:3f1c0a8b5d6e4f2a1b0c9d8e7f6a5b4c3d2e1f0a9b8c7d6e5f4a3b2c1d0e9f8a",
   "stage": "public",
   "lists": {
