@@ -1,5 +1,5 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "outputs": {
     "binary": { "file": "out/a.out" },
     "compile_log": "main.cpp: 0 warnings",

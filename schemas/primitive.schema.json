@@ -17,7 +17,7 @@
         "schema_version": {
           "description": "The contract version this file is written against. A primitive refuses a version it does not speak.",
           "type": "integer",
-          "const": 1
+          "const": 2
         },
         "step": {
           "description": "The id of the plan step this container runs, for the primitive's own log.",
@@ -40,7 +40,7 @@
         "schema_version": {
           "description": "The contract version this file is written against, the same number as in inputs.json.",
           "type": "integer",
-          "const": 1
+          "const": 2
         },
         "outputs": {
           "description": "One entry per output the primitive declares, keyed by the output name. A file output names a path under out/.",
