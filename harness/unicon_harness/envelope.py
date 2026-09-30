@@ -1,17 +1,12 @@
-"""Reading the envelope a grading run is handed, and refusing a bad one. The
-only module that knows where the envelope schema lives.
-"""
+"""Reading the envelope a grading run is handed, and refusing a bad one."""
 
 from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from functools import cache
 from typing import Any
 
-from jsonschema import Draft202012Validator, FormatChecker
-
-from unicon_harness.contracts import SCHEMA_VERSION, schema_dir
+from unicon_harness.contracts import SCHEMA_VERSION, violation
 
 
 @dataclass(frozen=True)
@@ -68,20 +63,9 @@ def _require_known_schema_version(document: dict[str, Any]) -> None:
 
 
 def _require_valid_shape(document: dict[str, Any]) -> None:
-    errors = sorted(_validator().iter_errors(document), key=lambda e: list(e.path))
-    if not errors:
-        return
-    first = errors[0]
-    location = "/".join(str(part) for part in first.absolute_path) or "the envelope"
-    raise EnvelopeError(
-        "schema_violation",
-        f"the envelope does not match envelope.schema.json at {location}: "
-        f"{first.message}",
-    )
-
-
-@cache
-def _validator() -> Draft202012Validator:
-    path = schema_dir() / "envelope.schema.json"
-    schema = json.loads(path.read_text(encoding="utf-8"))
-    return Draft202012Validator(schema, format_checker=FormatChecker())
+    found = violation(document, "envelope")
+    if found is not None:
+        raise EnvelopeError(
+            "schema_violation",
+            f"the envelope does not match envelope.schema.json {found}",
+        )

@@ -15,14 +15,15 @@
     "checkouts",
     "callback",
     "log_put",
-    "deadline"
+    "deadline",
+    "limits"
   ],
   "additionalProperties": false,
   "properties": {
     "schema_version": {
       "description": "The envelope shape this file is written against. The harness refuses a version it does not speak instead of guessing at the fields.",
       "type": "integer",
-      "const": 2
+      "const": 3
     },
     "grading_id": {
       "description": "The gradings row this run belongs to. Also passed to the image as UNICON_GRADING_ID; the harness refuses an envelope whose id disagrees with its environment.",
@@ -43,7 +44,7 @@
     "task": { "$ref": "#/$defs/task" },
     "publication": { "$ref": "#/$defs/publication" },
     "checkouts": {
-      "description": "Where the CI put the two checkouts, as absolute paths inside the harness container. The publication checkout holds the task files, the tests and the plan at the publication's commit, with its large files pulled; the submission checkout holds the contestant's files at the submission's commit.",
+      "description": "Where the CI put the two checkouts, as absolute paths inside the harness container: /woodpecker/task and /woodpecker/submission, the paths the forge repo's CI answer clones into. The publication checkout holds the task files, the tests and the plan at the publication's commit, with its large files pulled; the submission checkout holds submission.json and the contestant's files at the submission's commit.",
       "type": "object",
       "required": ["task", "submission"],
       "additionalProperties": false,
@@ -61,13 +62,13 @@
       }
     },
     "callback": {
-      "description": "Where the harness posts started, progress events and the verdict. The token is good for this run only.",
+      "description": "Where the harness posts the started and progress events and the final verdict, each with the token as a bearer credential. The token is good for this run only.",
       "type": "object",
       "required": ["url", "token"],
       "additionalProperties": false,
       "properties": {
         "url": {
-          "description": "The forge repo's callback address for this run, under the /api/ prefix the proxy routes, so a machine outside the compose network reaches it the way a browser does.",
+          "description": "The forge repo's callback address for this run, <machine URL>/api/v1/gradings/<grading id>/callback. The harness posts to it exactly as given.",
           "type": "string",
           "format": "uri"
         },
@@ -79,7 +80,7 @@
       }
     },
     "log_put": {
-      "description": "Presigned PUT for the run log, the one thing the harness writes to object storage. The harness never chooses an object key; the forge repo does.",
+      "description": "Presigned PUT for the run log into unicon-results at logs/<grading id>/<attempt>.log, signed for the machine URL. The one thing the harness writes to object storage; the harness never chooses an object key.",
       "type": "string",
       "format": "uri"
     },
@@ -89,7 +90,7 @@
       "format": "date-time"
     },
     "limits": {
-      "description": "Run-wide limits. Per-step limits live in the plan.",
+      "description": "Run-wide limits, always present. Per-step limits live in the plan.",
       "type": "object",
       "required": ["wall_seconds"],
       "additionalProperties": false,

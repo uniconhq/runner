@@ -12,8 +12,10 @@ jobs:
   harness:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v10.1.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
         with:
           version: "0.12.13"
           enable-cache: true
@@ -24,6 +26,29 @@ jobs:
       - run: uv run pytest
       # A schema change that forgets the examples is caught here, not at a grading.
       - run: uv run python scripts/check_contract_files.py
+      # The harness, worker and socket-filter images share one base by digest.
+      - name: The python base is one digest
+        run: |
+          found="$(grep -h '^FROM python' images/*/Dockerfile | cut -d' ' -f2 | sort -u)"
+          echo "$found"
+          test "$(echo "$found" | wc -l)" -eq 1
+
+  # The harness and the socket filter against a real daemon: a whole grading
+  # run through the filter, the escape checks, cross-run isolation and the
+  # reaper. The tests build the images they need.
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        with:
+          version: "0.12.13"
+          enable-cache: true
+      - run: uv sync --locked
+      - run: docker version
+      - run: uv run pytest -m docker
 
   image:
     runs-on: ubuntu-latest
@@ -32,9 +57,11 @@ jobs:
       matrix:
         name: [harness, worker, clone, socket-filter]
     steps:
-      - uses: actions/checkout@v7
-      - uses: docker/setup-buildx-action@v4
-      - uses: docker/build-push-action@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           file: images/${{ matrix.name }}/Dockerfile
@@ -61,13 +88,39 @@ jobs:
             *) echo "expected a missing_environment line"; exit 1 ;;
           esac
 
-      # The other three carry a placeholder that names the image and exits 0.
-      - name: The placeholder runs
-        if: matrix.name != 'harness'
+      # Started without its image list the filter refuses to start.
+      - name: The socket filter refuses to start without its image list
+        if: matrix.name == 'socket-filter'
         run: |
-          output="$(docker run --rm unicon-${{ matrix.name }}:ci)"
+          set +e
+          stderr="$(docker run --rm unicon-socket-filter:ci 2>&1 >/dev/null)"
+          status=$?
+          set -e
+          echo "$stderr"
+          if [ "$status" -ne 2 ]; then
+            echo "expected exit 2, got $status"
+            exit 1
+          fi
+          case "$stderr" in
+            "unicon-socket-filter: missing_environment:"*) ;;
+            *) echo "expected a missing_environment line"; exit 1 ;;
+          esac
+
+      # The clone image is plugin-git with one line of system git config.
+      - name: The clone image keeps big files in /lfs-cache
+        if: matrix.name == 'clone'
+        run: |
+          found="$(docker run --rm --entrypoint git unicon-clone:ci config --system lfs.storage)"
+          echo "lfs.storage=$found"
+          test "$found" = "/lfs-cache"
+
+      # The worker carries a placeholder that names the image and exits 0.
+      - name: The placeholder runs
+        if: matrix.name == 'worker'
+        run: |
+          output="$(docker run --rm unicon-worker:ci)"
           echo "$output"
           case "$output" in
-            "unicon-${{ matrix.name }}: placeholder"*) ;;
+            "unicon-worker: placeholder"*) ;;
             *) echo "expected the placeholder line"; exit 1 ;;
           esac

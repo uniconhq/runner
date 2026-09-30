@@ -1,30 +1,76 @@
 """The harness image entrypoint. The CI starts the image once per grading run
-with a URL to the envelope and the grading id. Today it fetches the envelope,
-checks it against the contract and stops; running the plan is feature 06.
+with a URL to the envelope and the grading id, and the socket filter's socket
+as DOCKER_HOST.
+
+1. Fetch the envelope and refuse it unless its version, shape and grading id
+   are right. A refusal exits 2 and reports nothing: an envelope the harness
+   does not trust gives it no callback it can trust either.
+2. Post started, then grade: find the run's workspace, give up root, read the
+   plan and task files from the task checkout and the contestant's files from
+   the submission checkout, and run the plan one sandboxed container per step.
+3. Put the log by its presigned URL, and post the verdict, checked against
+   verdict.schema.json, in the final callback. Anything unexpected on the way
+   is a system_error verdict, never a grade.
+
+Exit 0 once the forge accepted the verdict, 1 when it could not be delivered,
+2 when the run never began.
 """
 
 from __future__ import annotations
 
 import os
+import signal
 import sys
+import time
+import traceback
 import uuid
+from collections.abc import Callable
+from datetime import UTC, datetime
+from pathlib import Path
+from types import FrameType
 from typing import Any
 
 import httpx
 
+from unicon_harness import plan as plans
+from unicon_harness import submission as submissions
+from unicon_harness import verdict as verdicts
+from unicon_harness import workspace as workspaces
 from unicon_harness.contracts import SCHEMA_VERSION, SchemasMissingError
+from unicon_harness.docker import Docker, DockerClient
 from unicon_harness.envelope import EnvelopeError, load
+from unicon_harness.faults import GradingError
+from unicon_harness.grading import Grader
+from unicon_harness.report import RefusedError, Reporter, without_query
+from unicon_harness.runlog import RunLog
+from unicon_harness.sandbox import Sandbox
 
 ENVELOPE_URL_VARIABLE = "UNICON_ENVELOPE_URL"
 GRADING_ID_VARIABLE = "UNICON_GRADING_ID"
 
 FETCH_IO_TIMEOUT_SECONDS = 30.0
+REPORT_MARGIN_SECONDS = 30.0
+"""Kept back from the deadline for putting the log and posting the verdict."""
 
 EXIT_OK = 0
+EXIT_NOT_DELIVERED = 1
 EXIT_CANNOT_START = 2
 
 
-def main() -> int:
+class Terminated(BaseException):
+    """The CI stopped the step. A BaseException, so no handler meant for a
+    failed step catches it on the way to the cleanup.
+    """
+
+
+DockerFactory = Callable[[], Docker]
+
+
+def main(
+    docker_factory: DockerFactory | None = None,
+    client: httpx.Client | None = None,
+    mountinfo: Callable[[], str] = workspaces.read_mountinfo,
+) -> int:
     envelope_url = os.environ.get(ENVELOPE_URL_VARIABLE, "")
     if not envelope_url:
         return _refuse("missing_environment", f"{ENVELOPE_URL_VARIABLE} is not set")
@@ -34,17 +80,17 @@ def main() -> int:
         return _refuse("missing_environment", f"{GRADING_ID_VARIABLE} is not set")
 
     try:
-        raw = _fetch(envelope_url)
+        raw = _fetch(envelope_url, client)
     except httpx.HTTPStatusError as exc:
         status = exc.response.status_code
         return _refuse(
             "envelope_unreachable",
-            f"the envelope at {_redacted(envelope_url)} answered {status}",
+            f"the envelope at {without_query(envelope_url)} answered {status}",
         )
     except (httpx.HTTPError, httpx.InvalidURL) as exc:
         return _refuse(
             "envelope_unreachable",
-            f"could not fetch the envelope from {_redacted(envelope_url)}: "
+            f"could not fetch the envelope from {without_query(envelope_url)}: "
             f"{type(exc).__name__}",
         )
 
@@ -62,13 +108,181 @@ def main() -> int:
             f"{envelope['grading_id']}",
         )
 
-    print(_summary(envelope))
-    return EXIT_OK
+    log = RunLog()
+    log.hide(envelope["callback"]["token"])
+    for url in (envelope_url, envelope["log_put"]):
+        query = httpx.URL(url).query.decode()
+        if query:
+            log.hide(query)
+    log.event(_summary(envelope))
+    previous = signal.signal(signal.SIGTERM, _terminate)
+    reporter = Reporter(envelope, log, client=client)
+    try:
+        return grade_and_report(
+            envelope,
+            log,
+            reporter,
+            docker_factory or DockerClient.from_environment,
+            mountinfo,
+        )
+    except Terminated:
+        log.event("the CI stopped the run; nothing is reported")
+        return EXIT_NOT_DELIVERED
+    finally:
+        signal.signal(signal.SIGTERM, previous)
+        if client is None:
+            reporter.close()
 
 
-def _fetch(url: str) -> bytes:
+def grade_and_report(
+    envelope: dict[str, Any],
+    log: RunLog,
+    reporter: Reporter,
+    docker_factory: DockerFactory,
+    mountinfo: Callable[[], str],
+) -> int:
+    """Everything after the envelope is accepted: started, the grading, the log
+    and the final callback.
+    """
+    started_at = datetime.now(UTC)
+    began = time.monotonic()
+    log.tell(
+        f"Grading {envelope['submission']['tag']}, stage {envelope['stage']}, "
+        f"attempt {envelope['attempt']}."
+    )
+    left = reporter.seconds_left()
+    if left <= 0:
+        log.event("the envelope's deadline has already passed; nothing is reported")
+        return EXIT_NOT_DELIVERED
+    budget = min(
+        float(envelope["limits"]["wall_seconds"]), left - REPORT_MARGIN_SECONDS
+    )
+    try:
+        reporter.started()
+    except RefusedError as refused:
+        log.event(f"the forge refused the run with {refused.status}; it will not grade")
+        return EXIT_NOT_DELIVERED
+
+    verdict = _grade(
+        envelope, log, reporter, docker_factory, mountinfo, began, budget, started_at
+    )
+    verdict["log"] = reporter.log_url()
+    found = verdicts.check(verdict)
+    if found is not None:
+        message = (
+            f"the verdict the harness built does not match verdict.schema.json {found}"
+        )
+        log.event(f"system error: {message}")
+        verdict = verdicts.system_error(
+            envelope, message, started_at, datetime.now(UTC), _elapsed_ms(began)
+        )
+        verdict["log"] = reporter.log_url()
+    _tell_verdict(log, verdict)
+    if not reporter.put_log(log.to_bytes()):
+        verdict["log"] = None
+    delivered = reporter.finished(verdict)
+    print(
+        f"unicon-harness: verdict {verdict['outcome']} "
+        f"{'delivered' if delivered else 'not delivered'}"
+    )
+    return EXIT_OK if delivered else EXIT_NOT_DELIVERED
+
+
+def _grade(
+    envelope: dict[str, Any],
+    log: RunLog,
+    reporter: Reporter,
+    docker_factory: DockerFactory,
+    mountinfo: Callable[[], str],
+    began: float,
+    budget: float,
+    started_at: datetime,
+) -> dict[str, Any]:
+    sandbox: Sandbox | None = None
+    docker: Docker | None = None
+    try:
+        if budget <= 0:
+            raise GradingError("the run has no time left before its deadline")
+        docker = docker_factory()
+        task = Path(envelope["checkouts"]["task"])
+        volume, mount = workspaces.locate(docker, task, mountinfo())
+        workspace = workspaces.prepare(volume, mount)
+        log.event(
+            f"steps run as {workspace.user} in volume {volume} under {workspace.steps}"
+        )
+        plan = plans.load(task, envelope["stage"])
+        given = submissions.load(Path(envelope["checkouts"]["submission"]))
+        log.event(
+            f"plan: {len(plan.steps)} steps over {len(plan.tests)} tests, "
+            f"harness {plan.harness_image}"
+        )
+        log.tell(f"{len(plan.steps)} steps to run over {len(plan.tests)} tests.")
+        sandbox = Sandbox(docker, workspace, envelope["grading_id"], log)
+        grader = Grader(
+            plan,
+            task,
+            given,
+            workspace,
+            sandbox,
+            log,
+            began + budget,
+            reporter.progress,
+        )
+        grading = grader.run()
+        verdict = verdicts.graded(
+            plan, grading, envelope, started_at, datetime.now(UTC), _elapsed_ms(began)
+        )
+        log.event(f"graded: {verdict['outcome']}")
+        return verdict
+    except GradingError as fault:
+        log.event(f"system error: {fault.message}")
+        return verdicts.system_error(
+            envelope, fault.message, started_at, datetime.now(UTC), _elapsed_ms(began)
+        )
+    except Exception as exc:
+        log.block("the harness failed", traceback.format_exc())
+        return verdicts.system_error(
+            envelope,
+            f"the harness failed: {type(exc).__name__}: {exc}",
+            started_at,
+            datetime.now(UTC),
+            _elapsed_ms(began),
+        )
+    finally:
+        if sandbox is not None:
+            sandbox.clean_up()
+        if isinstance(docker, DockerClient):
+            docker.close()
+
+
+def _tell_verdict(log: RunLog, verdict: dict[str, Any]) -> None:
+    """The last lines of the contestant's log. A system error says only that
+    there was one: its reason is for staff and is in the CI log.
+    """
+    if verdict["outcome"] == "system_error":
+        log.tell(
+            "The run could not be graded because of a system error. The "
+            "platform's staff can see what went wrong."
+        )
+        return
+    log.tell(f"Verdict: {verdict['outcome']}.")
+    log.tell_block("Summary", verdict["summary"])
+
+
+def _elapsed_ms(began: float) -> int:
+    return round((time.monotonic() - began) * 1000)
+
+
+def _terminate(signum: int, frame: FrameType | None) -> None:
+    raise Terminated
+
+
+def _fetch(url: str, client: httpx.Client | None) -> bytes:
     timeout = httpx.Timeout(FETCH_IO_TIMEOUT_SECONDS)
-    response = httpx.get(url, timeout=timeout, follow_redirects=True)
+    if client is None:
+        response = httpx.get(url, timeout=timeout, follow_redirects=True)
+    else:
+        response = client.get(url, timeout=timeout, follow_redirects=True)
     response.raise_for_status()
     return response.content
 
@@ -82,16 +296,6 @@ def _same_grading(from_environment: str, from_envelope: str) -> bool:
         return uuid.UUID(from_environment) == uuid.UUID(from_envelope)
     except ValueError:
         return False
-
-
-def _redacted(url: str) -> str:
-    """The envelope URL is presigned: its query is a credential and must not land
-    in the job log.
-    """
-    try:
-        return str(httpx.URL(url).copy_with(query=None))
-    except httpx.InvalidURL:
-        return "<invalid url>"
 
 
 def _summary(envelope: dict[str, Any]) -> str:

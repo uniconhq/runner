@@ -1,7 +1,6 @@
-"""What verdict.schema.json accepts. Nothing writes a verdict until feature 06,
-so the schema is the whole contract today: one outcome from the fixed list,
-metrics as named numbers, a row per test, and a system error that grades
-nobody.
+"""What verdict.schema.json accepts: one outcome from the fixed list, metrics as
+named numbers, a row per test, and a system error that grades nobody. The
+verdicts the harness builds are checked against it in test_run.py.
 """
 
 from __future__ import annotations
