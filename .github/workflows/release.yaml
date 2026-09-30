@@ -4,23 +4,28 @@ on:
   push:
     tags: ["v*"]
 
-permissions:
-  contents: write
-  packages: write
+# Nothing by default: each job asks for what it needs. The job that runs the
+# repo's code and tests can only read; the one that pushes images only loads
+# and pushes what the first one tested; the one that writes the release only
+# uploads files.
+permissions: {}
 
 jobs:
-  release:
+  check:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          # The ancestry check below needs main's history, not the tag alone.
+          # The ancestry check below needs main's history, not the tag alone:
+          # with the whole history the checkout fetches every branch.
           fetch-depth: 0
+          persist-credentials: false
 
       # A release is what deploy pins, so it comes from the reviewed branch.
       - name: Check the tag is on main
         run: |
-          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
           if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
             echo "$GITHUB_REF_NAME is not on main; release only from main"
             exit 1
@@ -38,7 +43,7 @@ jobs:
           fi
 
       # The same checks as CI: a tag on a red commit must not become a release.
-      - uses: astral-sh/setup-uv@v10.1.0
+      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
         with:
           version: "0.12.13"
       - run: uv sync --locked
@@ -46,11 +51,51 @@ jobs:
       - run: uv run ruff check .
       - run: uv run mypy
       - run: uv run pytest
+      # Builds unicon-harness:lab, unicon-socket-filter:lab and unicon-clone:lab
+      # and runs whole gradings, the filter's checks and the clone image with
+      # them: these are the images the release pushes.
+      - run: uv run pytest -m docker
       - run: uv run python scripts/check_contract_files.py
 
-      - uses: docker/setup-buildx-action@v4
+      # The worker is a placeholder no test runs beyond starting it.
+      - name: Build the worker and check the placeholder runs
+        run: |
+          docker build -f images/worker/Dockerfile -t unicon-worker:lab .
+          output="$(docker run --rm unicon-worker:lab)"
+          echo "$output"
+          case "$output" in
+            "unicon-worker: placeholder"*) ;;
+            *) echo "expected the placeholder line"; exit 1 ;;
+          esac
 
-      - uses: docker/login-action@v4
+      # Exactly the tested images, handed to the job that pushes them.
+      - name: Save the four images
+        run: |
+          docker save -o images.tar unicon-harness:lab unicon-socket-filter:lab \
+            unicon-clone:lab unicon-worker:lab
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: images
+          path: images.tar
+          retention-days: 1
+          if-no-files-found: error
+
+  publish:
+    needs: check
+    runs-on: ubuntu-latest
+    permissions:
+      packages: write
+    outputs:
+      harness: ${{ steps.push.outputs.harness }}
+      worker: ${{ steps.push.outputs.worker }}
+      clone: ${{ steps.push.outputs.clone }}
+      socket-filter: ${{ steps.push.outputs.socket-filter }}
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: images
+
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -60,66 +105,71 @@ jobs:
       # pins the harness by digest and a grading machine pins the other three
       # the same way, so a moving tag would run a plan against an image it was
       # not compiled for.
-      - id: harness
-        uses: docker/build-push-action@v7
+      - id: push
+        name: Push the tested images and read their digests
+        run: |
+          docker load -i images.tar
+          for name in harness worker clone socket-filter; do
+            target="ghcr.io/uniconhq/$name:$GITHUB_REF_NAME"
+            docker tag "unicon-$name:lab" "$target"
+            docker push "$target"
+            digest="$(docker image inspect "$target" \
+              --format '{{range .RepoDigests}}{{println .}}{{end}}' \
+              | grep -m1 "^ghcr.io/uniconhq/$name@" | cut -d@ -f2)"
+            case "$digest" in
+              sha256:*) ;;
+              *) echo "no digest for $target"; exit 1 ;;
+            esac
+            echo "$name=$digest" >> "$GITHUB_OUTPUT"
+          done
+
+  release:
+    needs: publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          context: .
-          file: images/harness/Dockerfile
-          push: true
-          tags: ghcr.io/uniconhq/harness:${{ github.ref_name }}
-      - id: worker
-        uses: docker/build-push-action@v7
-        with:
-          context: .
-          file: images/worker/Dockerfile
-          push: true
-          tags: ghcr.io/uniconhq/worker:${{ github.ref_name }}
-      - id: clone
-        uses: docker/build-push-action@v7
-        with:
-          context: .
-          file: images/clone/Dockerfile
-          push: true
-          tags: ghcr.io/uniconhq/clone:${{ github.ref_name }}
-      - id: socket-filter
-        uses: docker/build-push-action@v7
-        with:
-          context: .
-          file: images/socket-filter/Dockerfile
-          push: true
-          tags: ghcr.io/uniconhq/socket-filter:${{ github.ref_name }}
+          persist-credentials: false
 
       # One file naming every image by digest, so deploy pins one release and
       # reads the four digests from it.
       - name: Write images.json
+        env:
+          HARNESS: ${{ needs.publish.outputs.harness }}
+          WORKER: ${{ needs.publish.outputs.worker }}
+          CLONE: ${{ needs.publish.outputs.clone }}
+          SOCKET_FILTER: ${{ needs.publish.outputs.socket-filter }}
         run: |
           cat > images.json <<EOF
           {
-            "release": "${{ github.ref_name }}",
+            "release": "$GITHUB_REF_NAME",
             "images": {
-              "harness": "ghcr.io/uniconhq/harness@${{ steps.harness.outputs.digest }}",
-              "worker": "ghcr.io/uniconhq/worker@${{ steps.worker.outputs.digest }}",
-              "clone": "ghcr.io/uniconhq/clone@${{ steps.clone.outputs.digest }}",
-              "socket-filter": "ghcr.io/uniconhq/socket-filter@${{ steps.socket-filter.outputs.digest }}"
+              "harness": "ghcr.io/uniconhq/harness@$HARNESS",
+              "worker": "ghcr.io/uniconhq/worker@$WORKER",
+              "clone": "ghcr.io/uniconhq/clone@$CLONE",
+              "socket-filter": "ghcr.io/uniconhq/socket-filter@$SOCKET_FILTER"
             }
           }
           EOF
           cat images.json
 
-      # The four contract files and the four digests are what the rest of the
+      # The five contract files and the four digests are what the rest of the
       # platform pins.
-      - uses: softprops/action-gh-release@v3
+      - uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
           body: |
             | Image | Digest |
             |---|---|
-            | `ghcr.io/uniconhq/harness:${{ github.ref_name }}` | `${{ steps.harness.outputs.digest }}` |
-            | `ghcr.io/uniconhq/worker:${{ github.ref_name }}` | `${{ steps.worker.outputs.digest }}` |
-            | `ghcr.io/uniconhq/clone:${{ github.ref_name }}` | `${{ steps.clone.outputs.digest }}` |
-            | `ghcr.io/uniconhq/socket-filter:${{ github.ref_name }}` | `${{ steps.socket-filter.outputs.digest }}` |
+            | `ghcr.io/uniconhq/harness:${{ github.ref_name }}` | `${{ needs.publish.outputs.harness }}` |
+            | `ghcr.io/uniconhq/worker:${{ github.ref_name }}` | `${{ needs.publish.outputs.worker }}` |
+            | `ghcr.io/uniconhq/clone:${{ github.ref_name }}` | `${{ needs.publish.outputs.clone }}` |
+            | `ghcr.io/uniconhq/socket-filter:${{ github.ref_name }}` | `${{ needs.publish.outputs.socket-filter }}` |
           files: |
             schemas/plan.schema.json
             schemas/envelope.schema.json
             schemas/verdict.schema.json
             schemas/primitive.schema.json
+            schemas/submission.schema.json
             images.json

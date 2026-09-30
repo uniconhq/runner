@@ -2,8 +2,8 @@
 # machine up. It carries a placeholder entrypoint; the program is not written
 # yet. Built from the repo root: docker build -f images/worker/Dockerfile .
 
-# python:3.14-slim, pulled 2026-09-13. The same digest is in every Dockerfile
-# under images/; change all four together.
+# python:3.14-slim, pulled 2026-09-13. The same digest is in the harness and
+# socket-filter Dockerfiles; change all three together.
 FROM python:3.14-slim@sha256:cad9a2c871761c413caa6fdd6441c783451e740a48aaeba60ae62a8b53525ef6
 
 LABEL org.opencontainers.image.title="unicon-worker" \
