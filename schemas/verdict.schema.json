@@ -38,7 +38,7 @@
     "schema_version": {
       "description": "The verdict shape this file is written against.",
       "type": "integer",
-      "const": 2
+      "const": 3
     },
     "grading_id": {
       "description": "The gradings row this verdict belongs to, copied from the envelope.",

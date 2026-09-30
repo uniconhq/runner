@@ -1,0 +1,23 @@
+{
+  "schema_version": 3,
+  "batch": [
+    {
+      "id": "1",
+      "outputs": {
+        "output": { "file": "out/1/output" },
+        "time_ms": 120,
+        "memory_kb": 20480,
+        "outcome": "accepted"
+      }
+    },
+    {
+      "id": "2",
+      "outputs": {
+        "output": { "file": "out/2/output" },
+        "time_ms": 2000,
+        "memory_kb": 18000,
+        "outcome": "time_limit"
+      }
+    }
+  ]
+}

@@ -19,14 +19,37 @@ def test_the_published_example_is_accepted(example_envelope: dict[str, Any]) -> 
 
 
 def test_a_future_schema_version_is_refused(example_envelope: dict[str, Any]) -> None:
-    example_envelope["schema_version"] = 3
+    example_envelope["schema_version"] = 4
 
     with pytest.raises(EnvelopeError) as refusal:
         load(_serialise(example_envelope))
 
     assert refusal.value.code == "schema_version_mismatch"
+    assert "4" in refusal.value.message
     assert "3" in refusal.value.message
-    assert "2" in refusal.value.message
+
+
+def test_the_previous_schema_version_is_refused(
+    example_envelope: dict[str, Any],
+) -> None:
+    example_envelope["schema_version"] = 2
+
+    with pytest.raises(EnvelopeError) as refusal:
+        load(_serialise(example_envelope))
+
+    assert refusal.value.code == "schema_version_mismatch"
+
+
+def test_an_envelope_without_its_wall_clock_is_refused(
+    example_envelope: dict[str, Any],
+) -> None:
+    del example_envelope["limits"]
+
+    with pytest.raises(EnvelopeError) as refusal:
+        load(_serialise(example_envelope))
+
+    assert refusal.value.code == "schema_violation"
+    assert "limits" in refusal.value.message
 
 
 def test_a_missing_schema_version_is_refused_as_a_version_problem(

@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/uniconhq/runner/main/schemas/submission.schema.json",
+  "title": "Unicon submission",
+  "description": "submission.json at the root of a submission commit. A submit writes one commit to the contestant's submission repo, as the contestant: the files of every code, file and file[] input under files/<input id>/<file name>, and this file naming them. The harness resolves a plan's {\"submission\": ...} values through it: a code or file input gives its one file, a file[] input its list of files, a text, number or boolean input its value, and the field language the language chosen for a code input. Everything before the commit re-checks this against the task's contestant inputs, so the harness trusts its shape only after checking it here.",
+  "type": "object",
+  "required": ["schema_version", "inputs"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "description": "The submission shape this file is written against.",
+      "type": "integer",
+      "const": 3
+    },
+    "inputs": {
+      "description": "One entry per contestant input the task declares, keyed by the input id.",
+      "type": "object",
+      "propertyNames": { "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$" },
+      "additionalProperties": { "$ref": "#/$defs/input" }
+    }
+  },
+  "$defs": {
+    "input": {
+      "oneOf": [
+        { "$ref": "#/$defs/files" },
+        { "$ref": "#/$defs/value" }
+      ]
+    },
+    "files": {
+      "description": "A code, file or file[] input: its files in the commit, and for code the language chosen from the input's language list. code and file carry exactly one file; file[] one or more.",
+      "type": "object",
+      "required": ["files"],
+      "additionalProperties": false,
+      "properties": {
+        "files": {
+          "description": "Paths from the root of the commit, files/<input id>/<file name>.",
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^files/[A-Za-z0-9][A-Za-z0-9_-]*/(?!\\.\\.?$)[^/\\u0000]+$"
+          }
+        },
+        "language": {
+          "description": "The language chosen for a code input.",
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "value": {
+      "description": "A text, number or boolean input, as the contestant gave it.",
+      "type": "object",
+      "required": ["value"],
+      "additionalProperties": false,
+      "properties": {
+        "value": { "type": ["string", "number", "boolean"] }
+      }
+    }
+  }
+}
