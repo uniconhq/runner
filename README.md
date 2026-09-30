@@ -3,198 +3,381 @@
 The part of Unicon that runs contestant code, and the contract files that
 describe what it accepts and what it returns.
 
-This repo produces four images and four contract files. The images are
-`ghcr.io/uniconhq/harness`, the program that runs a plan by starting one
-sandboxed container per step; `ghcr.io/uniconhq/worker`, the supervisor that
-sets a grading machine up; `ghcr.io/uniconhq/clone`, what the CI checks code
-out with; and `ghcr.io/uniconhq/socket-filter`, the policy that stands between
-the harness and Docker. All four build from `python:3.14-slim` pinned by
-digest, under `images/`. The contract files are `plan.schema.json`,
-`envelope.schema.json`, `verdict.schema.json` and `primitive.schema.json`,
-published as assets on every release. The rest of the platform pins one
-release and reads them from it.
+This repo produces four images and five contract files.
 
-Today the harness reads the envelope it is handed, checks it against the
-contract and stops. It does not run a plan, start a sandbox or post a verdict.
-The other three images carry a placeholder entrypoint that names the image and
-exits 0; their programs come with the features that need them. This repo holds
-no primitive: each primitive is its own repo, `primitive-<name>`, built against
-the primitive contract published here.
-
-## How a grading run will work
-
-The `forge` repo starts a grading run at the CI as the org's own account and
-tells the CI the same three steps for every run: check out the publication
-with its large files, check out the submission, run the harness image by the
-digest in the plan. The harness starts with two values in its environment:
-`UNICON_GRADING_ID` and `UNICON_ENVELOPE_URL`, a URL to a small file the
-`forge` repo wrote. The harness fetches the envelope and learns the rest from
-it: which run this is, where the two checkouts are, a callback address with a
-one-run token, a presigned URL to write the log to, and a deadline. Nothing
-else is downloaded: the plan and the task files are in the publication
-checkout, the contestant's files in the submission checkout. The callback
-address is under `/api/`, the prefix the proxy sends to the backend, so a
-machine outside the compose network reaches it the same way a browser does.
-
-It then reads `plans/<stage>.json` from the publication checkout, runs the
-steps in order, one sandboxed container per step from the step's image by
-digest, posts progress as tests finish, writes the log by the presigned URL,
-posts the verdict through the callback, and exits zero only once the `forge`
-repo has accepted it.
-
-## The four contracts
-
-The four share one `schema_version`, the one a runner release publishes them
-at. A release that changes the shape of any of them raises it, so a harness
-refuses a file written for a shape it does not read rather than reading it
-wrongly; `scripts/check_contract_files.py` fails CI when a file pins another.
-
-**`schemas/envelope.schema.json`.** Written by the `forge` repo when it
-dispatches a run; read by the harness at startup. It is the only thing the
-harness is told, so everything a run needs is in it and nothing that outlives
-the run is.
-
-| Field | What it carries |
+| Image | What it is |
 |---|---|
-| `schema_version` | `2`. A version the harness does not speak is refused, not guessed at |
-| `grading_id` | The gradings row. Must equal `UNICON_GRADING_ID` |
-| `submission` | `org`, `repo`, `tag`, `commit`: the forge identity of what is graded |
-| `stage`, `attempt` | The contest's stage name, and 1 or higher for a rejudge. The plan is `plans/<stage>.json` in the publication checkout |
-| `task` | `org`, `repo`: the forge identity of the task graded against |
-| `publication` | `tag`, `commit`: the publication of that task, and the commit it pointed at, which is what was checked out |
-| `checkouts` | `task`, `submission`: absolute paths inside the harness container where the CI put the two checkouts |
-| `callback` | `url`, the `forge` repo's address for this run, and a `token` good for this run only |
-| `log_put` | Presigned PUT for the run log, the one thing the harness writes to object storage |
-| `deadline` | After this instant the token is dead and the run is treated as lost |
-| `limits` | Optional. `wall_seconds` for the whole run; per-step limits live in the plan |
+| `ghcr.io/uniconhq/harness` | The program the CI runs once per grading run. It runs the task's plan, one sandboxed container per step, and reports the verdict. `harness/` |
+| `ghcr.io/uniconhq/socket-filter` | The policy between the harness and a machine's Docker. It holds the daemon's socket and gives the harness its own. `socket_filter/` |
+| `ghcr.io/uniconhq/clone` | What the CI's two checkout steps run: the CI's clone plugin with big files kept in `/lfs-cache`. `images/clone/` |
+| `ghcr.io/uniconhq/worker` | The supervisor that will set a grading machine up (feature 12). Today a placeholder that names the image and exits 0. |
 
-The task and publication fields are there because the harness copies them into
-the verdict; it does not otherwise use them.
+The harness, socket filter and worker build from `python:3.14-slim` pinned by
+digest; the clone image builds from `woodpeckerci/plugin-git` pinned by digest.
+The contract files are `plan.schema.json`, `envelope.schema.json`,
+`verdict.schema.json`, `primitive.schema.json` and `submission.schema.json`,
+published as assets on every release. The rest of the platform pins one release
+and reads them from it. This repo holds no primitive: each primitive is its own
+repo, `primitive-<name>`, built against the primitive contract published here.
 
-**`schemas/plan.schema.json`.** Written by the `forge` repo's compiler at every
-valid save of a task, into the task repo as `plans/<stage>.json`, in the
-commit its publication points at; read by the harness at grade time. A plan
-is a flat list of primitive calls with every workflow reference resolved and
-every list expanded, and every step carries the image it runs from by digest,
-its entrypoint and all its limits, so nothing is resolved at grade time and
-the harness never talks to the forge or reads workflow YAML.
+## How a grading run works
 
-| Field | What it carries |
+The `forge` repo starts a grading run at the CI. The CI clones the task at its
+publication into `/woodpecker/task` (big files included) and the submission
+into `/woodpecker/submission`, both with the clone image, then runs the harness
+image by the digest in the plan, with the socket filter's socket directory
+mounted read-only at `/run/unicon` and
+`DOCKER_HOST=unix:///run/unicon/docker.sock`. The harness
+holds no credential but the run's callback token and no Docker socket but the
+filter's.
+
+In order, the harness:
+
+1. Fetches the envelope from `UNICON_ENVELOPE_URL` and refuses it unless its
+   `schema_version`, its shape and its grading id (`UNICON_GRADING_ID`) are
+   right. A refusal exits 2 and reports nothing, because an envelope it does
+   not trust gives it no callback it can trust.
+2. Posts `{"event": "started"}` to the callback. A 401, 403, 404, 409 or 410
+   there means the forge will not take the run, and it stops.
+3. Asks the daemon, through the filter, how its own container is mounted, and
+   finds the volume the checkouts are in (the host-path trap, below). It makes
+   `unicon-steps/` in that volume, gives it to uid 10001 and becomes uid 10001
+   for the rest of the run. The image starts as root only for this, because
+   the CI's workspace belongs to root.
+4. Reads `plans/<stage>.json` from the task checkout and `submission.json` and
+   the contestant's files from the submission checkout. Nothing else is
+   downloaded.
+5. Runs the plan (below), posting progress after each container.
+6. Checks the verdict against `verdict.schema.json`, puts the run log by
+   the presigned `log_put` URL and posts `{"event": "finished", "verdict":
+   ...}`, retrying until the envelope's deadline.
+
+It exits 0 once the forge accepted the verdict, 1 when the verdict could not be
+delivered, and 2 when the run never began. Anything unexpected after the
+envelope is accepted is a `system_error` verdict with a summary for staff,
+never a grade.
+
+### Running a plan
+
+- Steps run in plan order, one container each. A step's file inputs are copied
+  into its own directory under `in/`, each distinct file once; nothing a step
+  wrote reaches another step except through the plan's references.
+- A run-once step returning an `outcome` other than `accepted` stops the run:
+  later steps are skipped, tests not yet done are `skipped`, and the run's
+  outcome is that outcome (a failed compile is `compile_error`).
+- A per-test step returning another outcome for a test skips that test's later
+  steps (a batch leaves it out), and that outcome is the test's.
+- What a step wrote is checked before anything reads it: `outputs.json`
+  against the primitive contract, one batch entry per item in order, every file
+  a regular file under `out/` reached without a symbolic link, the total under
+  `out/` within `output_mb` per item, and an `outcome` from the verdict's list.
+- A single-test step killed at its wall clock gives the test `time_limit`, and
+  one that wrote nothing after the kernel killed it at its memory limit
+  `memory_limit`. A run-once or batch step killed that way is a system error.
+  A step that wrote a valid `outputs.json` is taken at its word even when
+  Docker reports an out-of-memory kill inside it, because under `sandbox-run`
+  that kill is the contestant's program.
+- The verdict: each test row's outcome is its first non-accepted outcome,
+  otherwise what `verdict.outcome` gives for that test when it names a
+  per-test output (of any name), otherwise accepted; its
+  `time_ms` and `memory_kb` come from `verdict.tests` (0 when skipped), its
+  metrics from the per-test references in `verdict.metrics`. The run's outcome
+  is the first non-accepted test's in test order, or the run-once output named.
+  Metrics sum over tests. The summary is `verdict.summary` when it is text,
+  otherwise "7 of 10 tests accepted.".
+- A reference from a run-once step to a per-test step without `test` is the
+  list of that output over every test, in test order. A test the step did not
+  reach has no value in it, except for `outcome`, which gives that test's own
+  outcome so a scorer sees one per test.
+
+### The two logs
+
+The run log, the one object the harness stores, is what the contestant may
+read (the forge shows it where the stage's `show` is `full`). It says what
+ran and how it went, and nothing about the machine:
+
+```
+[    0.000s] Grading submission/3, stage default, attempt 1.
+[    0.412s] 5 steps to run over 3 tests.
+[    1.803s] compile (compile@v1): accepted
+[    3.120s] run (sandbox-run@v1): 3 tests
+[    3.120s]   test 1: accepted
+[    3.120s]   test 2: time_limit
+[    3.121s]   test 10: accepted
+[    3.566s] check for test 1 (diff-check@v1): accepted
+[    3.566s] check for test 2 (diff-check@v1): skipped, test 2 is already time_limit
+[    4.010s] check for test 10 (diff-check@v1): accepted
+[    4.011s] Verdict: time_limit.
+[    4.011s] Summary:
+  | main.py: compiled
+```
+
+No image, volume, container, exit code or path, and never what a step printed:
+a check could print the expected answer, and a program's own output could
+carry a hidden test's input. A system error says only that there was one.
+Everything else goes to the harness's stdout, the CI's own job log, for
+staff: the envelope's identity, the workspace volume, each step's image and
+exit, what each step printed (cut to 16 KB), callback trouble and tracebacks.
+The contestant's lines are there too, so the CI log reads as the whole story.
+
+### Every step container
+
+Created through the filter from the step's image by digest, with:
+
+| Setting | Value |
 |---|---|
-| `schema_version` | `2` |
-| `harness_image` | The harness image this plan was compiled for, as a full reference by digest, never a tag |
-| `stage` | The stage this plan belongs to; a task compiles one plan per stage |
-| `lists` | The lists a `for_each` names, already expanded from the task's files, for example the test list |
-| `steps[].id` | Unique in the plan; how later steps name this one |
-| `steps[].primitive` | `name@version`, for the log and the per-test table; never resolved at grade time |
-| `steps[].image`, `steps[].entrypoint` | The primitive's image at that version by digest, and the program the container runs |
-| `steps[].inputs` | Arguments, keyed by the input names the primitive declares: a literal, a path into a checkout, `steps.<id>.<output>` or `item.<field>` |
-| `steps[].for_each` | Optional. Run the step once per item of the named list and collect the outputs |
-| `steps[].limits` | `time_ms`, `cpu_ms`, `memory_mb`, `pids`, `output_mb` for one run, all of them, so the socket filter can refuse a container carrying less |
+| Network | `NetworkMode: none` |
+| Root filesystem | read-only |
+| Capabilities | all dropped |
+| Security options | `no-new-privileges` and `seccomp=builtin`, named explicitly because a daemon's default can be unconfined |
+| User | `10001:10001`, the harness's own uid, which owns the step directory |
+| Memory | `memory_mb`, with `MemorySwap` equal to it: no swap |
+| CPU | one CPU (`NanoCpus`), and a `cpu` ulimit of `cpu_ms` rounded up to seconds per process |
+| Processes | `PidsLimit: pids` |
+| Output | an `fsize` ulimit of `output_mb` per file |
+| Wall clock | `time_ms`, after which the harness kills it; the label `unicon.time_ms` carries it for the filter's reaper |
+| `/work` | the step's own directory, `unicon-steps/<n>-<step>` of the run's workspace volume, as a volume subpath mount with `NoCopy`, read-write |
+| `/tmp` | a tmpfs, at most 256 MB and never more than the memory limit |
+| Labels | `unicon.grading=<grading id>`, `unicon.step=<step id>`, `unicon.time_ms`; the filter adds `unicon.harness` |
+| Log | the `json-file` driver, at most 8 MB in one file, so what a step prints cannot fill the machine's disk |
 
-**`schemas/verdict.schema.json`.** Posted by the harness through the callback
-at the end of a run; checked by the `forge` repo against this schema and kept
-on the gradings row, and read again by reconciliation if the Unicon database
-is ever lost. That second reader is why the verdict repeats the forge identity
-of both sides: the forge survives what Postgres does not, so a verdict that
-names its own `submission`, `task` and `publication` can be matched back
-without rejudging everything.
+The harness removes every container it created in a `finally`, and the filter
+removes any it misses.
 
-| Field | What it carries |
-|---|---|
-| `schema_version` | `2` |
-| `grading_id`, `submission`, `stage`, `attempt`, `task`, `publication` | Copied from the envelope |
-| `outcome` | One of `accepted`, `partial`, `wrong_answer`, `time_limit`, `memory_limit`, `output_limit`, `runtime_error`, `compile_error`, `skipped`, `system_error` |
-| `metrics` | Named numbers over the whole run, for example `points` or `accuracy`. A leaderboard ranks on one of these by name |
-| `tests` | One row per test: `id`, its own `outcome`, `time_ms`, `memory_kb`, `metrics`, optional `message` |
-| `summary` | A few lines for the contestant, as the task's visibility allows |
-| `resources` | `wall_ms`, `cpu_ms`, `peak_memory_kb` over the whole run |
-| `log` | The object URL the log went to, without the presigned query, or null |
-| `started_at`, `finished_at` | When the harness accepted the envelope and finished the last step |
+### The host-path trap
 
-There is no separate score: whatever number a task is ranked on is a metric
-the leaderboard names, so a scorer that emits `points` and one that emits
-`accuracy` are the same shape, and the `forge` repo needs to understand only
-the outcome list and the per-test rows. `system_error` means nobody graded:
-the schema then allows no test rows and no metrics, and the summary says what
-went wrong for staff. A harness that crashed and still filed a wrong answer
-against a contestant is the failure that rule prevents.
+The daemon resolves a mount's source on the machine, not inside the harness, so
+a directory the harness made at its own `/woodpecker/x` means nothing to it:
+bind-mounting it gives the step an empty directory and a silently wrong
+verdict. The harness therefore finds its own container id in
+`/proc/self/mountinfo`, inspects itself through the filter, takes the Docker
+volume mounted over the task checkout, and gives each step a directory of that
+volume as a volume subpath mount. A volume and a subpath are something the
+filter can check against the caller's own mounts. Subpath mounts need Docker 26
+or later (Engine API 1.45).
 
-**`schemas/primitive.schema.json`.** How the harness and a primitive image
-talk. The harness starts one sandboxed container from the step's image and
-mounts one working directory into it. `inputs.json` and the input files under
-`in/` go in; `outputs.json` and the output files under `out/` come back when
-the container exits. The schema describes both files, and a primitive reads
-one directory and writes one directory and sees nothing else: not the forge,
-not the plan, not the network.
+## The socket filter
 
-| File | Field | What it carries |
+`python -m unicon_filter`, standard library only. It listens on
+`/run/unicon/docker.sock`, forwards to `/var/run/docker.sock`, and reads every
+request on every connection, kept-alive and pipelined ones included. It
+passes:
+
+- `GET /_ping`, `HEAD /_ping`, `GET /version`;
+- `POST /containers/create` for a grading step (below);
+- start, wait, kill, stop, inspect, logs (not followed) and delete on a
+  container this filter created for the calling harness, addressed by its
+  full id;
+- inspect of the caller's own container, which is how the harness finds its
+  workspace volume.
+
+Everything else is a 403 with `{"message": "unicon socket filter: <reason>"}`,
+and the connection closes. Every decision is printed as one JSON line.
+
+**Who is calling.** Every harness on a machine shares the one socket, so the
+filter tells runs apart by the process that connects: the kernel gives it that
+process as a pidfd (`SO_PEERPIDFD`, falling back to `SO_PEERCRED` before Linux
+6.5), its cgroup names its container, and the daemon says what that container
+is: its `UNICON_GRADING_ID` and the volume it has at `/woodpecker`. This needs
+the filter to run with `pid: host`. A connection is identified once, when it
+opens. The cgroup is taken only in the shapes Docker makes, with the id as
+the last segment: `/docker/<id>` under cgroupfs (Docker Desktop's too),
+`<slices>/docker-<id>.scope` under systemd, and either seen from the filter's
+own cgroup namespace, `/../<id>` or `/../docker-<id>.scope`. A cgroup deeper
+than the container's names none, since a process could make one below its own
+and name it after another container; under cgroup v1, lines naming two
+different containers name none. A
+create must carry that grading id as its `unicon.grading` label and may mount
+only that volume, at a `unicon-steps/` subpath, so one run can neither mount
+another run's workspace nor touch its steps, and no step sees the checkouts.
+The filter labels every step it lets through with `unicon.harness`, the
+calling container's id, and only that harness may touch the step afterwards,
+so not even a second run of the same grading reaches the first one's steps.
+
+**A create.** The body is read against the exact list of fields the Engine API
+knows, because the daemon's JSON decoder ignores the case of field names; any
+other spelling, and any repeated key, is refused. It must carry an image from
+`UNICON_FILTER_IMAGES`, a numeric non-root `uid:gid`, the two labels and at
+most `unicon.step` besides (no other label, so a step cannot pass for another
+program's container), no container name, the full set of flags in the table
+above, a memory, CPU and pids limit within the
+machine's ceilings, only the `cpu` and `fsize` ulimits, and exactly the `/work`
+mount and at most the `/tmp` tmpfs, and a `json-file` or `local` log with
+`max-size` and `max-file` set and at most 16 MB kept in all (the machine's
+default driver may keep everything). `NetworkingConfig` names no endpoint.
+Every other field must be empty. That
+refuses, among others: privileged, any bind mount, the daemon's socket, a
+network, added capabilities, other seccomp or AppArmor profiles, host
+namespaces, devices, sysctls, ports, restart policies, other runtimes, emptied
+`MaskedPaths` or `ReadonlyPaths`, anonymous volumes, and a volume driver's
+options. A list counts as empty only when it has no entries (or only zeros,
+as the CLI's `ConsoleSize`): `Binds: [""]` is refused. Where the filter only
+asks whether a structure is empty, it compares field names without regard to
+case, as the daemon does: `{"endpointsconfig": {"host": {}}}` names a network. The daemon is sent the
+document the filter judged, written out again with the harness label added,
+never the caller's own bytes.
+
+**What it reads strictly.** A bare CR or LF, a folded, malformed or repeated
+header, any `Transfer-Encoding`, `Expect` or `Upgrade`, a percent-encoded path
+or query, a `Content-Length` that is not plain ASCII digits, and a body on
+any verb but create are refused. The daemon is sent a request the filter
+writes afresh from what it judged, and the harness gets the daemon's answer
+back framed by `Content-Length`.
+
+**Ceilings.** One calling container may hold at most
+`UNICON_FILTER_MAX_CONNECTIONS` connections at once, and one grading at most
+`UNICON_FILTER_MAX_STEPS` step containers on the machine; the harness runs
+one at a time and removes each before the next. A create counts against its
+grading from the moment it is judged, before the daemon has answered, so
+creates sent at once on many connections stop at the ceiling too; one the
+daemon refuses gives its place back.
+
+**The reaper.** Every five seconds the filter kills and removes a container it
+created that has outlived its `unicon.time_ms` plus a grace period, or whose
+harness container is gone. At start, and on each pass, it takes on containers
+carrying both of its labels that it has no record of, which is what a
+restarted filter finds, and knows each one's harness by its `unicon.harness`
+label.
+
+| Variable | Default | What it sets |
 |---|---|---|
-| `inputs.json` | `schema_version` | `2` |
-| | `step` | The plan step this container runs, for the primitive's own log |
-| | `inputs` | One value per declared input, keyed by name |
-| `outputs.json` | `schema_version` | `2` |
-| | `outputs` | One value per declared output, keyed by name |
-| | `error` | Optional. One sentence when the primitive could not do its work at all; a failed compile is an outcome, not an error |
+| `UNICON_FILTER_IMAGES` | required | Image references by digest, separated by commas or white space. The list cannot change while the filter runs |
+| `UNICON_FILTER_UPSTREAM` | `/var/run/docker.sock` | The daemon's socket |
+| `UNICON_FILTER_LISTEN` | `/run/unicon/docker.sock` | The filter's own socket, mode 0666 |
+| `UNICON_FILTER_SOCKET_CHECK_SECONDS` | `1` | How often the filter checks that the socket at that path is still the one it bound |
+| `UNICON_FILTER_WORKSPACE` | `/woodpecker` | Where the caller has the run's workspace volume |
+| `UNICON_FILTER_GRACE_SECONDS` | `30` | Added to a step's clock before the reaper takes it |
+| `UNICON_FILTER_REAP_EVERY_SECONDS` | `5` | How often the reaper looks |
+| `UNICON_FILTER_MAX_MEMORY_MB`, `_MAX_PIDS`, `_MAX_CPUS`, `_MAX_TIME_MS` | 16384, 4096, the machine's CPUs, 6 hours | The ceilings a create may ask for |
+| `UNICON_FILTER_MAX_STEPS` | 4 | Step containers one grading may have on the machine at once |
+| `UNICON_FILTER_MAX_CONNECTIONS` | 32 | Connections one calling container may hold at once |
 
-A value is text, a number or a boolean carried as itself, a file as
-`{"file": "in/main.cpp"}`, or a list of files as a list of those objects.
-File paths are relative to the working directory, under `in/` for inputs and
-`out/` for outputs. There is no registry file: the forge holds every
-primitive and its declaration, and the compiler reads them from there.
+The image runs as uid 10002, which no harness (10001) or step runs as, and
+its `/run/unicon` belongs to that uid, so a new volume mounted there does
+too. Start it with the daemon's socket and its group (`group_add`), a volume
+for `/run/unicon` that uid 10002 can write, and `pid: host`, and give every
+harness that volume read-only (`unicon-filter:/run/unicon:ro`): the harness
+starts as root, and with the directory writable it could remove the socket
+and bind its own in its place. The filter checks that the file at its
+socket's path is still the socket it bound, and when it is not it exits 3
+with `unicon-socket-filter: socket_replaced: ...` on stderr, so the machine
+restarts it and notices. It exits 2 with one line on stderr,
+`unicon-socket-filter: <code>: <message>`, when its settings are wrong
+(`missing_environment`, `bad_setting`) or the daemon does not answer
+(`upstream_unreachable`).
 
-Every schema field is set by a file in `examples/`, and
-`scripts/check_contract_files.py` fails if one is not. A field no example fills
-in is a field nothing writes, and it stays plausible for years because the
-schema still describes it. The primitive contract has three examples, one per
-file it describes and one for the error case.
+The filter is not a sandbox: a step still runs on the machine's kernel.
+
+## The clone image
+
+`woodpeckerci/plugin-git` 2.10.1 by digest plus one line of system git config,
+`lfs.storage = /lfs-cache`. The CI's checkout steps mount a volume the machine
+keeps at `/lfs-cache`, one per org (the `forge` repo's CI answer names it,
+`unicon-lfs-<org>`), so a dataset is downloaded once per org and machine and
+no org's checkout is served an object another org's brought by naming its id;
+the checkout still copies it into the run's workspace. The image names no
+volume, and runs as root as plugin-git does, so a volume Docker makes on first
+use needs no preparing. The setting is in the image because a clone step
+given an `environment` block stops counting as a plugin and is no longer lent
+the credential it clones with. The image goes on the CI's trusted-clone list
+beside plugin-git.
+
+## The contracts
+
+The five share one `schema_version`, 3, the one a runner release publishes them
+at. A release that changes the shape of any of them raises it, and the harness
+refuses a file written for another. `scripts/check_contract_files.py` fails CI
+when a file pins another version, when an example under `examples/` does not
+validate, or when a schema field is one no example sets.
+
+**`plan.schema.json`.** Written by the `forge` repo's compiler at every valid
+save as `plans/<stage>.json` in the task repo; read by the harness only. Flat
+and fully resolved: `harness_image` by digest, `stage`, `tests` (the test ids
+in order), `steps`, and `verdict`. A step has `id`, `primitive`, `image` by
+digest, `entrypoint` and all five `limits`, and is one of three shapes: runs
+once (`inputs`), runs for one test (`inputs` and `test`), or one container for
+many tests (`batch`, a list of `{test, inputs}`). An input value is
+`{"value": ...}`, `{"task": path or [paths]}`, `{"submission": id}` with an
+optional `"field": "language"`, or `{"step": id, "output": name}` with an
+optional `test`. `verdict` names the outputs behind `outcome` (required),
+`metrics`, `tests.time_ms`, `tests.memory_kb` and `summary`. Beyond the schema
+the harness checks that a step id names one step or the runs of one foreach,
+that every test named is in `tests`, and that every reference points at a step
+that runs earlier.
+
+**`envelope.schema.json`.** Served by the `forge` repo at the run's envelope
+URL. `grading_id`, `submission`, `stage`, `attempt`, `task`, `publication`,
+`checkouts` (`/woodpecker/task`, `/woodpecker/submission`), `callback` (`url`
+and a one-run `token`), `log_put` (a presigned PUT into `unicon-results` at
+`logs/<grading id>/<attempt>.log`), `deadline`, and `limits.wall_seconds`, which
+is always present. The run's wall clock is the smaller of `wall_seconds` and
+the time to the deadline less 30 seconds kept for reporting.
+
+**`verdict.schema.json`.** Posted in the final callback; checked by the
+`forge` repo and kept on the grading row. `outcome` from a fixed list
+(`accepted`, `partial`, `wrong_answer`, `time_limit`, `memory_limit`,
+`output_limit`, `runtime_error`, `compile_error`, `skipped`, `system_error`),
+`metrics` as named numbers, `tests` as one row per test with its own outcome,
+time, memory and metrics, `summary`, `resources`, `log` (the log's URL without
+its presigned query, or null), and the forge identity of the submission, task
+and publication, so a verdict can be matched back after a loss of the database.
+There is no separate score. `system_error` allows no rows and no metrics.
+The harness sends `resources.cpu_ms` and `peak_memory_kb` as null: the filter
+does not pass the stats call that would measure them.
+
+**`primitive.schema.json`.** How the harness and a primitive image talk, and
+the `primitive.yaml` declaration the forge compiler reads; a document is
+exactly one of the three.
+
+| File | Shape |
+|---|---|
+| `inputs.json` | `{"schema_version": 3, "step": id, "inputs": {...}}`, or `"batch": [{"id": test, "inputs": {...}}]` |
+| `outputs.json` | `{"schema_version": 3, "outputs": {...}}`, or `"batch": [{"id": test, "outputs": {...}}]` one per item in the same order, or `{"schema_version": 3, "error": "one sentence"}` when the primitive could not work at all |
+| `primitive.yaml` | `name`, `version`, `image` by digest, `entrypoint`, `batch`, `limits` (all five), optional `limits_from` (`{input, scale, add}`, scale 1 and add 0 when left out), `inputs` and `outputs` as `{type, values, optional}` |
+
+A value is text, a number, a boolean, a file `{"file": "in/..."}` or
+`{"file": "out/..."}`, a list of files, or a list of text, numbers or booleans
+(a per-test output over every test). Paths have no empty, `.` or `..` segment.
+Types are `file`, `file[]` (quote it in YAML flow style: `{type: "file[]"}`),
+`text`, `number`, `boolean`, `enum` with `values`, and `outcome`. A primitive
+repo validates its `primitive.yaml` against the release's schema with a
+placeholder digest filled in, since bootstrap writes the image.
+
+**`submission.schema.json`.** `submission.json` at the root of a submission
+commit: `{"schema_version": 3, "inputs": {id: entry}}`, where an entry is
+`{"files": ["files/<id>/<name>", ...], "language": ...}` for a `code`, `file` or
+`file[]` input, or `{"value": ...}` for `text`, `number` and `boolean`. A
+`{"submission": id}` plan value gives the one file of an input with one file,
+the list for more, or the value.
 
 ## Rules that are cheap now and expensive later
 
 **The harness runs on machines we do not own.** It never talks to the forge,
-and the only credential it ever holds is the callback token for the one run it
-is running, which dies at the deadline in the envelope. Anything that needs a
-long-lived secret belongs in the `forge` repo, not here.
+and the only credential it ever holds is the callback token for its one run,
+which dies at the deadline. The token and the presigned queries never reach the
+run log or the CI log.
 
 **Every plan and envelope carries `schema_version`, and a mismatch is refused.**
 A compiler that emits a shape the harness reads differently produces a wrong
 verdict, not an error, and a wrong verdict is the one failure nobody notices.
-The harness stops with a `system_error` instead of grading against a shape it
-does not know.
-
-**Sandbox paths are host paths, not the harness's own paths.** The Docker
-daemon resolves bind-mount sources on the host. A harness that mounts its own
-`/work/sandbox` into a sibling container gets an empty directory and a silently
-wrong verdict. It must ask the daemon for its own mounts once at startup and
-translate every sandbox path through that. Measured and confirmed in
-Not implemented yet.
-
-**Every sandbox carries a label with the grading id.** If the harness dies
-mid-run its sandbox containers keep running and nothing cleans them up. The
-harness kills its own in a `finally` block, and a reaper on the machine removes
-any `unicon.grading=*` container older than the maximum run time, for the case
-where the harness is not there to do it. Not implemented yet.
 
 **No image is ever released as `:latest`.** Plans pin the harness image by
-content digest so a task keeps grading the way it was published, and a grading
-machine pins the other three the same way. A moving tag invites someone to run
-a plan against an image it was not compiled for. The base image is pinned by
-digest for the same reason; bumping it is one commit that changes all four
-Dockerfiles.
+digest so a task keeps grading the way it was published, and a grading machine
+pins the other three the same way. The base images are pinned by digest too.
 
 ## Layout
 
 ```
-images/harness/           the harness Dockerfile; the program is harness/
-images/worker/            the worker Dockerfile, placeholder entrypoint
-images/clone/             the clone Dockerfile, placeholder entrypoint
-images/socket-filter/     the socket filter Dockerfile, placeholder entrypoint
-images/placeholder.py     what the three placeholder images run
-harness/unicon_harness/   the program in the harness image
-harness/tests/            its tests
-schemas/                  the four contract schemas, published on each release
-examples/                 valid documents for every schema, checked in CI
-scripts/                  the check that keeps the examples and schemas in step
+harness/unicon_harness/          the harness
+harness/tests/                   its tests; primitives/ holds the fixture primitives
+socket_filter/unicon_filter/     the socket filter
+socket_filter/filter_tests/      its tests, and the Docker lab both integration tests use
+images/<name>/Dockerfile         the four images
+images/clone_tests/              the clone image's Docker test and its small git-lfs server
+images/placeholder.py            what the worker image runs
+schemas/                         the five contract schemas, published on each release
+examples/                        valid documents for every schema, checked in CI
+scripts/                         the check that keeps the examples and schemas in step
 ```
 
 ## Running it locally
@@ -207,34 +390,37 @@ uv run ruff format --check .
 uv run ruff check .
 uv run mypy
 uv run pytest
+uv run pytest -m docker
 uv run python scripts/check_contract_files.py
 ```
 
-CI runs exactly those six commands, then builds the four images from the repo
-root, starts the harness once with an empty environment to see that it refuses
-it, and starts each of the other three to see that its placeholder runs.
+`uv run pytest` runs the unit tests; a few that need unix sockets run on Linux
+only. `uv run pytest -m docker` needs a Docker daemon (26 or later): it builds
+the images, starts a registry of its own on `127.0.0.1:5056` to give the
+fixture primitives a digest, and runs a whole grading through the harness and
+the filter, the filter's escape checks, one run trying to reach another's steps,
+the reaper, the filter noticing its socket replaced, and three checkouts
+with the clone image against a small git-lfs server, the second of which,
+sharing the first's cache, must download nothing, and the third, with a cache
+of its own, must download the file again. Everything it makes is named `unicon-lab-*` and removed at the
+end, except the registry container, `unicon-lab-registry`, which later runs
+reuse.
+
+CI runs those commands, checks that the Dockerfiles on the python base share
+one digest, builds the four images, and starts each once: the harness and the
+filter with nothing set, to see them refuse with exit 2, the clone image to see
+`git config --system lfs.storage` is `/lfs-cache`, and the worker to see its
+placeholder.
 
 ```
 docker build -f images/harness/Dockerfile -t unicon-harness:dev .
-docker build -f images/worker/Dockerfile -t unicon-worker:dev .
-docker build -f images/clone/Dockerfile -t unicon-clone:dev .
 docker build -f images/socket-filter/Dockerfile -t unicon-socket-filter:dev .
+docker build -f images/clone/Dockerfile -t unicon-clone:dev .
+docker build -f images/worker/Dockerfile -t unicon-worker:dev .
 ```
 
-To run the harness against a real envelope over HTTP, serve one and point the
-image at it:
-
-```
-python -m http.server 8799 --directory examples
-docker run --rm --add-host=host.docker.internal:host-gateway \
-  -e UNICON_ENVELOPE_URL=http://host.docker.internal:8799/envelope.json \
-  -e UNICON_GRADING_ID=0199a2c1-6b7e-7c3a-9f10-5d2e4b8a6c31 \
-  unicon-harness:dev
-```
-
-It exits 0 and prints one line for an envelope it accepts. For anything else it
-exits 2 and prints one line to stderr that starts with
-`unicon-harness: <code>:`, where the code is one of:
+When the run never begins the harness exits 2 and prints one line to stderr
+that starts with `unicon-harness: <code>:`:
 
 | Code | What happened |
 |---|---|
@@ -246,20 +432,15 @@ exits 2 and prints one line to stderr that starts with
 | `grading_id_mismatch` | The envelope is for a different grading run than the environment says |
 | `schemas_missing` | The image was built without the contract files. A packaging fault, not a job fault |
 
-Exit 2 means the run never began, and is reported to the `forge` repo as a
-`system_error` verdict once the harness runs plans. There is one exit code for
-every refusal because the `forge` repo's only decision is whether to alert;
-the code in the line is for the person reading the log.
-
 ## Releasing
 
 Push a tag `v1.2.3` on `main`. The release workflow refuses a tag whose commit
 is not on `main`, checks the tag against the version in `pyproject.toml`, runs
 the same checks as CI, pushes the four images as `ghcr.io/uniconhq/harness:v1.2.3`,
-`worker:v1.2.3`, `clone:v1.2.3` and `socket-filter:v1.2.3`, and creates a
-GitHub release with the four contract files and `images.json` attached, which
-names each image by digest, and the same four digests in the notes. `deploy`
-pins that release and those digests.
+`socket-filter:v1.2.3`, `clone:v1.2.3` and `worker:v1.2.3`, and creates a GitHub
+release with the five contract files and `images.json` attached, which names
+each image by digest, and the same four digests in the notes. `deploy` pins
+that release and those digests.
 
 The first push creates each package on the organisation as **private**,
 whatever the repo's visibility is. Grading machines pull them anonymously, so
