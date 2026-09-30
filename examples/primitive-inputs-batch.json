@@ -1,0 +1,24 @@
+{
+  "schema_version": 3,
+  "step": "run",
+  "batch": [
+    {
+      "id": "1",
+      "inputs": {
+        "binary": { "file": "in/1/binary" },
+        "input": { "file": "in/2/1.in" },
+        "time_limit": 2.0,
+        "memory_limit": 256
+      }
+    },
+    {
+      "id": "2",
+      "inputs": {
+        "binary": { "file": "in/1/binary" },
+        "input": { "file": "in/3/2.in" },
+        "time_limit": 2.0,
+        "memory_limit": 256
+      }
+    }
+  ]
+}

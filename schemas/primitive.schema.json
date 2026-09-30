@@ -2,22 +2,23 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://raw.githubusercontent.com/uniconhq/runner/main/schemas/primitive.schema.json",
   "title": "Unicon primitive contract",
-  "description": "How the harness and a primitive image talk. The harness starts one sandboxed container from the step's image and mounts one working directory into it: inputs.json and the input files under in/ go in, and outputs.json and the output files under out/ come back when the container exits. This schema describes both files. A primitive reads one directory and writes one directory; it never sees the forge, the plan or the network.",
+  "description": "How the harness and a primitive image talk, and how a primitive declares itself. The harness starts one sandboxed container from the step's image and mounts one directory at /work, read-write, the container's only writable place besides a small tmpfs at /tmp: inputs.json and the input files under in/ go in, and outputs.json and the output files under out/ come back when the container exits. A primitive reads the paths inputs.json names and assumes nothing else; it never sees the forge, the plan or the network. The same file describes primitive.yaml, the declaration the forge compiler reads: a document is exactly one of inputs.json, outputs.json or a declaration.",
   "oneOf": [
     { "$ref": "#/$defs/inputs_file" },
-    { "$ref": "#/$defs/outputs_file" }
+    { "$ref": "#/$defs/outputs_file" },
+    { "$ref": "#/$defs/declaration" }
   ],
   "$defs": {
     "inputs_file": {
-      "description": "inputs.json, written by the harness before the container starts.",
+      "description": "inputs.json, written by the harness before the container starts. inputs for a step that runs once or for one test; batch for a primitive that takes many tests in one run.",
       "type": "object",
-      "required": ["schema_version", "step", "inputs"],
+      "required": ["schema_version", "step"],
       "additionalProperties": false,
       "properties": {
         "schema_version": {
           "description": "The contract version this file is written against. A primitive refuses a version it does not speak.",
           "type": "integer",
-          "const": 2
+          "const": 3
         },
         "step": {
           "description": "The id of the plan step this container runs, for the primitive's own log.",
@@ -26,53 +27,216 @@
         },
         "inputs": {
           "description": "One entry per input the primitive declares, keyed by the input name.",
-          "type": "object",
-          "additionalProperties": { "$ref": "#/$defs/value" }
+          "$ref": "#/$defs/values"
+        },
+        "batch": {
+          "description": "One item per test, in test order, each with the inputs for that test.",
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": ["id", "inputs"],
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "description": "The test this item is for. outputs.json answers with the same id in the same position.",
+                "$ref": "#/$defs/test_id"
+              },
+              "inputs": { "$ref": "#/$defs/values" }
+            }
+          }
         }
-      }
+      },
+      "oneOf": [
+        { "required": ["inputs"], "not": { "required": ["batch"] } },
+        { "required": ["batch"], "not": { "required": ["inputs"] } }
+      ]
     },
     "outputs_file": {
-      "description": "outputs.json, written by the primitive before it exits. The harness checks it against the outputs the primitive declares before any later step sees it.",
+      "description": "outputs.json, written by the primitive before it exits. The harness checks it against this contract and against what the plan needs from the step before any later step sees it. outputs for a single run, batch for a batch, one entry per item in the same order; or error alone when the primitive could not work at all.",
       "type": "object",
-      "required": ["schema_version", "outputs"],
+      "required": ["schema_version"],
       "additionalProperties": false,
       "properties": {
         "schema_version": {
           "description": "The contract version this file is written against, the same number as in inputs.json.",
           "type": "integer",
-          "const": 2
+          "const": 3
         },
         "outputs": {
-          "description": "One entry per output the primitive declares, keyed by the output name. A file output names a path under out/.",
-          "type": "object",
-          "additionalProperties": { "$ref": "#/$defs/value" }
+          "description": "One entry per output the primitive declares, keyed by the output name. A file output names a path under out/. An optional output may be left out.",
+          "$ref": "#/$defs/values"
+        },
+        "batch": {
+          "description": "One entry per item of inputs.json's batch, in the same order and with the same ids.",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["id", "outputs"],
+            "additionalProperties": false,
+            "properties": {
+              "id": { "$ref": "#/$defs/test_id" },
+              "outputs": { "$ref": "#/$defs/values" }
+            }
+          }
         },
         "error": {
-          "description": "Set when the primitive could not do its work at all, in one sentence for a person. A failed compile is an outcome, not an error; this is for a missing input or a broken image.",
+          "description": "Set when the primitive could not do its work at all, in one sentence for a person. The harness turns it into a system_error verdict. A failed compile or a wrong answer is an outcome, not an error.",
           "type": "string",
           "minLength": 1
         }
+      },
+      "oneOf": [
+        { "required": ["outputs"], "not": { "required": ["batch"] } },
+        { "required": ["batch"], "not": { "required": ["outputs"] } },
+        { "required": ["error"], "not": { "anyOf": [{ "required": ["outputs"] }, { "required": ["batch"] }] } }
+      ]
+    },
+    "declaration": {
+      "description": "primitive.yaml, what the forge compiler reads for one version of a primitive. In the primitive's own GitHub repo the file has no image line; bootstrap writes the image by digest from the release manifest into the version it creates at the forge, so a repo's CI validates its file with a placeholder digest filled in.",
+      "type": "object",
+      "required": ["name", "version", "image", "entrypoint", "batch", "limits", "inputs", "outputs"],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "description": "owner/name, for example unicon/compile.",
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9_-]*/[a-z0-9][a-z0-9_-]*$"
+        },
+        "version": {
+          "description": "The version this declaration is for, the forge tag, for example v1.",
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+        },
+        "image": {
+          "description": "The image this version runs from, by digest.",
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9._-]*(:[0-9]{1,5})?(/[a-z0-9][a-z0-9._-]*)+@sha256:[0-9a-f]{64}$"
+        },
+        "entrypoint": {
+          "description": "The program the container runs.",
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "batch": {
+          "description": "true when the primitive takes many tests in one run, so the compiler folds a foreach over it into one step.",
+          "type": "boolean"
+        },
+        "limits": {
+          "description": "The container's limits for one run, or for one item of a batch. A batch step's time_ms and cpu_ms are these times the number of items; the other three stay per item.",
+          "$ref": "#/$defs/limits"
+        },
+        "limits_from": {
+          "description": "Raises a limit from a numeric input, so the container never dies before the primitive's own per-test limit: the limit is max(limits.<name>, input * scale + add).",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "time_ms": { "$ref": "#/$defs/limit_from" },
+            "cpu_ms": { "$ref": "#/$defs/limit_from" },
+            "memory_mb": { "$ref": "#/$defs/limit_from" },
+            "pids": { "$ref": "#/$defs/limit_from" },
+            "output_mb": { "$ref": "#/$defs/limit_from" }
+          }
+        },
+        "inputs": {
+          "description": "What the primitive takes, by name.",
+          "type": "object",
+          "propertyNames": { "pattern": "^[a-z][a-z0-9_]*$" },
+          "additionalProperties": { "$ref": "#/$defs/port" }
+        },
+        "outputs": {
+          "description": "What the primitive gives back, by name. An output named outcome, of type outcome, is how a step says a test or the run did not pass.",
+          "type": "object",
+          "propertyNames": { "pattern": "^[a-z][a-z0-9_]*$" },
+          "additionalProperties": { "$ref": "#/$defs/port" }
+        }
       }
     },
+    "limits": {
+      "type": "object",
+      "required": ["time_ms", "cpu_ms", "memory_mb", "pids", "output_mb"],
+      "additionalProperties": false,
+      "properties": {
+        "time_ms": { "type": "integer", "minimum": 1 },
+        "cpu_ms": { "type": "integer", "minimum": 1 },
+        "memory_mb": { "type": "integer", "minimum": 1 },
+        "pids": { "type": "integer", "minimum": 1 },
+        "output_mb": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "limit_from": {
+      "description": "input * scale + add; scale is 1 and add 0 when left out.",
+      "type": "object",
+      "required": ["input"],
+      "additionalProperties": false,
+      "properties": {
+        "input": {
+          "description": "The numeric input the limit follows.",
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*$"
+        },
+        "scale": { "type": "number", "exclusiveMinimum": 0 },
+        "add": { "type": "number", "minimum": 0 }
+      }
+    },
+    "port": {
+      "description": "One declared input or output. enum carries its values; outcome is a value from the verdict's outcome list.",
+      "type": "object",
+      "required": ["type"],
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["file", "file[]", "text", "number", "boolean", "enum", "outcome"]
+        },
+        "values": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "optional": { "type": "boolean" }
+      },
+      "if": { "properties": { "type": { "const": "enum" } } },
+      "then": { "required": ["values"] },
+      "else": { "not": { "required": ["values"] } }
+    },
+    "test_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 255,
+      "pattern": "^[^/\\u0000-\\u001f]+$"
+    },
+    "values": {
+      "type": "object",
+      "propertyNames": { "pattern": "^[a-z][a-z0-9_]*$" },
+      "additionalProperties": { "$ref": "#/$defs/value" }
+    },
     "value": {
-      "description": "One input or output value. Text, a number and a boolean are carried as themselves; a file is an object naming its path; a list of files is a list of those objects.",
+      "description": "One input or output value. Text, a number and a boolean are carried as themselves; a file is an object naming its path; a list of files is a list of those objects. An input that reads a per-test output over every test, for a scorer, is a list of that output's values in test order, so a list may also hold text, numbers or booleans.",
       "oneOf": [
         { "type": "string" },
         { "type": "number" },
         { "type": "boolean" },
         { "$ref": "#/$defs/file" },
-        { "type": "array", "items": { "$ref": "#/$defs/file" } }
+        { "type": "array", "items": { "$ref": "#/$defs/file" } },
+        {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": ["string", "number", "boolean"] }
+        }
       ]
     },
     "file": {
-      "description": "A file in the working directory. The path is relative to the directory root: under in/ for an input, under out/ for an output.",
+      "description": "A file in the working directory, by a path relative to /work: under in/ for an input, under out/ for an output, with no empty, . or .. segment.",
       "type": "object",
       "required": ["file"],
       "additionalProperties": false,
       "properties": {
         "file": {
           "type": "string",
-          "pattern": "^(in|out)/[^\\0]+$"
+          "pattern": "^(in|out)(/(?!\\.\\.?(/|$))[^/\\u0000]+)+$"
         }
       }
     }

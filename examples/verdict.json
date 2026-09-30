@@ -1,5 +1,5 @@
 {
-  "schema_version": 2,
+  "schema_version": 3,
   "grading_id": "0199a2c1-6b7e-7c3a-9f10-5d2e4b8a6c31",
   "submission": {
     "org": "acme",
@@ -7,7 +7,7 @@
     "tag": "submission/3",
     "commit": "6f1b0d0c4d2a9e8f7b6a5c4d3e2f1a0b9c8d7e6f"
   },
-  "stage": "public",
+  "stage": "default",
   "attempt": 1,
   "task": {
     "org": "acme",
@@ -19,28 +19,25 @@
   },
   "outcome": "wrong_answer",
   "metrics": {
-    "points": 66.67,
-    "tests_passed": 2,
-    "max_time_ms": 812,
-    "max_memory_kb": 41200
+    "points": 2
   },
   "tests": [
     {
-      "id": "01-sample",
+      "id": "1",
       "outcome": "accepted",
       "time_ms": 120,
       "memory_kb": 20480,
-      "metrics": { "points": 33.33 }
+      "metrics": { "points": 1 }
     },
     {
-      "id": "02-small",
+      "id": "2",
       "outcome": "accepted",
       "time_ms": 812,
       "memory_kb": 41200,
-      "metrics": { "points": 33.34 }
+      "metrics": { "points": 1 }
     },
     {
-      "id": "03-duplicates",
+      "id": "10",
       "outcome": "wrong_answer",
       "time_ms": 96,
       "memory_kb": 20480,
@@ -48,13 +45,13 @@
       "message": "line 1: expected 42, found 41"
     }
   ],
-  "summary": "2 of 3 tests passed. Test 03-duplicates: line 1: expected 42, found 41.",
+  "summary": "main.py: compiled",
   "resources": {
     "wall_ms": 13400,
-    "cpu_ms": 1900,
+    "cpu_ms": null,
     "peak_memory_kb": 41200
   },
-  "log": "http://garage.invalid/unicon-results/acme/spring.sum.alice.sub/submission/3/public/1/log.txt",
+  "log": "http://proxy/unicon-results/logs/0199a2c1-6b7e-7c3a-9f10-5d2e4b8a6c31/1.log",
   "started_at": "2026-09-17T09:02:11Z",
   "finished_at": "2026-09-17T09:02:24Z"
 }

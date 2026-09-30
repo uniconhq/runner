@@ -1,9 +1,8 @@
 {
-  "schema_version": 2,
+  "schema_version": 3,
   "outputs": {
-    "binary": { "file": "out/a.out" },
-    "compile_log": "main.cpp: 0 warnings",
-    "compiled": true,
-    "seconds": 1.4
+    "binary": { "file": "out/binary" },
+    "compile_log": "main.py: compiled",
+    "outcome": "accepted"
   }
 }

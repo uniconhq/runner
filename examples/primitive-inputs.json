@@ -1,10 +1,11 @@
 {
-  "schema_version": 2,
-  "step": "compile",
+  "schema_version": 3,
+  "step": "score",
   "inputs": {
-    "source": { "file": "in/main.cpp" },
-    "headers": [{ "file": "in/lib/util.h" }],
-    "language": "cpp",
+    "source": { "file": "in/1/main.py" },
+    "headers": [{ "file": "in/2/util.h" }, { "file": "in/3/io.h" }],
+    "results": ["accepted", "wrong_answer", "accepted"],
+    "language": "python",
     "optimise": true,
     "stack_mb": 256
   }

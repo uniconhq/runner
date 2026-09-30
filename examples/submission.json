@@ -1,0 +1,8 @@
+{
+  "schema_version": 3,
+  "inputs": {
+    "submission": { "files": ["files/submission/main.py"], "language": "python" },
+    "weights": { "files": ["files/weights/model.bin", "files/weights/vocab.txt"] },
+    "alpha": { "value": 0.5 }
+  }
+}

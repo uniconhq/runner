@@ -1,5 +1,4 @@
 {
-  "schema_version": 2,
-  "outputs": {},
+  "schema_version": 3,
   "error": "the input named source is not in the working directory"
 }
