@@ -1,0 +1,28 @@
+name: unicon/sandbox-run
+version: v1
+image: ghcr.io/uniconhq/primitive-sandbox-run@sha256:2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a
+entrypoint: [/usr/local/bin/sandbox-run]
+batch: true
+limits: {time_ms: 5000, cpu_ms: 5000, memory_mb: 256, pids: 128, output_mb: 64}
+limits_from:
+  time_ms: {input: time_limit, scale: 2000, add: 3000}
+  cpu_ms: {input: time_limit, scale: 2000, add: 3000}
+  memory_mb: {input: memory_limit, scale: 1, add: 256}
+  pids: {input: max_processes, scale: 1, add: 0}
+  output_mb: {input: output_limit, scale: 1, add: 0}
+inputs:
+  binary: {type: file}
+  input: {type: file}
+  time_limit: {type: number}
+  memory_limit: {type: number}
+  max_processes: {type: number, optional: true}
+  output_limit: {type: number, optional: true}
+  extra: {type: "file[]", optional: true}
+  mode: {type: enum, values: [strict, lenient], optional: true}
+  echo: {type: boolean, optional: true}
+  note: {type: text, optional: true}
+outputs:
+  output: {type: file}
+  time_ms: {type: number}
+  memory_kb: {type: number}
+  outcome: {type: outcome}

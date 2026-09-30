@@ -8,3 +8,4 @@ __pycache__/
 harness/tests/
 examples/
 scripts/
+socket_filter/filter_tests/

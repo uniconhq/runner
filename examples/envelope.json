@@ -1,5 +1,5 @@
 {
-  "schema_version": 2,
+  "schema_version": 3,
   "grading_id": "0199a2c1-6b7e-7c3a-9f10-5d2e4b8a6c31",
   "submission": {
     "org": "acme",
@@ -7,7 +7,7 @@
     "tag": "submission/3",
     "commit": "6f1b0d0c4d2a9e8f7b6a5c4d3e2f1a0b9c8d7e6f"
   },
-  "stage": "public",
+  "stage": "default",
   "attempt": 1,
   "task": {
     "org": "acme",
@@ -22,10 +22,10 @@
     "submission": "/woodpecker/submission"
   },
   "callback": {
-    "url": "http://unicon.invalid/api/v1/internal/gradings/0199a2c1-6b7e-7c3a-9f10-5d2e4b8a6c31",
+    "url": "http://proxy/api/v1/gradings/0199a2c1-6b7e-7c3a-9f10-5d2e4b8a6c31/callback",
     "token": "example-one-run-callback-token"
   },
-  "log_put": "http://garage.invalid/unicon-results/acme/spring.sum.alice.sub/submission/3/public/1/log.txt?X-Amz-Expires=3600&X-Amz-Signature=example",
+  "log_put": "http://proxy/unicon-results/logs/0199a2c1-6b7e-7c3a-9f10-5d2e4b8a6c31/1.log?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Expires=3600&X-Amz-Signature=example",
   "deadline": "2026-09-17T09:30:00Z",
   "limits": {
     "wall_seconds": 900
