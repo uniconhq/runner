@@ -1,8 +1,13 @@
-"""A stand-in for the three classic primitives, small enough to read at a glance:
-`compile` checks a Python source and hands it on as the binary, `run` runs the
-binary on each test's input in a batch, `check` compares an output with the
-expected answer. The unit tests call `main` directly on a step directory; the
-Docker integration test builds it into an image and runs it as a real step.
+"""A stand-in for the three classic primitives and a scorer, small enough to
+read at a glance: `compile` checks a Python source and hands it on as the
+binary, `run` runs the binary on each test's input in a batch, `check`
+compares an output with the expected answer, and `score` adds up the outcomes
+of every test. One program
+plays all four, telling which it is from the names of its inputs: a compile
+takes a `source`, a run a `binary`, a check an `actual` output and a scorer
+its `results`. The unit tests call `main` directly on a step directory; the
+Docker integration test builds it into an image, whose entrypoint it is, and
+runs it as a real step.
 
 A few sources ask for something other than their answer, to exercise the
 harness: `# fixture: bad-outputs` writes an outputs.json that breaks the
@@ -19,11 +24,18 @@ import time
 from pathlib import Path
 from typing import Any
 
-VERSION = 3
+VERSION = 4
+KINDS = (
+    ("source", "compile"),
+    ("binary", "run"),
+    ("actual", "check"),
+    ("results", "score"),
+)
 
 
-def main(kind: str, work: Path) -> int:
+def main(work: Path) -> int:
     document = json.loads((work / "inputs.json").read_text(encoding="utf-8"))
+    kind = kind_of(document)
     if kind == "compile":
         result = _compile(work, document["inputs"])
     elif kind == "run":
@@ -57,6 +69,13 @@ def main(kind: str, work: Path) -> int:
     if result is not None:
         (work / "outputs.json").write_text(json.dumps(result), encoding="utf-8")
     return 0
+
+
+def kind_of(document: dict[str, Any]) -> str:
+    """Which primitive this run stands in for, from the names of its inputs."""
+    batch = document.get("batch")
+    inputs = batch[0]["inputs"] if batch else document.get("inputs", {})
+    return next((kind for name, kind in KINDS if name in inputs), "unknown")
 
 
 def _compile(work: Path, inputs: dict[str, Any]) -> dict[str, Any] | None:
@@ -142,4 +161,4 @@ def _check(work: Path, inputs: dict[str, Any]) -> dict[str, Any]:
 
 
 if __name__ == "__main__":
-    sys.exit(main(sys.argv[1], Path.cwd()))
+    sys.exit(main(Path.cwd()))

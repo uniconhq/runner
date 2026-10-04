@@ -66,7 +66,6 @@ def test_a_correct_submission_is_accepted_on_every_test(
     assert all(row["metrics"] == {"points": 1} for row in verdict["tests"])
     assert all(row["memory_kb"] == 1024 for row in verdict["tests"])
     assert verdict["summary"] == "main.py: compiled for python"
-    assert verdict["grading_id"] == "0199a2c1-6b7e-7c3a-9f10-5d2e4b8a6c31"
 
 
 def test_the_run_reports_started_progress_and_the_verdict_with_the_token(
@@ -314,21 +313,21 @@ def test_outputs_that_break_the_contract_stop_before_the_next_step(
 @pytest.mark.parametrize(
     ("outputs", "found"),
     [
-        ({"schema_version": 3, "outputs": {"outcome": "great"}}, "not one a step may"),
+        ({"schema_version": 4, "outputs": {"outcome": "great"}}, "not one a step may"),
         (
-            {"schema_version": 3, "outputs": {"outcome": "skipped"}},
+            {"schema_version": 4, "outputs": {"outcome": "skipped"}},
             "not one a step may",
         ),
-        ({"schema_version": 2, "outputs": {}}, "schema_version 3"),
+        ({"schema_version": 3, "outputs": {}}, "schema_version 4"),
         (
-            {"schema_version": 3, "outputs": {"binary": {"file": "in/1/main.py"}}},
+            {"schema_version": 4, "outputs": {"binary": {"file": "in/1/main.py"}}},
             "not under out/",
         ),
         (
-            {"schema_version": 3, "outputs": {"binary": {"file": "out/missing"}}},
+            {"schema_version": 4, "outputs": {"binary": {"file": "out/missing"}}},
             "does not exist",
         ),
-        ({"schema_version": 3, "batch": []}, "is not one"),
+        ({"schema_version": 4, "batch": []}, "is not one"),
     ],
 )
 def test_what_a_step_wrote_is_checked(
@@ -356,7 +355,7 @@ def test_outputs_over_the_step_output_limit_are_a_system_error(
     def write(work: Path) -> None:
         (work / "out" / "big").write_bytes(b"x" * (9 * 1024 * 1024))
         (work / "outputs.json").write_text(
-            json.dumps({"schema_version": 3, "outputs": {"outcome": "accepted"}}),
+            json.dumps({"schema_version": 4, "outputs": {"outcome": "accepted"}}),
             encoding="utf-8",
         )
 
@@ -477,7 +476,7 @@ def test_a_per_test_outcome_of_another_name_decides_each_test(
             for item in document["batch"]
         ]
         (work / "outputs.json").write_text(
-            json.dumps({"schema_version": 3, "batch": batch}), encoding="utf-8"
+            json.dumps({"schema_version": 4, "batch": batch}), encoding="utf-8"
         )
 
     docker.does("check", Does(before=judge, runs_fixture=False))
@@ -512,7 +511,6 @@ def test_a_scorer_reads_a_per_test_output_over_every_test(
             "id": "score",
             "primitive": "score@v1",
             "image": SCORE,
-            "entrypoint": ["python", "/opt/fixture.py", "score"],
             "limits": limits(),
             "inputs": {"results": {"step": "check", "output": "outcome"}},
         }

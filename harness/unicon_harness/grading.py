@@ -245,7 +245,7 @@ class Grader:
         self._containers += 1
         directory = self._workspace.new_step_dir(f"{self._containers:03d}-{step.id}")
         placer = Placer(directory)
-        document: dict[str, Any] = {"schema_version": SCHEMA_VERSION, "step": step.id}
+        document: dict[str, Any] = {"schema_version": SCHEMA_VERSION}
         if step.kind == "batch":
             document["batch"] = [
                 {"id": item.test, "inputs": self._inputs(step, item, placer)}

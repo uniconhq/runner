@@ -1,6 +1,6 @@
 [project]
 name = "unicon-harness"
-version = "0.3.0"
+version = "0.4.0"
 description = "The program inside the Unicon harness image, and the plan, envelope, verdict and primitive contracts it speaks."
 readme = "README.md"
 license = "MIT"
@@ -54,11 +54,16 @@ select = ["E", "F", "I", "N", "UP", "B", "A", "C4", "PTH", "RUF"]
 python_version = "3.14"
 strict = true
 files = ["harness", "socket_filter", "scripts", "images"]
-mypy_path = ["harness", "socket_filter"]
+mypy_path = ["harness", "socket_filter", "scripts"]
 platform = "linux"
 
 [tool.pytest.ini_options]
-testpaths = ["harness/tests", "socket_filter/filter_tests", "images/clone_tests"]
-pythonpath = ["harness", "socket_filter", "images"]
+testpaths = [
+    "harness/tests",
+    "socket_filter/filter_tests",
+    "images/clone_tests",
+    "scripts/declaration_tests",
+]
+pythonpath = ["harness", "socket_filter", "images", "scripts"]
 addopts = "-q -m 'not docker'"
 markers = ["docker: runs against a real Docker daemon; `pytest -m docker`"]

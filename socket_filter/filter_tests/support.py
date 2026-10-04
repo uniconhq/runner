@@ -25,7 +25,6 @@ def body() -> dict[str, Any]:
     return copy.deepcopy(
         {
             "Image": IMAGE,
-            "Entrypoint": ["/usr/local/bin/compile"],
             "User": "10001:10001",
             "WorkingDir": "/work",
             "Env": ["HOME=/tmp"],
