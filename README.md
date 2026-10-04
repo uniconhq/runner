@@ -272,7 +272,8 @@ The filter is not a sandbox: a step still runs on the machine's kernel.
 ## The clone image
 
 `woodpeckerci/plugin-git` 2.10.1 by digest plus two pieces of system git
-config, which together are all the platform needs from a checkout.
+config and a lock around the download, which together are all the platform
+needs from a checkout.
 
 `lfs.storage = /lfs-cache`. The CI's checkout steps mount a volume the machine
 keeps at `/lfs-cache`, one per org (the `forge` repo's CI answer names it,
@@ -293,6 +294,22 @@ rather than the places uploads land, so no convention has to be kept in step
 between this image and the platform; a file that is not a pointer passes
 through unchanged, with a line in the step's log saying it was not one, and
 git-lfs keeps a copy of it in the cache.
+
+A lock around `git lfs fetch`. The plugin checks a commit out with its
+pointers, then downloads the missing objects into the cache with `git lfs
+fetch` and copies them into the workspace with `git lfs checkout`. git-lfs
+does not make one process wait for another's download, so gradings that
+started together on a cache without the dataset each downloaded it (eight at
+once made eight downloads, experiment D2 of 2026-10-04). `git-lfs` in the
+image is a script in front of the real one that takes an `flock` on
+`/lfs-cache/fetch-locks/<commit>` for the length of the fetch: the first
+checkout of a commit downloads, the others wait and then find every object
+there, and all of them copy out side by side. The key is the commit because
+a commit names every pointer in it, so two checkouts of one commit want
+exactly the same objects; a lock per object would need the list of objects
+before the fetch and one lock for each, and every uploaded file is an
+object. A checkout that dies lets go of the lock with its last process. The
+lock files, one empty file per commit, stay in the cache.
 
 The image names no volume, and runs as root as plugin-git does, so a volume
 Docker makes on first use needs no preparing. Both settings are in the image
