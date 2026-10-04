@@ -17,7 +17,6 @@ sentence the harness writes.
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
 from typing import Any
 
 from unicon_harness.contracts import SCHEMA_VERSION, violation
@@ -26,23 +25,9 @@ from unicon_harness.grading import ACCEPTED, STEP_OUTCOMES, Grading, Value
 from unicon_harness.plan import Plan, Reference
 
 SUMMARY_LIMIT = 10_000
-COPIED = ("grading_id", "submission", "stage", "attempt", "task", "publication")
 
 
-def timestamp(moment: datetime) -> str:
-    return (
-        moment.astimezone(UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z")
-    )
-
-
-def graded(
-    plan: Plan,
-    grading: Grading,
-    envelope: dict[str, Any],
-    started_at: datetime,
-    finished_at: datetime,
-    wall_ms: int,
-) -> dict[str, Any]:
+def graded(plan: Plan, grading: Grading) -> dict[str, Any]:
     reader = _Reader(plan, grading)
     rows = [reader.row(test) for test in plan.tests]
     outcome = reader.outcome(rows)
@@ -51,34 +36,20 @@ def graded(
         for name, ref in plan.verdict.metrics.items()
     }
     return _document(
-        envelope,
         outcome=outcome,
         metrics=metrics,
         tests=rows,
         summary=reader.summary(outcome, rows),
-        started_at=started_at,
-        finished_at=finished_at,
-        wall_ms=wall_ms,
     )
 
 
-def system_error(
-    envelope: dict[str, Any],
-    message: str,
-    started_at: datetime,
-    finished_at: datetime,
-    wall_ms: int,
-) -> dict[str, Any]:
+def system_error(message: str) -> dict[str, Any]:
     """Nobody graded: no rows, no metrics, and the summary says why, for staff."""
     return _document(
-        envelope,
         outcome="system_error",
         metrics={},
         tests=[],
         summary=_cut(message.strip() or "the harness failed without saying why"),
-        started_at=started_at,
-        finished_at=finished_at,
-        wall_ms=wall_ms,
     )
 
 
@@ -88,29 +59,20 @@ def check(verdict: dict[str, Any]) -> str | None:
 
 
 def _document(
-    envelope: dict[str, Any],
     *,
     outcome: str,
     metrics: dict[str, float | int],
     tests: list[dict[str, Any]],
     summary: str,
-    started_at: datetime,
-    finished_at: datetime,
-    wall_ms: int,
 ) -> dict[str, Any]:
-    document: dict[str, Any] = {"schema_version": SCHEMA_VERSION}
-    document.update({name: envelope[name] for name in COPIED})
-    document.update(
-        outcome=outcome,
-        metrics=metrics,
-        tests=tests,
-        summary=summary,
-        resources={"wall_ms": max(wall_ms, 0), "cpu_ms": None, "peak_memory_kb": None},
-        log=None,
-        started_at=timestamp(started_at),
-        finished_at=timestamp(finished_at),
-    )
-    return document
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "outcome": outcome,
+        "metrics": metrics,
+        "tests": tests,
+        "summary": summary,
+        "log": None,
+    }
 
 
 class _Reader:

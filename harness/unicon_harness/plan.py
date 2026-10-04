@@ -49,7 +49,6 @@ class Step:
     id: str
     primitive: str
     image: str
-    entrypoint: tuple[str, ...]
     limits: Limits
     kind: Kind
     items: tuple[Item, ...]
@@ -162,7 +161,6 @@ def _step(index: int, raw: dict[str, Any]) -> Step:
         id=raw["id"],
         primitive=raw["primitive"],
         image=raw["image"],
-        entrypoint=tuple(raw["entrypoint"]),
         limits=Limits(**raw["limits"]),
         kind=kind,
         items=items,

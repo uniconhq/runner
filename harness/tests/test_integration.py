@@ -104,7 +104,7 @@ def _workspace(fixture: str) -> dict[str, bytes | str]:
     files["submission/files/submission/main.py"] = PROGRAM
     files["submission/submission.json"] = json.dumps(
         {
-            "schema_version": 3,
+            "schema_version": 4,
             "inputs": {
                 "submission": {
                     "files": ["files/submission/main.py"],
@@ -138,8 +138,9 @@ def _grade(made: Lab, grading: str) -> tuple[int, list[dict[str, Any]], str]:
         "platform",
         "-v",
         f"{data}:/data:ro",
-        fixture,
+        "--entrypoint",
         "python",
+        fixture,
         "/opt/platform_server.py",
         "8080",
     )
@@ -238,8 +239,9 @@ def test_a_harness_without_the_filter_cannot_start_a_step() -> None:
             "platform",
             "-v",
             f"{data}:/data:ro",
-            fixture,
+            "--entrypoint",
             "python",
+            fixture,
             "/opt/platform_server.py",
             "8080",
         )

@@ -10,7 +10,7 @@
     "schema_version": {
       "description": "The submission shape this file is written against.",
       "type": "integer",
-      "const": 3
+      "const": 4
     },
     "inputs": {
       "description": "One entry per contestant input the task declares, keyed by the input id.",

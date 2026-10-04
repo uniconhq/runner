@@ -63,7 +63,6 @@ def create_body(
     file_bytes = limits.output_mb * MIB
     return {
         "Image": step.image,
-        "Entrypoint": list(step.entrypoint),
         "User": workspace.user,
         "WorkingDir": "/work",
         "Env": ["HOME=/tmp"],

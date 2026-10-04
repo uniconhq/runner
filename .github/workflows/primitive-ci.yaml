@@ -1,0 +1,116 @@
+name: primitive-ci
+
+# The CI every primitive repository runs, called from its own ci.yaml as
+# uniconhq/runner/.github/workflows/primitive-ci.yaml@<runner release>. The
+# primitive is checked out as `primitive/` and this repo, at `runner-ref`, as
+# `runner/` beside it: the primitive's tests find the contract at
+# ../runner/schemas/primitive.schema.json, and primitive.yaml is checked
+# against that same file. Everything is named after the calling repository,
+# primitive-<name>.
+
+on:
+  workflow_call:
+    inputs:
+      runner-ref:
+        description: >-
+          The runner release the primitive is built against, the same tag the
+          caller names this workflow at.
+        type: string
+        required: true
+      compile-image:
+        description: >-
+          Build the compile primitive from its main branch for the image tests,
+          as COMPILE_IMAGE, for a primitive that runs what compile builds.
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+env:
+  NAME: ${{ github.event.repository.name }}
+  PRIMITIVE_SCHEMA: ${{ github.workspace }}/runner/schemas/primitive.schema.json
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: primitive
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: primitive
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: uniconhq/runner
+          ref: ${{ inputs.runner-ref }}
+          path: runner
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        with:
+          version: "0.12.13"
+          enable-cache: true
+          cache-dependency-glob: primitive/uv.lock
+      - run: uv sync --locked
+      - run: uv run ruff format --check .
+      - run: uv run ruff check .
+      - run: uv run mypy
+      # The repo's file has no image line; the check fills in a placeholder
+      # digest, as bootstrap later fills in the real one.
+      - run: uv run python ../runner/scripts/check_declaration.py "$PRIMITIVE_SCHEMA" .
+      - run: uv run pytest -m "not image"
+
+  image:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: primitive
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: primitive
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: uniconhq/runner
+          ref: ${{ inputs.runner-ref }}
+          path: runner
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        with:
+          version: "0.12.13"
+          enable-cache: true
+          cache-dependency-glob: primitive/uv.lock
+      - run: uv sync --locked
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: primitive
+          push: false
+          load: true
+          tags: ${{ env.NAME }}:ci
+      # Native and Java test binaries come from the compile primitive itself,
+      # so these tests are also the check that the two agree on the binary
+      # format. Its main branch is the version that will ship next to this one.
+      - if: inputs.compile-image
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: uniconhq/primitive-compile
+          ref: main
+          path: primitive-compile
+          persist-credentials: false
+      - if: inputs.compile-image
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: primitive-compile
+          push: false
+          load: true
+          tags: primitive-compile:ci
+      # Runs the image under the same sandbox flags the harness uses: no
+      # network, read-only root, no capabilities, seccomp, user 65532.
+      - run: uv run pytest -m image
+        env:
+          PRIMITIVE_IMAGE: ${{ env.NAME }}:ci
+          COMPILE_IMAGE: ${{ inputs.compile-image && 'primitive-compile:ci' || '' }}
