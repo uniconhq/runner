@@ -1,5 +1,5 @@
 {
-  "schema_version": 3,
+  "schema_version": 4,
   "harness_image": "ghcr.io/uniconhq/harness@sha256:3f1c0a8b5d6e4f2a1b0c9d8e7f6a5b4c3d2e1f0a9b8c7d6e5f4a3b2c1d0e9f8a",
   "stage": "default",
   "tests": ["1", "2", "10"],
@@ -8,7 +8,6 @@
       "id": "compile",
       "primitive": "compile@v1",
       "image": "ghcr.io/uniconhq/primitive-compile@sha256:1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f809",
-      "entrypoint": ["/usr/local/bin/compile"],
       "limits": { "time_ms": 60000, "cpu_ms": 60000, "memory_mb": 1024, "pids": 128, "output_mb": 64 },
       "inputs": {
         "source": { "submission": "submission" },
@@ -19,7 +18,6 @@
       "id": "run",
       "primitive": "sandbox-run@v1",
       "image": "ghcr.io/uniconhq/primitive-sandbox-run@sha256:2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a",
-      "entrypoint": ["/usr/local/bin/sandbox-run"],
       "limits": { "time_ms": 12000, "cpu_ms": 12000, "memory_mb": 384, "pids": 64, "output_mb": 64 },
       "batch": [
         {
@@ -55,7 +53,6 @@
       "id": "check",
       "primitive": "diff-check@v1",
       "image": "ghcr.io/uniconhq/primitive-diff-check@sha256:3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2b",
-      "entrypoint": ["/usr/local/bin/diff-check"],
       "limits": { "time_ms": 15000, "cpu_ms": 15000, "memory_mb": 128, "pids": 16, "output_mb": 8 },
       "test": "1",
       "inputs": {
@@ -67,7 +64,6 @@
       "id": "check",
       "primitive": "diff-check@v1",
       "image": "ghcr.io/uniconhq/primitive-diff-check@sha256:3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2b",
-      "entrypoint": ["/usr/local/bin/diff-check"],
       "limits": { "time_ms": 15000, "cpu_ms": 15000, "memory_mb": 128, "pids": 16, "output_mb": 8 },
       "test": "2",
       "inputs": {
@@ -79,7 +75,6 @@
       "id": "check",
       "primitive": "diff-check@v1",
       "image": "ghcr.io/uniconhq/primitive-diff-check@sha256:3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2b",
-      "entrypoint": ["/usr/local/bin/diff-check"],
       "limits": { "time_ms": 15000, "cpu_ms": 15000, "memory_mb": 128, "pids": 16, "output_mb": 8 },
       "test": "10",
       "inputs": {

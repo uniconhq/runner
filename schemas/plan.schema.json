@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://raw.githubusercontent.com/uniconhq/runner/main/schemas/plan.schema.json",
   "title": "Unicon grading plan",
-  "description": "What the compiler in the forge repo writes at every valid save of a task, as plans/<stage>.json in the task repo, in the commit its publication points at. Flat and fully resolved: every foreach is expanded over the task's actual tests, and folded into one batch step where the primitive takes a batch. Every step carries its primitive image by digest, its entrypoint and its limits; the plan names the harness image by digest; nothing is left to resolve at grade time, because the harness may not talk to the forge. The harness runs the steps in order, one sandboxed container each, and never reads workflow YAML or a primitive's declaration.",
+  "description": "What the compiler in the forge repo writes at every valid save of a task, as plans/<stage>.json in the task repo, in the commit its publication points at. Flat and fully resolved: every foreach is expanded over the task's actual tests, and folded into one batch step where the primitive takes a batch. Every step carries its primitive image by digest and its limits, and its container runs the image's own entrypoint; the plan names the harness image by digest; nothing is left to resolve at grade time, because the harness may not talk to the forge. The harness runs the steps in order, one sandboxed container each, and never reads workflow YAML or a primitive's declaration.",
   "type": "object",
   "required": ["schema_version", "harness_image", "stage", "tests", "steps", "verdict"],
   "additionalProperties": false,
@@ -10,7 +10,7 @@
     "schema_version": {
       "description": "The plan shape this file is written against. The harness refuses a version it does not speak, because a compiler that emits a shape the harness reads differently produces a wrong verdict rather than an error.",
       "type": "integer",
-      "const": 3
+      "const": 4
     },
     "harness_image": {
       "description": "The harness image this plan was compiled for, as a full reference by content digest and never by tag, so a task keeps grading on the image it was published with. The forge repo tells the CI to run exactly this image.",
@@ -100,7 +100,7 @@
     "step": {
       "description": "One container. Three shapes: runs once (inputs); one run for one test, an unfolded foreach (inputs and test, the pair of id and test unique in the plan); one container for many tests, a folded foreach (batch).",
       "type": "object",
-      "required": ["id", "primitive", "image", "entrypoint", "limits"],
+      "required": ["id", "primitive", "image", "limits"],
       "additionalProperties": false,
       "properties": {
         "id": {
@@ -115,12 +115,6 @@
         "image": {
           "description": "The primitive's image at that version, by digest, read from its declaration when the plan was compiled.",
           "$ref": "#/$defs/image"
-        },
-        "entrypoint": {
-          "description": "The program the container runs, as the declaration names it.",
-          "type": "array",
-          "minItems": 1,
-          "items": { "type": "string", "minLength": 1 }
         },
         "limits": {
           "description": "The container's limits, all five, so the socket filter can refuse a container that carries less. For a batch step time_ms and cpu_ms are already for the whole batch; the other three are per item.",

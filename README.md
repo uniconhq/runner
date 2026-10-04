@@ -83,8 +83,8 @@ never a grade.
   `time_ms` and `memory_kb` come from `verdict.tests` (0 when skipped), its
   metrics from the per-test references in `verdict.metrics`. The run's outcome
   is the first non-accepted test's in test order, or the run-once output named.
-  Metrics sum over tests. The summary is `verdict.summary` when it is text,
-  otherwise "7 of 10 tests accepted.".
+  Metrics sum over tests. The summary is `verdict.summary` when it is
+  non-empty text, otherwise "7 of 10 tests accepted.".
 - A reference from a run-once step to a per-test step without `test` is the
   list of that output over every test, in test order. A test the step did not
   reach has no value in it, except for `outcome`, which gives that test's own
@@ -126,6 +126,7 @@ Created through the filter from the step's image by digest, with:
 
 | Setting | Value |
 |---|---|
+| Program | the image's own entrypoint; the harness sets no command |
 | Network | `NetworkMode: none` |
 | Root filesystem | read-only |
 | Capabilities | all dropped |
@@ -270,21 +271,38 @@ The filter is not a sandbox: a step still runs on the machine's kernel.
 
 ## The clone image
 
-`woodpeckerci/plugin-git` 2.10.1 by digest plus one line of system git config,
+`woodpeckerci/plugin-git` 2.10.1 by digest plus two pieces of system git
+config, which together are all the platform needs from a checkout.
+
 `lfs.storage = /lfs-cache`. The CI's checkout steps mount a volume the machine
 keeps at `/lfs-cache`, one per org (the `forge` repo's CI answer names it,
 `unicon-lfs-<org>`), so a dataset is downloaded once per org and machine and
 no org's checkout is served an object another org's brought by naming its id;
-the checkout still copies it into the run's workspace. The image names no
-volume, and runs as root as plugin-git does, so a volume Docker makes on first
-use needs no preparing. The setting is in the image because a clone step
-given an `environment` block stops counting as a plugin and is no longer lent
-the credential it clones with. The image goes on the CI's trusted-clone list
-beside plugin-git.
+the checkout still copies it into the run's workspace.
+
+`core.attributesFile`, naming a file that says every path may be a large
+file. Every file a person uploads is an object in the forge's store and the
+commit holds a pointer to it, and git-lfs resolves a pointer at checkout only
+where an attributes file says that path is one. Without this the workspace
+gets the pointer's text where the file should be, the step still exits 0, and
+the grading fails as though the contestant had submitted that text. The rule
+cannot live in the repositories, because the forge's file API applies a
+repository's own attributes to everything written through it and would store
+a pointer committed under one as a second object. The pattern is every path
+rather than the places uploads land, so no convention has to be kept in step
+between this image and the platform; a file that is not a pointer passes
+through unchanged, with a line in the step's log saying it was not one, and
+git-lfs keeps a copy of it in the cache.
+
+The image names no volume, and runs as root as plugin-git does, so a volume
+Docker makes on first use needs no preparing. Both settings are in the image
+because a clone step given an `environment` block stops counting as a plugin
+and is no longer lent the credential it clones with. The image goes on the
+CI's trusted-clone list beside plugin-git.
 
 ## The contracts
 
-The five share one `schema_version`, 3, the one a runner release publishes them
+The five share one `schema_version`, 4, the one a runner release publishes them
 at. A release that changes the shape of any of them raises it, and the harness
 refuses a file written for another. `scripts/check_contract_files.py` fails CI
 when a file pins another version, when an example under `examples/` does not
@@ -294,7 +312,7 @@ validate, or when a schema field is one no example sets.
 save as `plans/<stage>.json` in the task repo; read by the harness only. Flat
 and fully resolved: `harness_image` by digest, `stage`, `tests` (the test ids
 in order), `steps`, and `verdict`. A step has `id`, `primitive`, `image` by
-digest, `entrypoint` and all five `limits`, and is one of three shapes: runs
+digest and all five `limits`, and is one of three shapes: runs
 once (`inputs`), runs for one test (`inputs` and `test`), or one container for
 many tests (`batch`, a list of `{test, inputs}`). An input value is
 `{"value": ...}`, `{"task": path or [paths]}`, `{"submission": id}` with an
@@ -306,8 +324,7 @@ that every test named is in `tests`, and that every reference points at a step
 that runs earlier.
 
 **`envelope.schema.json`.** Served by the `forge` repo at the run's envelope
-URL. `grading_id`, `submission`, `stage`, `attempt`, `task`, `publication`,
-`checkouts` (`/woodpecker/task`, `/woodpecker/submission`), `callback` (`url`
+URL. `grading_id`, `submission`, `stage`, `attempt`, `checkouts` (`/woodpecker/task`, `/woodpecker/submission`), `callback` (`url`
 and a one-run `token`), `log_put` (a presigned PUT into `unicon-results` at
 `logs/<grading id>/<attempt>.log`), `deadline`, and `limits.wall_seconds`, which
 is always present. The run's wall clock is the smaller of `wall_seconds` and
@@ -318,12 +335,10 @@ the time to the deadline less 30 seconds kept for reporting.
 (`accepted`, `partial`, `wrong_answer`, `time_limit`, `memory_limit`,
 `output_limit`, `runtime_error`, `compile_error`, `skipped`, `system_error`),
 `metrics` as named numbers, `tests` as one row per test with its own outcome,
-time, memory and metrics, `summary`, `resources`, `log` (the log's URL without
-its presigned query, or null), and the forge identity of the submission, task
-and publication, so a verdict can be matched back after a loss of the database.
-There is no separate score. `system_error` allows no rows and no metrics.
-The harness sends `resources.cpu_ms` and `peak_memory_kb` as null: the filter
-does not pass the stats call that would measure them.
+time, memory and metrics, `summary`, and `log` (the log's URL without its
+presigned query, or null). The callback URL and its token name the grading,
+so the verdict does not. There is no separate score. `system_error` allows no
+rows and no metrics.
 
 **`primitive.schema.json`.** How the harness and a primitive image talk, and
 the `primitive.yaml` declaration the forge compiler reads; a document is
@@ -331,31 +346,83 @@ exactly one of the three.
 
 | File | Shape |
 |---|---|
-| `inputs.json` | `{"schema_version": 3, "step": id, "inputs": {...}}`, or `"batch": [{"id": test, "inputs": {...}}]` |
-| `outputs.json` | `{"schema_version": 3, "outputs": {...}}`, or `"batch": [{"id": test, "outputs": {...}}]` one per item in the same order, or `{"schema_version": 3, "error": "one sentence"}` when the primitive could not work at all |
-| `primitive.yaml` | `name`, `version`, `image` by digest, `entrypoint`, `batch`, `limits` (all five), optional `limits_from` (`{input, scale, add}`, scale 1 and add 0 when left out), `inputs` and `outputs` as `{type, values, optional}` |
+| `inputs.json` | `{"schema_version": 4, "inputs": {...}}`, or `"batch": [{"id": test, "inputs": {...}}]` |
+| `outputs.json` | `{"schema_version": 4, "outputs": {...}}`, or `"batch": [{"id": test, "outputs": {...}}]` one per item in the same order, or `{"schema_version": 4, "error": "one sentence"}` when the primitive could not work at all |
+| `primitive.yaml` | `name`, `version`, `image` by digest, `batch`, `limits` (all five), optional `limits_from` (`{input, scale, add}`, scale 1 and add 0 when left out), `inputs` and `outputs` as `{type, values, optional}` |
 
 A value is text, a number, a boolean, a file `{"file": "in/..."}` or
 `{"file": "out/..."}`, a list of files, or a list of text, numbers or booleans
 (a per-test output over every test). Paths have no empty, `.` or `..` segment.
 Types are `file`, `file[]` (quote it in YAML flow style: `{type: "file[]"}`),
-`text`, `number`, `boolean`, `enum` with `values`, and `outcome`. A primitive
-repo validates its `primitive.yaml` against the release's schema with a
-placeholder digest filled in, since bootstrap writes the image.
+`text`, `number`, `boolean`, `enum` with `values`, and `outcome`. The
+container runs the image's own `ENTRYPOINT`, so a primitive's Dockerfile sets
+one in exec form and its declaration names no program. A primitive repo
+validates its `primitive.yaml` against the release's schema with a
+placeholder digest filled in, since bootstrap writes the image (below).
 
 **`submission.schema.json`.** `submission.json` at the root of a submission
-commit: `{"schema_version": 3, "inputs": {id: entry}}`, where an entry is
+commit: `{"schema_version": 4, "inputs": {id: entry}}`, where an entry is
 `{"files": ["files/<id>/<name>", ...], "language": ...}` for a `code`, `file` or
 `file[]` input, or `{"value": ...}` for `text`, `number` and `boolean`. A
 `{"submission": id}` plan value gives the one file of an input with one file,
 the list for more, or the value.
 
+## The primitives' workflows
+
+Every primitive repo, `primitive-<name>`, runs the same CI and the same
+release, and both live here as reusable workflows. A primitive's own
+`ci.yaml` and `release.yaml` only call them, at the runner release whose
+primitive contract the primitive is built against, and pass that same tag as
+`runner-ref`:
+
+```yaml
+jobs:
+  ci:
+    uses: uniconhq/runner/.github/workflows/primitive-ci.yaml@v0.4.0
+    with:
+      runner-ref: v0.4.0
+```
+
+A called workflow cannot tell which ref of its own repo it was called at, so
+`runner-ref` says it. Both workflows check the primitive out as `primitive/`
+and this repo at `runner-ref` as `runner/` beside it, so the primitive's tests
+read the contract at `../runner/schemas/primitive.schema.json`, the file that
+release publishes. Everything else is named after the calling repo: the image
+is `ghcr.io/uniconhq/primitive-<name>`.
+
+- `primitive-ci.yaml`, on a push to `main` and on a pull request: ruff, mypy,
+  `scripts/check_declaration.py` on the primitive's `primitive.yaml`, and
+  every primitive test except the image tests, in one job; in another, the
+  image is built and the image tests (`pytest -m image`) run against it.
+- `primitive-release.yaml`, on a tag push: the tag must be on `main`, equal
+  the version in `pyproject.toml`, and be a release of the version
+  `primitive.yaml` declares (`v1.2.3` of `v1`). It runs the same checks as
+  CI, builds the image once and runs the image tests on it, pushes exactly
+  that image as `ghcr.io/uniconhq/primitive-<name>:v1.2.3`, and makes a
+  GitHub release with `images.json`, naming the image by digest in the same
+  shape as this repo's, and `primitive.yaml`. The caller grants
+  `contents: write` and `packages: write`, and each job takes only its part.
+
+`compile-image: true` is for a primitive that runs what the compile
+primitive builds, sandbox-run: both workflows build `primitive-compile` from
+its `main` branch and hand it to the image tests as `COMPILE_IMAGE`.
+
+`scripts/check_declaration.py SCHEMA REPO` refuses an `image` line in the
+repo's `primitive.yaml`, fills in a placeholder digest and checks the result
+against the schema's declaration. Its tests are in
+`scripts/declaration_tests/`.
+
+A change to these workflows reaches a primitive when the primitive moves its
+two `uses:` lines and `runner-ref` to the release that carries it.
+
 ## Rules that are cheap now and expensive later
 
-**The harness runs on machines we do not own.** It never talks to the forge,
-and the only credential it ever holds is the callback token for its one run,
-which dies at the deadline. The token and the presigned queries never reach the
-run log or the CI log.
+**The harness runs on machines we do not own.** It never talks to Forgejo. It
+calls only the platform, at the envelope and callback routes the backend
+serves over the `forge` repo's package, and puts its log by the presigned URL;
+the only credential it ever holds is the callback token for its one run, which
+dies at the deadline. The token and the presigned queries never reach the run
+log or the CI log.
 
 **Every plan and envelope carries `schema_version`, and a mismatch is refused.**
 A compiler that emits a shape the harness reads differently produces a wrong
@@ -369,15 +436,19 @@ pins the other three the same way. The base images are pinned by digest too.
 
 ```
 harness/unicon_harness/          the harness
-harness/tests/                   its tests; primitives/ holds the fixture primitives
+harness/tests/                   its tests; primitives/ holds the fixture image, one
+                                 program that stands in for every primitive
 socket_filter/unicon_filter/     the socket filter
-socket_filter/filter_tests/      its tests, and the Docker lab both integration tests use
+socket_filter/filter_tests/      its tests, and the Docker lab the integration tests use
 images/<name>/Dockerfile         the four images
 images/clone_tests/              the clone image's Docker test and its small git-lfs server
 images/placeholder.py            what the worker image runs
 schemas/                         the five contract schemas, published on each release
 examples/                        valid documents for every schema, checked in CI
-scripts/                         the check that keeps the examples and schemas in step
+scripts/                         the check that keeps the examples and schemas in step,
+                                 and the declaration check every primitive runs
+scripts/declaration_tests/       the declaration check's tests
+.github/workflows/primitive-*    the CI and the release every primitive repo calls
 ```
 
 ## Running it locally
@@ -397,7 +468,7 @@ uv run python scripts/check_contract_files.py
 `uv run pytest` runs the unit tests; a few that need unix sockets run on Linux
 only. `uv run pytest -m docker` needs a Docker daemon (26 or later): it builds
 the images, starts a registry of its own on `127.0.0.1:5056` to give the
-fixture primitives a digest, and runs a whole grading through the harness and
+fixture image a digest, and runs a whole grading through the harness and
 the filter, the filter's escape checks, one run trying to reach another's steps,
 the reaper, the filter noticing its socket replaced, and three checkouts
 with the clone image against a small git-lfs server, the second of which,

@@ -119,17 +119,6 @@ def test_the_log_pointer_is_a_url_or_null(graded: dict[str, Any]) -> None:
     assert _refusals(graded | {"log": "not a url"}) != []
 
 
-def test_a_verdict_names_its_task_and_publication(graded: dict[str, Any]) -> None:
-    """Without them the submission's tag names nothing, and the file stops
-    being readable on its own after a loss of the database.
-    """
-    for field in ("task", "publication", "submission", "grading_id"):
-        without = dict(graded)
-        del without[field]
-        assert _refusals(without) != [], field
-    assert _refusals(graded | {"publication": {"tag": "v3", "commit": "a" * 40}}) != []
-
-
 def _row(test_id: str, outcome: str) -> dict[str, Any]:
     return {
         "id": test_id,

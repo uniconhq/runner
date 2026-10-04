@@ -110,7 +110,7 @@ def test_every_primitive_example_is_accepted() -> None:
 
 
 def test_a_primitive_that_writes_no_outputs_fails_the_check() -> None:
-    assert violation({"schema_version": 3}, "primitive", "outputs_file") is not None
+    assert violation({"schema_version": 4}, "primitive", "outputs_file") is not None
 
 
 @pytest.mark.parametrize(
@@ -118,17 +118,17 @@ def test_a_primitive_that_writes_no_outputs_fails_the_check() -> None:
     ["in/../../etc/passwd", "out/../../../host", "in//abs", "out/./x", "work/x", "out"],
 )
 def test_a_file_value_cannot_leave_its_directory(path: str) -> None:
-    outputs = {"schema_version": 3, "outputs": {"binary": {"file": path}}}
+    outputs = {"schema_version": 4, "outputs": {"binary": {"file": path}}}
     assert violation(outputs, "primitive", "outputs_file") is not None
 
 
 def test_outputs_carry_either_one_run_or_a_batch() -> None:
-    both = {"schema_version": 3, "outputs": {}, "batch": []}
+    both = {"schema_version": 4, "outputs": {}, "batch": []}
     assert violation(both, "primitive", "outputs_file") is not None
 
 
 def test_a_list_value_is_all_files_or_all_plain_values() -> None:
-    mixed = {"schema_version": 3, "outputs": {"x": [{"file": "out/a"}, "b"]}}
+    mixed = {"schema_version": 4, "outputs": {"x": [{"file": "out/a"}, "b"]}}
     assert violation(mixed, "primitive", "outputs_file") is not None
 
 
@@ -160,7 +160,6 @@ def test_the_contract_example_compile_declaration_is_accepted(tmp_path: Path) ->
         "name: unicon/compile\n"
         "version: v1\n"
         f"image: ghcr.io/uniconhq/primitive-compile@sha256:{'0' * 64}\n"
-        "entrypoint: [/usr/local/bin/compile]\n"
         "batch: false\n"
         "limits: {time_ms: 60000, cpu_ms: 60000, memory_mb: 1024, pids: 128, "
         "output_mb: 64}\n"
@@ -182,7 +181,6 @@ def test_sandbox_runs_own_declaration_is_accepted() -> None:
         "name: unicon/sandbox-run\n"
         "version: v1\n"
         f"image: ghcr.io/uniconhq/primitive-sandbox-run@sha256:{'0' * 64}\n"
-        "entrypoint: [/usr/local/bin/sandbox-run]\n"
         "batch: true\n"
         "limits: {time_ms: 5000, cpu_ms: 5000, memory_mb: 256, pids: 128, "
         "output_mb: 64}\n"
@@ -220,5 +218,5 @@ def test_the_example_submission_is_accepted() -> None:
     ],
 )
 def test_a_submission_entry_is_files_or_a_value(entry: dict[str, Any]) -> None:
-    document = {"schema_version": 3, "inputs": {"submission": entry}}
+    document = {"schema_version": 4, "inputs": {"submission": entry}}
     assert violation(document, "submission") is not None

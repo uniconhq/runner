@@ -1,5 +1,5 @@
 {
-  "schema_version": 3,
+  "schema_version": 4,
   "outputs": {
     "binary": { "file": "out/binary" },
     "compile_log": "main.py: compiled",

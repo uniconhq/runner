@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://raw.githubusercontent.com/uniconhq/runner/main/schemas/primitive.schema.json",
   "title": "Unicon primitive contract",
-  "description": "How the harness and a primitive image talk, and how a primitive declares itself. The harness starts one sandboxed container from the step's image and mounts one directory at /work, read-write, the container's only writable place besides a small tmpfs at /tmp: inputs.json and the input files under in/ go in, and outputs.json and the output files under out/ come back when the container exits. A primitive reads the paths inputs.json names and assumes nothing else; it never sees the forge, the plan or the network. The same file describes primitive.yaml, the declaration the forge compiler reads: a document is exactly one of inputs.json, outputs.json or a declaration.",
+  "description": "How the harness and a primitive image talk, and how a primitive declares itself. The harness starts one sandboxed container from the step's image, which runs the image's own entrypoint, and mounts one directory at /work, read-write, the container's only writable place besides a small tmpfs at /tmp: inputs.json and the input files under in/ go in, and outputs.json and the output files under out/ come back when the container exits. A primitive reads the paths inputs.json names and assumes nothing else; it never sees the forge, the plan or the network. The same file describes primitive.yaml, the declaration the forge compiler reads: a document is exactly one of inputs.json, outputs.json or a declaration.",
   "oneOf": [
     { "$ref": "#/$defs/inputs_file" },
     { "$ref": "#/$defs/outputs_file" },
@@ -12,18 +12,13 @@
     "inputs_file": {
       "description": "inputs.json, written by the harness before the container starts. inputs for a step that runs once or for one test; batch for a primitive that takes many tests in one run.",
       "type": "object",
-      "required": ["schema_version", "step"],
+      "required": ["schema_version"],
       "additionalProperties": false,
       "properties": {
         "schema_version": {
           "description": "The contract version this file is written against. A primitive refuses a version it does not speak.",
           "type": "integer",
-          "const": 3
-        },
-        "step": {
-          "description": "The id of the plan step this container runs, for the primitive's own log.",
-          "type": "string",
-          "pattern": "^[a-z0-9][a-z0-9_-]*$"
+          "const": 4
         },
         "inputs": {
           "description": "One entry per input the primitive declares, keyed by the input name.",
@@ -61,7 +56,7 @@
         "schema_version": {
           "description": "The contract version this file is written against, the same number as in inputs.json.",
           "type": "integer",
-          "const": 3
+          "const": 4
         },
         "outputs": {
           "description": "One entry per output the primitive declares, keyed by the output name. A file output names a path under out/. An optional output may be left out.",
@@ -95,7 +90,7 @@
     "declaration": {
       "description": "primitive.yaml, what the forge compiler reads for one version of a primitive. In the primitive's own GitHub repo the file has no image line; bootstrap writes the image by digest from the release manifest into the version it creates at the forge, so a repo's CI validates its file with a placeholder digest filled in.",
       "type": "object",
-      "required": ["name", "version", "image", "entrypoint", "batch", "limits", "inputs", "outputs"],
+      "required": ["name", "version", "image", "batch", "limits", "inputs", "outputs"],
       "additionalProperties": false,
       "properties": {
         "name": {
@@ -112,12 +107,6 @@
           "description": "The image this version runs from, by digest.",
           "type": "string",
           "pattern": "^[a-z0-9][a-z0-9._-]*(:[0-9]{1,5})?(/[a-z0-9][a-z0-9._-]*)+@sha256:[0-9a-f]{64}$"
-        },
-        "entrypoint": {
-          "description": "The program the container runs.",
-          "type": "array",
-          "minItems": 1,
-          "items": { "type": "string", "minLength": 1 }
         },
         "batch": {
           "description": "true when the primitive takes many tests in one run, so the compiler folds a foreach over it into one step.",

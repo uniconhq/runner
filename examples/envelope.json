@@ -1,5 +1,5 @@
 {
-  "schema_version": 3,
+  "schema_version": 4,
   "grading_id": "0199a2c1-6b7e-7c3a-9f10-5d2e4b8a6c31",
   "submission": {
     "org": "acme",
@@ -9,14 +9,6 @@
   },
   "stage": "default",
   "attempt": 1,
-  "task": {
-    "org": "acme",
-    "repo": "spring.sum.task"
-  },
-  "publication": {
-    "tag": "published/3",
-    "commit": "9c3d2e1f0a9b8c7d6e5f4a3b2c1d0e9f8a7b6c5d"
-  },
   "checkouts": {
     "task": "/woodpecker/task",
     "submission": "/woodpecker/submission"

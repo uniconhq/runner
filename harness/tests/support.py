@@ -49,7 +49,7 @@ def example(name: str) -> dict[str, Any]:
 
 @dataclass
 class Does:
-    """What a fake container does instead of running its entrypoint: `hangs` never
+    """What a fake container does instead of running the fixture: `hangs` never
     exits until killed, `out_of_memory` is Docker's flag afterwards.
     """
 
@@ -73,8 +73,8 @@ class FakeContainer:
 
 class FakeDocker:
     """The seven calls, over a real directory standing in for the run's volume.
-    A container "runs" at start: the fixture primitive named by the last word of
-    its entrypoint is called on its working directory.
+    A container "runs" at start: the fixture is called on its working
+    directory, and tells from the inputs which primitive it stands in for.
     """
 
     def __init__(self, volume_root: Path, volume: str = VOLUME) -> None:
@@ -151,8 +151,7 @@ class FakeDocker:
         if container.does.hangs:
             return
         if container.does.runs_fixture:
-            kind = container.body["Entrypoint"][-1]
-            fixture.main(kind, container.work)
+            fixture.main(container.work)
         container.exit_code = container.does.exit_code
 
     def wait(self, container_id: str, timeout: float) -> int | None:
@@ -202,7 +201,6 @@ def classic_plan(
         "id": "compile",
         "primitive": "compile@v1",
         "image": image or COMPILE,
-        "entrypoint": ["python", "/opt/fixture.py", "compile"],
         "limits": limits(),
         "inputs": {
             "source": {"submission": "submission"},
@@ -213,7 +211,6 @@ def classic_plan(
         "id": "run",
         "primitive": "sandbox-run@v1",
         "image": image or RUN,
-        "entrypoint": ["python", "/opt/fixture.py", "run"],
         "limits": limits(time_ms=30_000, memory_mb=run_memory_mb),
         "batch": [
             {
@@ -232,7 +229,6 @@ def classic_plan(
         "id": "check",
         "primitive": "diff-check@v1",
         "image": image or CHECK,
-        "entrypoint": ["python", "/opt/fixture.py", "check"],
         "limits": limits(),
     }
 
@@ -250,7 +246,7 @@ def classic_plan(
     else:
         checks = [check_base | {"test": t, "inputs": check_inputs(t)} for t in tests]
     return {
-        "schema_version": 3,
+        "schema_version": 4,
         "harness_image": HARNESS,
         "stage": "default",
         "tests": tests,
@@ -295,7 +291,7 @@ class Checkouts:
         files.mkdir(parents=True, exist_ok=True)
         (files / "main.py").write_text(source, encoding="utf-8")
         document = {
-            "schema_version": 3,
+            "schema_version": 4,
             "inputs": {
                 "submission": {
                     "files": ["files/submission/main.py"],

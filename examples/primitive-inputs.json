@@ -1,6 +1,5 @@
 {
-  "schema_version": 3,
-  "step": "score",
+  "schema_version": 4,
   "inputs": {
     "source": { "file": "in/1/main.py" },
     "headers": [{ "file": "in/2/util.h" }, { "file": "in/3/io.h" }],

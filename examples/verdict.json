@@ -1,22 +1,5 @@
 {
-  "schema_version": 3,
-  "grading_id": "0199a2c1-6b7e-7c3a-9f10-5d2e4b8a6c31",
-  "submission": {
-    "org": "acme",
-    "repo": "spring.sum.alice.sub",
-    "tag": "submission/3",
-    "commit": "6f1b0d0c4d2a9e8f7b6a5c4d3e2f1a0b9c8d7e6f"
-  },
-  "stage": "default",
-  "attempt": 1,
-  "task": {
-    "org": "acme",
-    "repo": "spring.sum.task"
-  },
-  "publication": {
-    "tag": "published/3",
-    "commit": "9c3d2e1f0a9b8c7d6e5f4a3b2c1d0e9f8a7b6c5d"
-  },
+  "schema_version": 4,
   "outcome": "wrong_answer",
   "metrics": {
     "points": 2
@@ -46,12 +29,5 @@
     }
   ],
   "summary": "main.py: compiled",
-  "resources": {
-    "wall_ms": 13400,
-    "cpu_ms": null,
-    "peak_memory_kb": 41200
-  },
-  "log": "http://proxy/unicon-results/logs/0199a2c1-6b7e-7c3a-9f10-5d2e4b8a6c31/1.log",
-  "started_at": "2026-09-17T09:02:11Z",
-  "finished_at": "2026-09-17T09:02:24Z"
+  "log": "http://proxy/unicon-results/logs/0199a2c1-6b7e-7c3a-9f10-5d2e4b8a6c31/1.log"
 }
