@@ -145,6 +145,23 @@ Created through the filter from the step's image by digest, with:
 The harness removes every container it created in a `finally`, and the filter
 removes any it misses.
 
+The escape fixtures keep this set honest (`harness/tests/test_escape.py`,
+`harness/tests/escape/escape.c`). One C program, built by the compile
+primitive, tries every way out: memory, processes, threads, CPU, sleeping,
+output and disk; the network, the cloud metadata address and name lookup;
+writing outside its directory and reading other tests' files, the task's
+answers and the sockets; `ptrace`, `mount`, `unshare`, `bpf`, `keyctl`,
+loading a module and `setuid(0)`; its own capabilities, NoNewPrivs, seccomp
+mode and uid; and any secret in reach. It runs in containers made from
+exactly the body above, against the released primitives by digest: through
+sandbox-run, where every attack is refused; as the container's own process,
+where everything is refused but the step's own `/work`; and with each of
+the ten protections taken away in turn, each of which lets a named attack
+through. A field added to the body fails a test until it is either given a
+removal and an attack that shows it gone or said not to be a protection.
+CI runs them in a job of their own, and sandbox-run's CI runs them against
+the image it just built (`SANDBOX_RUN_IMAGE`, `COMPILE_IMAGE`).
+
 ### The host-path trap
 
 The daemon resolves a mount's source on the machine, not inside the harness, so
@@ -434,6 +451,8 @@ is `ghcr.io/uniconhq/primitive-<name>`.
   `scripts/check_declaration.py` on the primitive's `primitive.yaml`, and
   every primitive test except the image tests, in one job; in another, the
   image is built and the image tests (`pytest -m image`) run against it.
+  For `primitive-sandbox-run`, that job also runs this repo's escape
+  fixtures against the image it built.
 - `primitive-release.yaml`, on a tag push: the tag must be on `main`, equal
   the version in `pyproject.toml`, and be a release of the version
   `primitive.yaml` declares (`v1.2.3` of `v1`). It runs the same checks as
@@ -477,7 +496,8 @@ pins the other three the same way. The base images are pinned by digest too.
 ```
 harness/unicon_harness/          the harness
 harness/tests/                   its tests; primitives/ holds the fixture image, one
-                                 program that stands in for every primitive
+                                 program that stands in for every primitive, and
+                                 escape/ the escape fixtures' C program
 socket_filter/unicon_filter/     the socket filter
 socket_filter/filter_tests/      its tests, and the Docker lab the integration tests use
 images/<name>/Dockerfile         the four images
@@ -515,7 +535,12 @@ with the clone image against a small git-lfs server, the second of which,
 sharing the first's cache, must download nothing, and the third, with a cache
 of its own, must download the file again. Everything it makes is named `unicon-lab-*` and removed at the
 end, except the registry container, `unicon-lab-registry`, which later runs
-reuse.
+reuse. It also runs the escape fixtures, which pull the released compile
+and sandbox-run images and talk to the daemon's own unix socket
+(`DOCKER_HOST` when it names one, else `/var/run/docker.sock`), so they
+skip on a machine whose daemon is reached another way; on their own,
+`uv run pytest -m docker harness/tests/test_escape.py`. With `DOCKER_HOST`
+naming rootless Docker's socket the whole set runs against that daemon.
 
 CI runs those commands, checks that the Dockerfiles on the python base share
 one digest, builds the four images, and starts each once: the harness and the
