@@ -253,13 +253,36 @@ label.
 | `UNICON_FILTER_MAX_STEPS` | 4 | Step containers one grading may have on the machine at once |
 | `UNICON_FILTER_MAX_CONNECTIONS` | 32 | Connections one calling container may hold at once |
 
-The image runs as uid 10002, which no harness (10001) or step runs as, and
-its `/run/unicon` belongs to that uid, so a new volume mounted there does
-too. Start it with the daemon's socket and its group (`group_add`), a volume
-for `/run/unicon` that uid 10002 can write, and `pid: host`, and give every
-harness that volume read-only (`unicon-filter:/run/unicon:ro`): the harness
-starts as root, and with the directory writable it could remove the socket
-and bind its own in its place. The filter checks that the file at its
+The image runs as uid 10002, which no harness (10001) or step runs as. Start
+it the same way on rootless Docker and on root Docker with `userns-remap`:
+
+- `--userns host` (compose `userns_mode: host`), outside any remap of user
+  ids. A daemon that remaps refuses the machine's pid namespace to a
+  container that has not opted out ("cannot share the host PID namespace
+  when user namespaces are enabled"); on a daemon that does not remap it
+  changes nothing. The filter is the platform's own code, so running it
+  outside the remap gives up nothing the remap protects.
+- `--pid host`.
+- The daemon's socket at `/var/run/docker.sock` (rootless Docker's is
+  `$XDG_RUNTIME_DIR/docker.sock`) and the group that owns it (`--group-add`,
+  compose `group_add`), as a container outside the remap sees it.
+- A directory on the machine at `/run/unicon`, not a Docker volume, owned by
+  uid 10002 and mode 0755, such as `/run/unicon-filter`. A daemon that
+  remaps keeps its volumes under `/var/lib/docker/<uid>.<gid>/`, mode 0710,
+  which uid 10002 outside the remap cannot enter. Make the directory with a
+  container on the same daemon, `docker run --rm --userns host -v
+  /run/unicon-filter:/d busybox chown 10002:10002 /d`: the daemon creates a
+  missing bind source itself, where it sees paths (rootless Docker has a
+  `/run` of its own), and the chown is in its uid mapping (under rootless
+  Docker uid 10002 is one of the user's sub-uids on the machine). `/run` is
+  emptied when the machine starts, so this runs before every start of the
+  filter.
+
+Give every harness that directory read-only
+(`/run/unicon-filter:/run/unicon:ro`): the harness starts as root, and with
+the directory writable it could remove the socket and bind its own in its
+place. Under a remap a harness sees the socket as belonging to `nobody` and
+cannot write the directory at all. The filter checks that the file at its
 socket's path is still the socket it bound, and when it is not it exits 3
 with `unicon-socket-filter: socket_replaced: ...` on stderr, so the machine
 restarts it and notices. It exits 2 with one line on stderr,

@@ -182,11 +182,15 @@ def replace_socket() -> None:
 def checks() -> None:
     status, body = call("GET", "/version")
     expect("A0 ping and version", status, 200, body)
+    # The filter's uid as this container sees it: 10002, or under
+    # userns-remap the overflow uid, since the filter runs outside the remap
+    # and its uid is not mapped into this container's.
     held = Path(SOCKET).stat()
+    owner = int(os.environ["SOCKET_OWNER"])
     report(
         "S the socket belongs to the filter's uid, not the harness's",
-        held.st_uid == 10002,
-        {"uid": held.st_uid, "mode": oct(held.st_mode & 0o777)},
+        held.st_uid == owner and held.st_uid != os.getuid(),
+        {"uid": held.st_uid, "expected": owner, "mode": oct(held.st_mode & 0o777)},
     )
     try:
         Path(SOCKET).unlink()
@@ -268,11 +272,11 @@ def checks() -> None:
             ),
         ),
         (
-            "C4 mount the filter's own volume",
+            "C4 mount the filter's socket directory",
             add_mount(
                 {
-                    "Type": "volume",
-                    "Source": os.environ["FILTER_VOLUME"],
+                    "Type": "bind",
+                    "Source": os.environ["FILTER_DIRECTORY"],
                     "Target": "/p",
                 }
             ),

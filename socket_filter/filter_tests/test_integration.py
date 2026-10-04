@@ -15,7 +15,16 @@ from typing import Any
 
 import pytest
 
-from filter_tests.lab import PYTHON, Lab, docker, docker_ready, fixture_image, lab
+from filter_tests.lab import (
+    FILTER_UID,
+    PYTHON,
+    Lab,
+    docker,
+    docker_ready,
+    fixture_image,
+    lab,
+    remapped,
+)
 
 pytestmark = [
     pytest.mark.docker,
@@ -34,15 +43,19 @@ def _standin(
     *args: str,
     detach: bool = False,
     writable_socket: bool = False,
+    outside_remap: bool = False,
     **env: str,
 ) -> str:
-    """A stand-in harness, with the filter's socket volume mounted read-only as
-    the CI mounts it, or writable to show what the read-only mount prevents.
+    """A stand-in harness, with the filter's socket directory mounted read-only
+    as the CI mounts it, or writable to show what the read-only mount
+    prevents. `outside_remap` runs it as the filter runs, outside any
+    user-namespace remap.
     """
     code = made.volume(f"code-{what}", {"standin.py": STANDIN})
     variables = [f"--env={k}={v}" for k, v in env.items()]
     return made.run(
         what,
+        *(["--userns", "host"] if outside_remap else []),
         "-v",
         f"{workspace}:/woodpecker",
         "-v",
@@ -87,7 +100,8 @@ def test_the_prototype_checks_through_a_real_daemon() -> None:
             "checks",
             FOREIGN=foreign_id,
             OTHER_WORKSPACE=other,
-            FILTER_VOLUME=sockets,
+            FILTER_DIRECTORY=sockets,
+            SOCKET_OWNER=_filter_uid_in_a_container(),
         )
         results = _results(standin)
         filter_log = docker("logs", front)
@@ -195,7 +209,10 @@ def test_the_reaper_removes_a_step_whose_harness_is_gone() -> None:
 def test_the_filter_exits_when_its_socket_is_replaced() -> None:
     """A harness that could write the socket's directory, which the read-only
     mount keeps it from, replaces the socket with its own; the filter notices
-    within its check interval and exits 3, for the machine to restart it.
+    within its check interval and exits 3, for the machine to restart it. The
+    harness here runs outside any user-namespace remap: a remapped one could
+    not write the filter's directory even mounted writable, and would leave
+    nothing for the filter to notice.
     """
     with lab() as made:
         front, sockets = made.filter(
@@ -210,12 +227,23 @@ def test_the_filter_exits_when_its_socket_is_replaced() -> None:
             "replace",
             detach=True,
             writable_socket=True,
+            outside_remap=True,
         )
         code = made.wait(front, 60)
         filter_log = docker("logs", front)
 
     assert code == 3, filter_log
     assert "is not the one the filter bound" in filter_log
+
+
+def _filter_uid_in_a_container() -> str:
+    """The owner a harness sees on the filter's socket: the filter's uid, or
+    under userns-remap the kernel's overflow uid, because the filter runs
+    outside the remap and its uid is not mapped into the harness's.
+    """
+    if not remapped():
+        return FILTER_UID
+    return docker("run", "--rm", PYTHON, "cat", "/proc/sys/kernel/overflowuid").strip()
 
 
 def _held(container: str) -> str:
