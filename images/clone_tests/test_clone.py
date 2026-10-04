@@ -3,8 +3,14 @@ repo whose big file is in git-lfs is checked out with the file's real bytes,
 the object lands in the /lfs-cache volume, a second checkout into another
 workspace with the same cache downloads nothing, and a checkout with another
 cache volume, one Docker makes on first use as the CI's answer names one per
-org, is served nothing from the first and downloads the file itself. Run with
-`pytest -m docker`.
+org, is served nothing from the first and downloads the file itself.
+
+Then the case the platform's own repositories are: one that says nothing
+about its files, whose commit holds a pointer anyway. git-lfs resolves a
+pointer only where an attributes file says that path is a large file, so
+without the one in this image a checkout leaves the pointer's text where the
+file should be and the grading of it fails as though that text had been
+submitted. Run with `pytest -m docker`.
 """
 
 from __future__ import annotations
@@ -136,7 +142,12 @@ def test_big_files_are_checked_out_and_downloaded_once_per_machine() -> None:
         elsewhere = _shell([f"{third}:/w"], "sha256sum /w/task/data.bin")
 
     assert checked_out.split()[0] == expected
-    assert cached.strip().endswith(f"/{expected}")
+    # The big file is in the cache. So are copies of the repository's own
+    # small files: the image reads every path as a large file, so git-lfs
+    # keeps what it cleans, and a few hundred bytes each in a store that
+    # exists for gigabytes is the price of no path convention being able
+    # to break a checkout silently (`findings/upload-door-test.md` 7).
+    assert f"/{expected}" in cached
     assert after_first == [expected]
     assert again.split()[0] == expected
     assert after_second == [expected], "the second checkout downloaded again"
@@ -149,3 +160,77 @@ def test_the_clone_image_runs_as_root() -> None:
     one the checkout can write to, whatever the CI's answer names it.
     """
     assert _shell([], "id -u").strip() == "0"
+
+
+MAKE_REPO_WITHOUT_ATTRIBUTES = """
+set -e
+export GIT_CONFIG_NOSYSTEM=1
+git config --global user.email lab@example.invalid
+git config --global user.name lab
+git config --global init.defaultBranch main
+mkdir -p /tmp/w /src/lfs && cd /tmp/w
+git init -q
+printf '[lfs]\\n\\turl = http://lfs:8080/\\n' > .lfsconfig
+head -c 200000 /dev/urandom > /tmp/real.bin
+sha256sum /tmp/real.bin | cut -d' ' -f1 > /src/data.sha
+OID=$(cut -d' ' -f1 /src/data.sha)
+SIZE=$(wc -c < /tmp/real.bin | tr -d ' ')
+mkdir -p /src/lfs
+cp /tmp/real.bin /src/lfs/$OID
+{
+  echo 'version https://git-lfs.github.com/spec/v1'
+  echo "oid sha256:$OID"
+  echo "size $SIZE"
+} > data.bin
+printf 'an ordinary file\\n' > notes.txt
+git add .lfsconfig data.bin notes.txt
+git commit -qm first
+git init -q --bare /src/repo.git
+git tag -a published/1 -m one
+git push -q --no-verify file:///src/repo.git main published/1
+git rev-parse HEAD > /src/head
+"""
+"""A repository the platform writes: the commit holds the pointer's own three
+lines and the repository carries no `.gitattributes`, because the forge's
+file API would wrap a pointer written under one into a second object."""
+
+
+def test_a_pointer_resolves_although_the_repository_says_nothing_about_it() -> None:
+    # The platform's repositories carry no attributes of their own, so the
+    # image has to be what tells git-lfs that a pointer is one. Without this
+    # the workspace gets the pointer's text where the file should be and the
+    # grading fails as though that text had been submitted.
+    with lab() as made:
+        source = made.volume("source")
+        _shell([f"{source}:/src"], MAKE_REPO_WITHOUT_ATTRIBUTES)
+        code = made.volume("lfs-code", {"lfs_server.py": SERVER})
+        network = made.network("net")
+        made.run(
+            "lfs",
+            "--network",
+            network,
+            "--network-alias",
+            "lfs",
+            "-v",
+            f"{source}:/src:ro",
+            "-v",
+            f"{code}:/code:ro",
+            PYTHON,
+            "python",
+            "/code/lfs_server.py",
+            "8080",
+            "/src/lfs",
+            "http://lfs:8080",
+        )
+        cache = made.volume("lfs-cache")
+        expected = _shell([f"{source}:/src"], "cat /src/data.sha").strip()
+
+        workspace = _clone(made, "only", network, source, cache)
+
+        checked_out = _shell([f"{workspace}:/w"], "sha256sum /w/task/data.bin")
+        ordinary = _shell([f"{workspace}:/w"], "cat /w/task/notes.txt")
+
+    assert checked_out.split()[0] == expected
+    # A file that is not a pointer passes through the filter as it was
+    # committed, which is what everything the platform writes as content is.
+    assert ordinary.strip() == "an ordinary file"
