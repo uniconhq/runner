@@ -530,12 +530,14 @@ only. `uv run pytest -m docker` needs a Docker daemon (26 or later): it builds
 the images, starts a registry of its own on `127.0.0.1:5056` to give the
 fixture image a digest, and runs a whole grading through the harness and
 the filter, the filter's escape checks, one run trying to reach another's steps,
-the reaper, the filter noticing its socket replaced, and three checkouts
-with the clone image against a small git-lfs server, the second of which,
-sharing the first's cache, must download nothing, and the third, with a cache
-of its own, must download the file again. Everything it makes is named `unicon-lab-*` and removed at the
-end, except the registry container, `unicon-lab-registry`, which later runs
-reuse. It also runs the escape fixtures, which pull the released compile
+the reaper, the filter noticing its socket replaced, and checkouts with the
+clone image against a small git-lfs server: a second checkout sharing the
+first's cache must download nothing, one with a cache of its own must
+download the file again, and four started together on an empty cache must
+download it once between them. Everything it makes is named `unicon-lab-*`
+and removed at the end (the filter's socket directories are under
+`/run/unicon-lab` on the daemon's machine), except the registry container,
+`unicon-lab-registry`, which later runs reuse. It also runs the escape fixtures, which pull the released compile
 and sandbox-run images and talk to the daemon's own unix socket
 (`DOCKER_HOST` when it names one, else `/var/run/docker.sock`), so they
 skip on a machine whose daemon is reached another way; on their own,
