@@ -12,6 +12,8 @@ from tests.support import Platform
 from unicon_harness import contracts
 from unicon_harness import main as entrypoint
 from unicon_harness.main import (
+    ENVELOPE_PAUSE_SECONDS,
+    ENVELOPE_TRIES,
     ENVELOPE_URL_VARIABLE,
     EXIT_CANNOT_START,
     EXIT_NOT_DELIVERED,
@@ -60,6 +62,23 @@ def test_an_unreachable_url_is_refused(
 
     assert main() == EXIT_CANNOT_START
     assert "envelope_unreachable" in capsys.readouterr().err
+
+
+def test_a_closed_grading_is_asked_again_a_few_times_before_giving_up(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    platform: Platform,
+) -> None:
+    pauses: list[float] = []
+    monkeypatch.setattr(entrypoint, "_pause", pauses.append)
+    platform.serve(b"closed", status=410)
+    _set_environment(
+        monkeypatch, platform.envelope_url, "0199a2c1-6b7e-7c3a-9f10-5d2e4b8a6c31"
+    )
+
+    assert main() == EXIT_CANNOT_START
+    assert "envelope_unreachable" in capsys.readouterr().err
+    assert pauses == [ENVELOPE_PAUSE_SECONDS] * (ENVELOPE_TRIES - 1)
 
 
 def test_a_server_error_is_refused_without_the_key_in_the_log(

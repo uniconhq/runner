@@ -25,7 +25,6 @@ import time
 import traceback
 import uuid
 from collections.abc import Callable
-from datetime import UTC, datetime
 from pathlib import Path
 from types import FrameType
 from typing import Any
@@ -49,6 +48,12 @@ ENVELOPE_URL_VARIABLE = "UNICON_ENVELOPE_URL"
 GRADING_ID_VARIABLE = "UNICON_GRADING_ID"
 
 FETCH_IO_TIMEOUT_SECONDS = 30.0
+# The platform records a run as started only after the CI has accepted it, and
+# a fast machine can ask for the envelope in between, which the platform
+# answers 410 until the record lands, a moment later. So a 410 is asked again
+# a few times before the harness gives up; any other refusal is final at once.
+ENVELOPE_TRIES = 5
+ENVELOPE_PAUSE_SECONDS = 3.0
 REPORT_MARGIN_SECONDS = 30.0
 """Kept back from the deadline for putting the log and posting the verdict."""
 
@@ -144,7 +149,6 @@ def grade_and_report(
     """Everything after the envelope is accepted: started, the grading, the log
     and the final callback.
     """
-    started_at = datetime.now(UTC)
     began = time.monotonic()
     log.tell(
         f"Grading {envelope['submission']['tag']}, stage {envelope['stage']}, "
@@ -163,9 +167,7 @@ def grade_and_report(
         log.event(f"the forge refused the run with {refused.status}; it will not grade")
         return EXIT_NOT_DELIVERED
 
-    verdict = _grade(
-        envelope, log, reporter, docker_factory, mountinfo, began, budget, started_at
-    )
+    verdict = _grade(envelope, log, reporter, docker_factory, mountinfo, began, budget)
     verdict["log"] = reporter.log_url()
     found = verdicts.check(verdict)
     if found is not None:
@@ -173,9 +175,7 @@ def grade_and_report(
             f"the verdict the harness built does not match verdict.schema.json {found}"
         )
         log.event(f"system error: {message}")
-        verdict = verdicts.system_error(
-            envelope, message, started_at, datetime.now(UTC), _elapsed_ms(began)
-        )
+        verdict = verdicts.system_error(message)
         verdict["log"] = reporter.log_url()
     _tell_verdict(log, verdict)
     if not reporter.put_log(log.to_bytes()):
@@ -196,7 +196,6 @@ def _grade(
     mountinfo: Callable[[], str],
     began: float,
     budget: float,
-    started_at: datetime,
 ) -> dict[str, Any]:
     sandbox: Sandbox | None = None
     docker: Docker | None = None
@@ -229,25 +228,15 @@ def _grade(
             reporter.progress,
         )
         grading = grader.run()
-        verdict = verdicts.graded(
-            plan, grading, envelope, started_at, datetime.now(UTC), _elapsed_ms(began)
-        )
+        verdict = verdicts.graded(plan, grading)
         log.event(f"graded: {verdict['outcome']}")
         return verdict
     except GradingError as fault:
         log.event(f"system error: {fault.message}")
-        return verdicts.system_error(
-            envelope, fault.message, started_at, datetime.now(UTC), _elapsed_ms(began)
-        )
+        return verdicts.system_error(fault.message)
     except Exception as exc:
         log.block("the harness failed", traceback.format_exc())
-        return verdicts.system_error(
-            envelope,
-            f"the harness failed: {type(exc).__name__}: {exc}",
-            started_at,
-            datetime.now(UTC),
-            _elapsed_ms(began),
-        )
+        return verdicts.system_error(f"the harness failed: {type(exc).__name__}: {exc}")
     finally:
         if sandbox is not None:
             sandbox.clean_up()
@@ -269,22 +258,26 @@ def _tell_verdict(log: RunLog, verdict: dict[str, Any]) -> None:
     log.tell_block("Summary", verdict["summary"])
 
 
-def _elapsed_ms(began: float) -> int:
-    return round((time.monotonic() - began) * 1000)
-
-
 def _terminate(signum: int, frame: FrameType | None) -> None:
     raise Terminated
 
 
 def _fetch(url: str, client: httpx.Client | None) -> bytes:
     timeout = httpx.Timeout(FETCH_IO_TIMEOUT_SECONDS)
-    if client is None:
-        response = httpx.get(url, timeout=timeout, follow_redirects=True)
-    else:
-        response = client.get(url, timeout=timeout, follow_redirects=True)
+    for tried in range(1, ENVELOPE_TRIES + 1):
+        if client is None:
+            response = httpx.get(url, timeout=timeout, follow_redirects=True)
+        else:
+            response = client.get(url, timeout=timeout, follow_redirects=True)
+        if response.status_code != 410 or tried == ENVELOPE_TRIES:
+            break
+        _pause(ENVELOPE_PAUSE_SECONDS)
     response.raise_for_status()
     return response.content
+
+
+def _pause(seconds: float) -> None:
+    time.sleep(seconds)
 
 
 def _same_grading(from_environment: str, from_envelope: str) -> bool:

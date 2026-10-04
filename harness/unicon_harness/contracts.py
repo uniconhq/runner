@@ -11,7 +11,7 @@ from typing import Any
 
 from jsonschema import Draft202012Validator, FormatChecker
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 MESSAGE_LIMIT = 300
 

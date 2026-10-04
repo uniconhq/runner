@@ -10,8 +10,9 @@ that there was one.
 
 Everything else is for staff and goes only to stdout, which is the CI's own
 job log: the envelope's identity, the workspace volume, each step's image,
-container exits, what each step printed (cut to a few kilobytes), callback
-trouble and the harness's own faults. Every contestant line goes there too, so
+container exits, what each step printed (cut to its first and last 8K
+characters when longer than 16K), callback trouble and the harness's own
+faults. Every contestant line goes there too, so
 the CI log reads as the whole story.
 
 Neither log ever carries the callback token or a presigned query.

@@ -2,25 +2,9 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://raw.githubusercontent.com/uniconhq/runner/main/schemas/verdict.schema.json",
   "title": "Unicon grading verdict",
-  "description": "What the harness posts back through the callback at the end of a run. The forge repo checks it against this schema and keeps it on the gradings row; nothing else stores it. One shape for every task: an outcome from a fixed list, metrics as named numbers, one row per test with its own outcome, time, memory and metrics, a summary for the contestant, resource usage and the log pointer. There is no separate score. Whatever number a task is ranked on is a metric the leaderboard names, so a scorer that emits points and one that emits accuracy are the same shape. The verdict repeats the forge identity of both the submission and the task so it can be matched back after a loss of the Unicon database.",
+  "description": "What the harness posts back through the callback at the end of a run. The forge repo checks it against this schema and keeps it on the gradings row; nothing else stores it. The callback it is posted to, and that callback's token, say which grading it is for. One shape for every task: an outcome from a fixed list, metrics as named numbers, one row per test with its own outcome, time, memory and metrics, a summary for the contestant and the log pointer. There is no separate score. Whatever number a task is ranked on is a metric the leaderboard names, so a scorer that emits points and one that emits accuracy are the same shape.",
   "type": "object",
-  "required": [
-    "schema_version",
-    "grading_id",
-    "submission",
-    "stage",
-    "attempt",
-    "task",
-    "publication",
-    "outcome",
-    "metrics",
-    "tests",
-    "summary",
-    "resources",
-    "log",
-    "started_at",
-    "finished_at"
-  ],
+  "required": ["schema_version", "outcome", "metrics", "tests", "summary", "log"],
   "additionalProperties": false,
   "if": {
     "properties": { "outcome": { "const": "system_error" } },
@@ -38,26 +22,8 @@
     "schema_version": {
       "description": "The verdict shape this file is written against.",
       "type": "integer",
-      "const": 3
+      "const": 4
     },
-    "grading_id": {
-      "description": "The gradings row this verdict belongs to, copied from the envelope.",
-      "type": "string",
-      "format": "uuid"
-    },
-    "submission": { "$ref": "#/$defs/submission" },
-    "stage": {
-      "description": "Grading stage, copied from the envelope.",
-      "type": "string",
-      "minLength": 1
-    },
-    "attempt": {
-      "description": "Attempt number, copied from the envelope.",
-      "type": "integer",
-      "minimum": 1
-    },
-    "task": { "$ref": "#/$defs/task" },
-    "publication": { "$ref": "#/$defs/publication" },
     "outcome": {
       "description": "The result of the whole run, from the fixed list every task shares. accepted: every test passed. partial: some did, and the metrics say how much. wrong_answer, time_limit, memory_limit, output_limit, runtime_error: the first failing kind, decided by the workflow's own rule. compile_error: the submission did not build, which is a normal result. system_error: the harness could not grade at all, and staff should look; never a grade.",
       "$ref": "#/$defs/outcome"
@@ -75,43 +41,10 @@
       "description": "A few lines for the contestant, as the task's visibility rules allow them to be shown. For a system error, what went wrong, for staff.",
       "type": "string"
     },
-    "resources": {
-      "description": "What the whole run used, over every step.",
-      "type": "object",
-      "required": ["wall_ms", "cpu_ms", "peak_memory_kb"],
-      "additionalProperties": false,
-      "properties": {
-        "wall_ms": {
-          "description": "Wall clock from accepting the envelope to finishing the last step.",
-          "type": "integer",
-          "minimum": 0
-        },
-        "cpu_ms": {
-          "description": "CPU time over every step container, or null when the machine could not measure it.",
-          "type": ["integer", "null"],
-          "minimum": 0
-        },
-        "peak_memory_kb": {
-          "description": "The largest peak memory any one step container reached, or null when not measured.",
-          "type": ["integer", "null"],
-          "minimum": 0
-        }
-      }
-    },
     "log": {
       "description": "Where the run log went: the object URL the log was written to, without the presigned query, so the forge repo can find it in unicon-results. Null when the log could not be written.",
       "type": ["string", "null"],
       "format": "uri"
-    },
-    "started_at": {
-      "description": "When the harness accepted the envelope.",
-      "type": "string",
-      "format": "date-time"
-    },
-    "finished_at": {
-      "description": "When the harness finished the last step.",
-      "type": "string",
-      "format": "date-time"
     }
   },
   "$defs": {
@@ -167,74 +100,6 @@
         "message": {
           "description": "The checker's note, shown next to the row when the stage allows it.",
           "type": "string"
-        }
-      }
-    },
-    "submission": {
-      "description": "The forge identity of what was graded, copied from the envelope.",
-      "type": "object",
-      "required": ["org", "repo", "tag", "commit"],
-      "additionalProperties": false,
-      "properties": {
-        "org": {
-          "description": "The org that owns the submission repo.",
-          "type": "string",
-          "minLength": 1,
-          "pattern": "^[a-z0-9][a-z0-9_-]*$"
-        },
-        "repo": {
-          "description": "The contestant's submission repo for one task, <contest>.<task>.<owner>.sub.",
-          "type": "string",
-          "minLength": 1,
-          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
-        },
-        "tag": {
-          "description": "The protected tag that is the submission, submission/<n>.",
-          "type": "string",
-          "pattern": "^submission/[0-9]+$"
-        },
-        "commit": {
-          "description": "Full commit sha the tag points at.",
-          "type": "string",
-          "pattern": "^[0-9a-f]{40}$"
-        }
-      }
-    },
-    "task": {
-      "description": "The forge identity of the task this verdict was graded against, copied from the envelope. Without it the publication below names nothing.",
-      "type": "object",
-      "required": ["org", "repo"],
-      "additionalProperties": false,
-      "properties": {
-        "org": {
-          "description": "The org that owns the task, the same org the submission is in.",
-          "type": "string",
-          "minLength": 1,
-          "pattern": "^[a-z0-9][a-z0-9_-]*$"
-        },
-        "repo": {
-          "description": "The task repo, <contest>.<task>.task.",
-          "type": "string",
-          "minLength": 1,
-          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
-        }
-      }
-    },
-    "publication": {
-      "description": "Which publication produced this verdict, copied from the envelope. Two verdicts on the same submission under different publications were graded against different tests.",
-      "type": "object",
-      "required": ["tag", "commit"],
-      "additionalProperties": false,
-      "properties": {
-        "tag": {
-          "description": "The protected tag on the task repo, published/<n>.",
-          "type": "string",
-          "pattern": "^published/[0-9]+$"
-        },
-        "commit": {
-          "description": "Full commit sha the tag pointed at.",
-          "type": "string",
-          "pattern": "^[0-9a-f]{40}$"
         }
       }
     }

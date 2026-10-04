@@ -10,8 +10,6 @@
     "submission",
     "stage",
     "attempt",
-    "task",
-    "publication",
     "checkouts",
     "callback",
     "log_put",
@@ -23,7 +21,7 @@
     "schema_version": {
       "description": "The envelope shape this file is written against. The harness refuses a version it does not speak instead of guessing at the fields.",
       "type": "integer",
-      "const": 3
+      "const": 4
     },
     "grading_id": {
       "description": "The gradings row this run belongs to. Also passed to the image as UNICON_GRADING_ID; the harness refuses an envelope whose id disagrees with its environment.",
@@ -41,8 +39,6 @@
       "type": "integer",
       "minimum": 1
     },
-    "task": { "$ref": "#/$defs/task" },
-    "publication": { "$ref": "#/$defs/publication" },
     "checkouts": {
       "description": "Where the CI put the two checkouts, as absolute paths inside the harness container: /woodpecker/task and /woodpecker/submission, the paths the forge repo's CI answer clones into. The publication checkout holds the task files, the tests and the plan at the publication's commit, with its large files pulled; the submission checkout holds submission.json and the contestant's files at the submission's commit.",
       "type": "object",
@@ -104,46 +100,8 @@
     }
   },
   "$defs": {
-    "task": {
-      "description": "The forge identity of the task being graded against. The harness copies it into the verdict, which is why the envelope carries it rather than leaving the harness to work it out from a path.",
-      "type": "object",
-      "required": ["org", "repo"],
-      "additionalProperties": false,
-      "properties": {
-        "org": {
-          "description": "The org that owns the task, the same org the submission is in.",
-          "type": "string",
-          "minLength": 1,
-          "pattern": "^[a-z0-9][a-z0-9_-]*$"
-        },
-        "repo": {
-          "description": "The task repo, <contest>.<task>.task, the one carrying task.yaml, the tests and the plans.",
-          "type": "string",
-          "minLength": 1,
-          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
-        }
-      }
-    },
-    "publication": {
-      "description": "Which publication of the task this run grades against: the protected tag and the commit it pointed at when the run was dispatched. The commit is what was checked out.",
-      "type": "object",
-      "required": ["tag", "commit"],
-      "additionalProperties": false,
-      "properties": {
-        "tag": {
-          "description": "The protected tag on the task repo, published/<n>.",
-          "type": "string",
-          "pattern": "^published/[0-9]+$"
-        },
-        "commit": {
-          "description": "Full commit sha the tag pointed at. Forgejo repos are SHA-1 today, so 40 hex characters.",
-          "type": "string",
-          "pattern": "^[0-9a-f]{40}$"
-        }
-      }
-    },
     "submission": {
-      "description": "The forge identity of what is being graded. The forge survives a loss of the Unicon database, so this identity is what lets a verdict be matched back to a submission without a rejudge.",
+      "description": "The forge identity of what is being graded, which the run log and the CI's log name.",
       "type": "object",
       "required": ["org", "repo", "tag", "commit"],
       "additionalProperties": false,
