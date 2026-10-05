@@ -361,7 +361,9 @@ def _have(image: str) -> None:
     an empty line even for an image it does not have, so its output is read
     stripped.
     """
-    if not docker("image", "inspect", "--format", "{{.Id}}", image, check=False).strip():
+    if not docker(
+        "image", "inspect", "--format", "{{.Id}}", image, check=False
+    ).strip():
         docker("pull", "-q", image)
 
 
