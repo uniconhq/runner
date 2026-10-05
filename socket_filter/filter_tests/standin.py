@@ -127,6 +127,8 @@ def sandbox(command: list[str], time_ms: int = 60000) -> dict[str, Any]:
         },
         "HostConfig": {
             "NetworkMode": "none",
+            "Init": False,
+            "IpcMode": "none",
             "ReadonlyRootfs": True,
             "CapDrop": ["ALL"],
             "SecurityOpt": ["no-new-privileges", "seccomp=builtin"],
