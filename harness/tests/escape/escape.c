@@ -170,6 +170,7 @@ int main(void) {
         try_write("write-etc", "/etc/passwd");
         try_write("write-usr", "/usr/bin/escape-test");
         try_write("write-var-tmp", "/var/tmp/escape-test");  // world-writable in the image
+        try_write("write-dev-shm", "/dev/shm/escape-test");  // the daemon's default ipc mounts it
         {   // one file past the output limit, in the first writable place
             signal(SIGXFSZ, SIG_IGN);
             static char b[1 << 20]; memset(b, 'b', sizeof b);
