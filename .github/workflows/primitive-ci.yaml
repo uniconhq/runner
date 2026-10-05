@@ -114,3 +114,14 @@ jobs:
         env:
           PRIMITIVE_IMAGE: ${{ env.NAME }}:ci
           COMPILE_IMAGE: ${{ inputs.compile-image && 'primitive-compile:ci' || '' }}
+      # sandbox-run is what holds a contestant's program, so a change to it
+      # runs the runner's escape fixtures against the image just built, with
+      # the compile primitive from its main branch building the fixture.
+      - if: github.event.repository.name == 'primitive-sandbox-run'
+        working-directory: runner
+        run: |
+          uv sync --locked
+          uv run pytest -m docker harness/tests/test_escape.py
+        env:
+          SANDBOX_RUN_IMAGE: ${{ env.NAME }}:ci
+          COMPILE_IMAGE: ${{ inputs.compile-image && 'primitive-compile:ci' || '' }}

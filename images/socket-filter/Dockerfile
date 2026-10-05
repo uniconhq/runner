@@ -5,15 +5,18 @@
 #
 # Run it with the daemon's socket mounted at /var/run/docker.sock and the
 # socket's group added (or as root), its own socket's directory at
-# /run/unicon, UNICON_FILTER_IMAGES set, and `pid: host`: the filter tells one
-# grading run from another by the process that connects, which it can only see
-# in the machine's pid namespace.
+# /run/unicon, UNICON_FILTER_IMAGES set, `pid: host` and `userns_mode: host`.
+# The filter tells one grading run from another by the process that connects,
+# which it can only see in the machine's pid namespace, and a daemon with
+# userns-remap lets a container into that namespace only outside the remap.
 #
-# It runs as uid 10002, which no harness (10001) or step runs as, and
-# /run/unicon belongs to it, so a new volume mounted there does too. The
-# socket is mode 0666, so the harness can connect; the harness mounts the
-# directory read-only, so it cannot put a socket of its own in the filter's
-# place, and the filter exits 3 should the socket ever be replaced.
+# It runs as uid 10002, which no harness (10001) or step runs as. The socket's
+# directory is a directory on the machine owned by that uid, not a volume: a
+# daemon with userns-remap keeps volumes where a uid outside the remap cannot
+# reach. The socket is mode 0666, so the harness can connect; the harness
+# mounts the directory read-only, so it cannot put a socket of its own in the
+# filter's place, and the filter exits 3 should the socket ever be replaced.
+# The README's socket filter section has the whole of how to start it.
 
 # python:3.14-slim, pulled 2026-09-13. The same digest is in the harness and
 # worker Dockerfiles; change all three together.
