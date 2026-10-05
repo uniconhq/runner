@@ -43,14 +43,14 @@ from unicon_harness.workspace import STEP_UID, Workspace
 
 COMPILE_IMAGE = os.environ.get("COMPILE_IMAGE") or (
     "ghcr.io/uniconhq/primitive-compile@sha256:"
-    "943b37fb4f17187ab2e13fecafc682f61b4461fcf73a4954f9069c8c6d1b73e1"
+    "f66e9ae767e19e95ed5fa2c60386cf1444b0a62ea3f66a73f9b94d1d8f26e0de"
 )
-"""primitive-compile v1.1.0."""
+"""primitive-compile v1.1.1."""
 SANDBOX_RUN_IMAGE = os.environ.get("SANDBOX_RUN_IMAGE") or (
     "ghcr.io/uniconhq/primitive-sandbox-run@sha256:"
-    "757eee935e2d722775eab54226fb5758ee349271024cc566e5ad4ca889b8de4b"
+    "79c92d294e9b81764dd3b566ac3f2c6d6ee20dd483538503bf55eeaf552b5224"
 )
-"""primitive-sandbox-run v1.1.0."""
+"""primitive-sandbox-run v1.2.0."""
 
 SOURCE = (Path(__file__).parent / "escape" / "escape.c").read_text(encoding="utf-8")
 MOUNT = Path("/w")
