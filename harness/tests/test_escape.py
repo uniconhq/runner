@@ -48,9 +48,9 @@ COMPILE_IMAGE = os.environ.get("COMPILE_IMAGE") or (
 """primitive-compile v1.1.1."""
 SANDBOX_RUN_IMAGE = os.environ.get("SANDBOX_RUN_IMAGE") or (
     "ghcr.io/uniconhq/primitive-sandbox-run@sha256:"
-    "79c92d294e9b81764dd3b566ac3f2c6d6ee20dd483538503bf55eeaf552b5224"
+    "bd4f45b3dc02647b6cf1168fb5e4dc14877be48983ff73b4daf864a3cffe0943"
 )
-"""primitive-sandbox-run v1.2.0."""
+"""primitive-sandbox-run v1.3.0."""
 
 SOURCE = (Path(__file__).parent / "escape" / "escape.c").read_text(encoding="utf-8")
 MOUNT = Path("/w")
