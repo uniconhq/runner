@@ -357,7 +357,11 @@ class Fixtures:
 
 
 def _have(image: str) -> None:
-    if not docker("image", "inspect", "--format", "{{.Id}}", image, check=False):
+    """Pull the image unless the daemon has it. `docker image inspect` prints
+    an empty line even for an image it does not have, so its output is read
+    stripped.
+    """
+    if not docker("image", "inspect", "--format", "{{.Id}}", image, check=False).strip():
         docker("pull", "-q", image)
 
 
