@@ -74,6 +74,12 @@ def create_body(
         "NetworkDisabled": True,
         "HostConfig": {
             "NetworkMode": "none",
+            # The step's own program is the container's first process, which
+            # the program it runs cannot signal, whatever the daemon's
+            # default init; and no /dev/shm, so /work and /tmp are the only
+            # places a step writes.
+            "Init": False,
+            "IpcMode": "none",
             "ReadonlyRootfs": True,
             "CapDrop": ["ALL"],
             "SecurityOpt": list(SECURITY_OPTIONS),

@@ -18,6 +18,11 @@
 # lock is flock(2), so a checkout that is killed lets go of it with its last
 # process, and the next one in line downloads whatever is still missing.
 #
+# A checkout waits at most WAIT_SECONDS for the lock, then downloads without
+# it, saying so: a download that hangs on a slow forge must not hold every
+# other checkout of the commit until each step times out. Waiting is a loop
+# of tries, since busybox's flock has no timeout of its own.
+#
 # The lock files stay in the cache, one empty file per commit ever checked
 # out, because removing a lock file another checkout may hold open would let
 # two checkouts hold "the" lock at once. Every other command, and a fetch
@@ -25,6 +30,7 @@
 
 set -e
 real=/usr/libexec/unicon/git-lfs
+WAIT_SECONDS=600
 
 if [ "${1-}" != fetch ]; then
     exec "$real" "$@"
@@ -39,6 +45,14 @@ mkdir -p "$store/fetch-locks"
 exec 9>"$store/fetch-locks/$commit"
 if ! flock -n 9; then
     echo "unicon-clone: waiting for another checkout's download of $commit" >&2
-    flock 9
+    waited=0
+    until flock -n 9; do
+        if [ "$waited" -ge "$WAIT_SECONDS" ]; then
+            echo "unicon-clone: still waiting after ${WAIT_SECONDS}s; downloading without the lock" >&2
+            break
+        fi
+        sleep 1
+        waited=$((waited + 1))
+    done
 fi
 exec "$real" "$@"
