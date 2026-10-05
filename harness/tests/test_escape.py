@@ -136,6 +136,11 @@ def without_read_only(body: dict[str, Any]) -> None:
     del body["HostConfig"]["ReadonlyRootfs"]
 
 
+def without_ipc_none(body: dict[str, Any]) -> None:
+    """The daemon's default ipc mode, which mounts a writable /dev/shm."""
+    del body["HostConfig"]["IpcMode"]
+
+
 def without_cap_drop(body: dict[str, Any]) -> None:
     del body["HostConfig"]["CapDrop"]
 
@@ -177,6 +182,7 @@ def without_ulimit(name: str) -> Callable[[dict[str, Any]], None]:
 REMOVALS: dict[str, tuple[Callable[[dict[str, Any]], None], str, str]] = {
     "network none": (without_network, "network", "network-interfaces"),
     "read-only root": (without_read_only, "files", "write-var-tmp"),
+    "ipc none": (without_ipc_none, "files", "write-dev-shm"),
     "cap-drop ALL": (without_cap_drop, "kernel", "capability-bounding-set"),
     "no-new-privileges": (without_no_new_privileges, "kernel", "no-new-privileges"),
     "seccomp=builtin": (without_seccomp, "kernel", "keyctl"),
@@ -199,6 +205,8 @@ COVERED = {
     "Labels",
     "NetworkDisabled",
     "HostConfig.NetworkMode",
+    "HostConfig.Init",
+    "HostConfig.IpcMode",
     "HostConfig.ReadonlyRootfs",
     "HostConfig.CapDrop",
     "HostConfig.SecurityOpt",
@@ -213,7 +221,8 @@ COVERED = {
 """Every field of the harness's create body this file has accounted for:
 those REMOVALS takes away, and the rest, which are not protections an attack
 can show missing (the image, labels, working directory, environment, the
-CPU share, the mounts and the log's size)."""
+CPU share, the mounts and the log's size, and `Init: false`, which only
+differs from leaving it out on a daemon configured to add an init)."""
 
 
 class Fixtures:

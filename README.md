@@ -128,6 +128,8 @@ Created through the filter from the step's image by digest, with:
 |---|---|
 | Program | the image's own entrypoint; the harness sets no command |
 | Network | `NetworkMode: none` |
+| First process | `Init: false`, so the step's own program is the container's first process whatever the daemon's default |
+| Shared memory | `IpcMode: none`: no `/dev/shm`, so `/work` and `/tmp` are the only places a step writes |
 | Root filesystem | read-only |
 | Capabilities | all dropped |
 | Security options | `no-new-privileges` and `seccomp=builtin`, named explicitly because a daemon's default can be unconfined |
@@ -156,7 +158,7 @@ mode and uid; and any secret in reach. It runs in containers made from
 exactly the body above, against the released primitives by digest: through
 sandbox-run, where every attack is refused; as the container's own process,
 where everything is refused but the step's own `/work`; and with each of
-the ten protections taken away in turn, each of which lets a named attack
+the eleven protections taken away in turn, each of which lets a named attack
 through. A field added to the body fails a test until it is either given a
 removal and an attack that shows it gone or said not to be a protection.
 CI runs them in a job of their own, and sandbox-run's CI runs them against
