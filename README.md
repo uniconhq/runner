@@ -145,6 +145,23 @@ Created through the filter from the step's image by digest, with:
 The harness removes every container it created in a `finally`, and the filter
 removes any it misses.
 
+The escape fixtures keep this set honest (`harness/tests/test_escape.py`,
+`harness/tests/escape/escape.c`). One C program, built by the compile
+primitive, tries every way out: memory, processes, threads, CPU, sleeping,
+output and disk; the network, the cloud metadata address and name lookup;
+writing outside its directory and reading other tests' files, the task's
+answers and the sockets; `ptrace`, `mount`, `unshare`, `bpf`, `keyctl`,
+loading a module and `setuid(0)`; its own capabilities, NoNewPrivs, seccomp
+mode and uid; and any secret in reach. It runs in containers made from
+exactly the body above, against the released primitives by digest: through
+sandbox-run, where every attack is refused; as the container's own process,
+where everything is refused but the step's own `/work`; and with each of
+the ten protections taken away in turn, each of which lets a named attack
+through. A field added to the body fails a test until it is either given a
+removal and an attack that shows it gone or said not to be a protection.
+CI runs them in a job of their own, and sandbox-run's CI runs them against
+the image it just built (`SANDBOX_RUN_IMAGE`, `COMPILE_IMAGE`).
+
 ### The host-path trap
 
 The daemon resolves a mount's source on the machine, not inside the harness, so
@@ -253,13 +270,36 @@ label.
 | `UNICON_FILTER_MAX_STEPS` | 4 | Step containers one grading may have on the machine at once |
 | `UNICON_FILTER_MAX_CONNECTIONS` | 32 | Connections one calling container may hold at once |
 
-The image runs as uid 10002, which no harness (10001) or step runs as, and
-its `/run/unicon` belongs to that uid, so a new volume mounted there does
-too. Start it with the daemon's socket and its group (`group_add`), a volume
-for `/run/unicon` that uid 10002 can write, and `pid: host`, and give every
-harness that volume read-only (`unicon-filter:/run/unicon:ro`): the harness
-starts as root, and with the directory writable it could remove the socket
-and bind its own in its place. The filter checks that the file at its
+The image runs as uid 10002, which no harness (10001) or step runs as. Start
+it the same way on rootless Docker and on root Docker with `userns-remap`:
+
+- `--userns host` (compose `userns_mode: host`), outside any remap of user
+  ids. A daemon that remaps refuses the machine's pid namespace to a
+  container that has not opted out ("cannot share the host PID namespace
+  when user namespaces are enabled"); on a daemon that does not remap it
+  changes nothing. The filter is the platform's own code, so running it
+  outside the remap gives up nothing the remap protects.
+- `--pid host`.
+- The daemon's socket at `/var/run/docker.sock` (rootless Docker's is
+  `$XDG_RUNTIME_DIR/docker.sock`) and the group that owns it (`--group-add`,
+  compose `group_add`), as a container outside the remap sees it.
+- A directory on the machine at `/run/unicon`, not a Docker volume, owned by
+  uid 10002 and mode 0755, such as `/run/unicon-filter`. A daemon that
+  remaps keeps its volumes under `/var/lib/docker/<uid>.<gid>/`, mode 0710,
+  which uid 10002 outside the remap cannot enter. Make the directory with a
+  container on the same daemon, `docker run --rm --userns host -v
+  /run/unicon-filter:/d busybox chown 10002:10002 /d`: the daemon creates a
+  missing bind source itself, where it sees paths (rootless Docker has a
+  `/run` of its own), and the chown is in its uid mapping (under rootless
+  Docker uid 10002 is one of the user's sub-uids on the machine). `/run` is
+  emptied when the machine starts, so this runs before every start of the
+  filter.
+
+Give every harness that directory read-only
+(`/run/unicon-filter:/run/unicon:ro`): the harness starts as root, and with
+the directory writable it could remove the socket and bind its own in its
+place. Under a remap a harness sees the socket as belonging to `nobody` and
+cannot write the directory at all. The filter checks that the file at its
 socket's path is still the socket it bound, and when it is not it exits 3
 with `unicon-socket-filter: socket_replaced: ...` on stderr, so the machine
 restarts it and notices. It exits 2 with one line on stderr,
@@ -272,7 +312,8 @@ The filter is not a sandbox: a step still runs on the machine's kernel.
 ## The clone image
 
 `woodpeckerci/plugin-git` 2.10.1 by digest plus two pieces of system git
-config, which together are all the platform needs from a checkout.
+config and a lock around the download, which together are all the platform
+needs from a checkout.
 
 `lfs.storage = /lfs-cache`. The CI's checkout steps mount a volume the machine
 keeps at `/lfs-cache`, one per org (the `forge` repo's CI answer names it,
@@ -293,6 +334,22 @@ rather than the places uploads land, so no convention has to be kept in step
 between this image and the platform; a file that is not a pointer passes
 through unchanged, with a line in the step's log saying it was not one, and
 git-lfs keeps a copy of it in the cache.
+
+A lock around `git lfs fetch`. The plugin checks a commit out with its
+pointers, then downloads the missing objects into the cache with `git lfs
+fetch` and copies them into the workspace with `git lfs checkout`. git-lfs
+does not make one process wait for another's download, so gradings that
+started together on a cache without the dataset each downloaded it (eight at
+once made eight downloads, experiment D2 of 2026-10-04). `git-lfs` in the
+image is a script in front of the real one that takes an `flock` on
+`/lfs-cache/fetch-locks/<commit>` for the length of the fetch: the first
+checkout of a commit downloads, the others wait and then find every object
+there, and all of them copy out side by side. The key is the commit because
+a commit names every pointer in it, so two checkouts of one commit want
+exactly the same objects; a lock per object would need the list of objects
+before the fetch and one lock for each, and every uploaded file is an
+object. A checkout that dies lets go of the lock with its last process. The
+lock files, one empty file per commit, stay in the cache.
 
 The image names no volume, and runs as root as plugin-git does, so a volume
 Docker makes on first use needs no preparing. Both settings are in the image
@@ -394,6 +451,8 @@ is `ghcr.io/uniconhq/primitive-<name>`.
   `scripts/check_declaration.py` on the primitive's `primitive.yaml`, and
   every primitive test except the image tests, in one job; in another, the
   image is built and the image tests (`pytest -m image`) run against it.
+  For `primitive-sandbox-run`, that job also runs this repo's escape
+  fixtures against the image it built.
 - `primitive-release.yaml`, on a tag push: the tag must be on `main`, equal
   the version in `pyproject.toml`, and be a release of the version
   `primitive.yaml` declares (`v1.2.3` of `v1`). It runs the same checks as
@@ -437,7 +496,8 @@ pins the other three the same way. The base images are pinned by digest too.
 ```
 harness/unicon_harness/          the harness
 harness/tests/                   its tests; primitives/ holds the fixture image, one
-                                 program that stands in for every primitive
+                                 program that stands in for every primitive, and
+                                 escape/ the escape fixtures' C program
 socket_filter/unicon_filter/     the socket filter
 socket_filter/filter_tests/      its tests, and the Docker lab the integration tests use
 images/<name>/Dockerfile         the four images
@@ -470,12 +530,19 @@ only. `uv run pytest -m docker` needs a Docker daemon (26 or later): it builds
 the images, starts a registry of its own on `127.0.0.1:5056` to give the
 fixture image a digest, and runs a whole grading through the harness and
 the filter, the filter's escape checks, one run trying to reach another's steps,
-the reaper, the filter noticing its socket replaced, and three checkouts
-with the clone image against a small git-lfs server, the second of which,
-sharing the first's cache, must download nothing, and the third, with a cache
-of its own, must download the file again. Everything it makes is named `unicon-lab-*` and removed at the
-end, except the registry container, `unicon-lab-registry`, which later runs
-reuse.
+the reaper, the filter noticing its socket replaced, and checkouts with the
+clone image against a small git-lfs server: a second checkout sharing the
+first's cache must download nothing, one with a cache of its own must
+download the file again, and four started together on an empty cache must
+download it once between them. Everything it makes is named `unicon-lab-*`
+and removed at the end (the filter's socket directories are under
+`/run/unicon-lab` on the daemon's machine), except the registry container,
+`unicon-lab-registry`, which later runs reuse. It also runs the escape fixtures, which pull the released compile
+and sandbox-run images and talk to the daemon's own unix socket
+(`DOCKER_HOST` when it names one, else `/var/run/docker.sock`), so they
+skip on a machine whose daemon is reached another way; on their own,
+`uv run pytest -m docker harness/tests/test_escape.py`. With `DOCKER_HOST`
+naming rootless Docker's socket the whole set runs against that daemon.
 
 CI runs those commands, checks that the Dockerfiles on the python base share
 one digest, builds the four images, and starts each once: the harness and the

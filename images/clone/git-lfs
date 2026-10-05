@@ -1,0 +1,44 @@
+#!/bin/sh
+# The clone image's git-lfs: the real one, moved to /usr/libexec/unicon, with
+# one thing added. `git lfs fetch`, the command in which the clone plugin
+# downloads a checkout's big files into the cache, first takes a lock in the
+# cache named after the commit being checked out, and holds it until the fetch
+# ends. A second checkout of the same commit on the same cache waits for the
+# first one's download and then finds every object already there, so gradings
+# that start together download a dataset once rather than once each
+# (measured 2026-10-04, experiment D2: eight at once on a cold cache made
+# eight downloads). git-lfs itself does not make one process wait for
+# another's download of the same object.
+#
+# Only the download is under the lock: the plugin's `git lfs checkout`, which
+# copies the files out of the cache into the workspace, runs unlocked, so the
+# waiting checkouts copy side by side once the download is done. A commit
+# names its tree and so every pointer in it, which is why the commit alone is
+# the key: two checkouts of one commit want exactly the same objects. The
+# lock is flock(2), so a checkout that is killed lets go of it with its last
+# process, and the next one in line downloads whatever is still missing.
+#
+# The lock files stay in the cache, one empty file per commit ever checked
+# out, because removing a lock file another checkout may hold open would let
+# two checkouts hold "the" lock at once. Every other command, and a fetch
+# outside a repository or with no lfs.storage set, goes straight through.
+
+set -e
+real=/usr/libexec/unicon/git-lfs
+
+if [ "${1-}" != fetch ]; then
+    exec "$real" "$@"
+fi
+store="$(git config --get lfs.storage || true)"
+commit="$(git rev-parse --verify --quiet 'HEAD^{commit}' || true)"
+if [ -z "$store" ] || [ -z "$commit" ]; then
+    exec "$real" "$@"
+fi
+
+mkdir -p "$store/fetch-locks"
+exec 9>"$store/fetch-locks/$commit"
+if ! flock -n 9; then
+    echo "unicon-clone: waiting for another checkout's download of $commit" >&2
+    flock 9
+fi
+exec "$real" "$@"
