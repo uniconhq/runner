@@ -16,6 +16,8 @@ submitted. Run with `pytest -m docker`.
 from __future__ import annotations
 
 import json
+import subprocess
+import time
 from pathlib import Path
 
 import pytest
@@ -63,9 +65,21 @@ def _clone(made: Lab, what: str, network: str, source: str, cache: str) -> str:
     """Check the task out into a fresh workspace volume with the clone image,
     the way the forge's CI answer sets its clone step. Returns the volume.
     """
-    workspace = made.volume(what)
     head = _shell([f"{source}:/src"], "cat /src/head").strip()
-    made.run(
+    name, workspace = _start_clone(made, what, network, source, cache, head)
+    code = made.wait(name)
+    assert code == 0, _log(name)
+    return workspace
+
+
+def _start_clone(
+    made: Lab, what: str, network: str, source: str, cache: str, head: str
+) -> tuple[str, str]:
+    """Start a checkout of commit `head` and leave it running. Returns the
+    container and its workspace volume.
+    """
+    workspace = made.volume(what)
+    name = made.run(
         what,
         "--network",
         network,
@@ -87,9 +101,48 @@ def _clone(made: Lab, what: str, network: str, source: str, cache: str) -> str:
         "PLUGIN_LFS=true",
         image("clone"),
     )
-    code = made.wait(made.name(what))
-    assert code == 0, docker("logs", made.name(what), check=False)
-    return workspace
+    return name, workspace
+
+
+def _server(made: Lab, network: str, source: str, hold_seconds: float = 0) -> str:
+    """The stand-in git-lfs server, reachable as http://lfs:8080 on `network`,
+    serving the objects MAKE_REPO left in the source volume. Returns once it
+    is listening: a checkout that asked any sooner would be refused.
+    """
+    code = made.volume("lfs-code", {"lfs_server.py": SERVER})
+    server = made.run(
+        "lfs",
+        "--network",
+        network,
+        "--network-alias",
+        "lfs",
+        "-v",
+        f"{source}:/src:ro",
+        "-v",
+        f"{code}:/code:ro",
+        PYTHON,
+        "python",
+        "/code/lfs_server.py",
+        "8080",
+        "/src/lfs",
+        "http://lfs:8080",
+        str(hold_seconds),
+    )
+    for _ in range(100):
+        if '{"listening"' in docker("logs", server, check=False):
+            return server
+        time.sleep(0.1)
+    raise AssertionError(f"the git-lfs server did not start: {_log(server)}")
+
+
+def _log(container: str) -> str:
+    """Everything a container printed, both streams: the clone plugin and git
+    write their progress to standard error.
+    """
+    printed = subprocess.run(
+        ["docker", "logs", container], capture_output=True, text=True, check=False
+    )
+    return printed.stdout + printed.stderr
 
 
 def _downloads(server: str) -> list[str]:
@@ -104,25 +157,8 @@ def test_big_files_are_checked_out_and_downloaded_once_per_machine() -> None:
     with lab() as made:
         source = made.volume("source")
         _shell([f"{source}:/src"], MAKE_REPO)
-        code = made.volume("lfs-code", {"lfs_server.py": SERVER})
         network = made.network("net")
-        server = made.run(
-            "lfs",
-            "--network",
-            network,
-            "--network-alias",
-            "lfs",
-            "-v",
-            f"{source}:/src:ro",
-            "-v",
-            f"{code}:/code:ro",
-            PYTHON,
-            "python",
-            "/code/lfs_server.py",
-            "8080",
-            "/src/lfs",
-            "http://lfs:8080",
-        )
+        server = _server(made, network, source)
         cache = made.volume("lfs-cache")
         expected = _shell([f"{source}:/src"], "cat /src/data.sha").strip()
 
@@ -153,6 +189,45 @@ def test_big_files_are_checked_out_and_downloaded_once_per_machine() -> None:
     assert after_second == [expected], "the second checkout downloaded again"
     assert elsewhere.split()[0] == expected
     assert after_third == [expected, expected], "another cache was served the file"
+
+
+def test_checkouts_started_together_download_a_big_file_once() -> None:
+    """The first gradings of a task on a machine whose cache does not hold its
+    big file yet start together. The server holds the object back for a few
+    seconds, a slow link in small, so every checkout is already asking for it
+    before the first download ends: without the image's lock around the fetch
+    each of them downloaded it (experiment D2, 2026-10-04, eight checkouts and
+    eight downloads). With it the first downloads and the others wait, then
+    copy the file out of the cache.
+    """
+    with lab() as made:
+        source = made.volume("source")
+        _shell([f"{source}:/src"], MAKE_REPO)
+        network = made.network("net")
+        server = _server(made, network, source, hold_seconds=5)
+        cache = made.volume("lfs-cache")
+        expected = _shell([f"{source}:/src"], "cat /src/data.sha").strip()
+        head = _shell([f"{source}:/src"], "cat /src/head").strip()
+
+        started = [
+            _start_clone(made, f"together-{n}", network, source, cache, head)
+            for n in range(4)
+        ]
+        codes = [made.wait(name) for name, _ in started]
+        logs = [_log(name) for name, _ in started]
+        checked_out = [
+            _shell([f"{workspace}:/w"], "sha256sum /w/task/data.bin").split()[0]
+            for _, workspace in started
+        ]
+        downloads = _downloads(server)
+
+    assert codes == [0, 0, 0, 0], logs
+    assert checked_out == [expected] * 4
+    assert downloads == [expected], "checkouts started together each downloaded"
+    # The checkouts did overlap, so the single download is the lock's doing
+    # and not the checkouts happening to run one after another.
+    waited = [log for log in logs if "waiting for another checkout's download" in log]
+    assert waited, logs
 
 
 def test_the_clone_image_runs_as_root() -> None:
@@ -203,25 +278,8 @@ def test_a_pointer_resolves_although_the_repository_says_nothing_about_it() -> N
     with lab() as made:
         source = made.volume("source")
         _shell([f"{source}:/src"], MAKE_REPO_WITHOUT_ATTRIBUTES)
-        code = made.volume("lfs-code", {"lfs_server.py": SERVER})
         network = made.network("net")
-        made.run(
-            "lfs",
-            "--network",
-            network,
-            "--network-alias",
-            "lfs",
-            "-v",
-            f"{source}:/src:ro",
-            "-v",
-            f"{code}:/code:ro",
-            PYTHON,
-            "python",
-            "/code/lfs_server.py",
-            "8080",
-            "/src/lfs",
-            "http://lfs:8080",
-        )
+        _server(made, network, source)
         cache = made.volume("lfs-cache")
         expected = _shell([f"{source}:/src"], "cat /src/data.sha").strip()
 
