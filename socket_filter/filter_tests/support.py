@@ -36,6 +36,8 @@ def body() -> dict[str, Any]:
             "NetworkDisabled": True,
             "HostConfig": {
                 "NetworkMode": "none",
+                "Init": False,
+                "IpcMode": "none",
                 "ReadonlyRootfs": True,
                 "CapDrop": ["ALL"],
                 "SecurityOpt": ["no-new-privileges", "seccomp=builtin"],

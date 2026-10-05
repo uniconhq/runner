@@ -1,6 +1,6 @@
 [project]
 name = "unicon-harness"
-version = "0.4.0"
+version = "0.5.0"
 description = "The program inside the Unicon harness image, and the plan, envelope, verdict and primitive contracts it speaks."
 readme = "README.md"
 license = "MIT"

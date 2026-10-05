@@ -3,12 +3,15 @@ built once, a registry of the lab's own to give images real digests, and
 names that are the lab's alone, removed at the end.
 
 It drives the docker CLI, so it works from any machine the CLI does, and every
-program under test runs in a container, as on a grading machine.
+program under test runs in a container, as on a grading machine. It runs the
+same on root Docker, on root Docker with `userns-remap` and on rootless Docker
+(with DOCKER_HOST naming its socket), the setups a grading machine may have.
 """
 
 from __future__ import annotations
 
 import json
+import os
 import secrets
 import shutil
 import subprocess
@@ -31,6 +34,9 @@ PYTHON = (
 FIXTURE = REPO_ROOT / "harness" / "tests" / "primitives"
 FILTER_UID = "10002"
 """The socket filter image's uid, which no harness or step runs as."""
+DIRECTORIES = "/run/unicon-lab"
+"""Where on the daemon's machine the lab makes directories that are not
+volumes, such as the filter's socket directory."""
 
 
 def docker_ready() -> bool:
@@ -99,12 +105,45 @@ def fixture_image() -> str:
     return str(next(d for d in digests if d.startswith(f"localhost:{REGISTRY_PORT}/")))
 
 
+def daemon_socket() -> str:
+    """The daemon's socket on its machine, which the filter is given: the path
+    DOCKER_HOST names when it names a unix socket, as it does for rootless
+    Docker, whose socket is under /run/user/<uid>, and otherwise the usual one.
+    """
+    host = os.environ.get("DOCKER_HOST", "")
+    if host.startswith("unix:///"):
+        return host.removeprefix("unix://")
+    return "/var/run/docker.sock"
+
+
 @cache
 def socket_group() -> str:
-    """The group that owns the daemon's socket inside a container."""
+    """The group that owns the daemon's socket, as a container outside any
+    user-namespace remap sees it, which is how the filter runs.
+    """
     return docker(
-        "run", "--rm", "-v", "/var/run/docker.sock:/s", PYTHON, "stat", "-c", "%g", "/s"
+        "run",
+        "--rm",
+        "--userns",
+        "host",
+        "-v",
+        f"{daemon_socket()}:/s",
+        PYTHON,
+        "stat",
+        "-c",
+        "%g",
+        "/s",
     ).strip()
+
+
+@cache
+def remapped() -> bool:
+    """Whether the daemon remaps containers' user ids (`userns-remap`). A
+    remapped container sees a file of the filter's uid, which is outside the
+    remap, as belonging to the kernel's overflow uid, `nobody`.
+    """
+    options = docker("info", "--format", "{{json .SecurityOptions}}")
+    return "name=userns" in options
 
 
 def tar_of(files: dict[str, bytes | str]) -> bytes:
@@ -127,6 +166,7 @@ class Lab:
         self.containers: list[str] = []
         self.volumes: list[str] = []
         self.networks: list[str] = []
+        self.directories: list[str] = []
         self.gradings: list[str] = []
 
     def grading(self) -> str:
@@ -170,23 +210,52 @@ class Lab:
         docker("run", *(["-d"] if detach else []), "--name", name, *args)
         return name
 
-    def filter(self, images: list[str], *extra: str) -> tuple[str, str]:
-        """A socket filter on the real socket, its own socket in a new volume
-        that belongs to the filter's uid, as on a grading machine. Returns
-        (container, volume); a harness mounts the volume read-only.
+    def directory(self, what: str, owner: str) -> str:
+        """A new directory on the daemon's machine, under DIRECTORIES, that
+        belongs to uid `owner`, mode 0755. A container makes it and another
+        removes it at the end, both outside any user-namespace remap, so this
+        works wherever the CLI runs and whether or not the daemon remaps.
         """
-        volume = self.volume("filter")
-        docker("run", "--rm", "-v", f"{volume}:/v", PYTHON, "chown", FILTER_UID, "/v")
+        name = self.name(what)
+        docker(
+            "run",
+            "--rm",
+            "--userns",
+            "host",
+            "-v",
+            f"{DIRECTORIES}:/d",
+            PYTHON,
+            "sh",
+            "-c",
+            f"mkdir -m 0755 /d/{name} && chown {owner}:{owner} /d/{name}",
+        )
+        self.directories.append(name)
+        return f"{DIRECTORIES}/{name}"
+
+    def filter(self, images: list[str], *extra: str) -> tuple[str, str]:
+        """A socket filter on the real socket, started the way a grading machine
+        starts it, on rootless Docker and on root Docker with `userns-remap`
+        alike: outside any remap of user ids (`--userns host`), because a
+        daemon that remaps refuses the machine's pid namespace to a container
+        that has not opted out, and with its socket in a directory on the
+        machine that belongs to the filter's uid, not in a volume, because a
+        daemon that remaps keeps its volumes where that uid cannot reach
+        (experiment A2, 2026-10-04). Returns (container, directory); a harness
+        mounts the directory read-only.
+        """
+        directory = self.directory("filter", FILTER_UID)
         name = self.run(
             "filter",
+            "--userns",
+            "host",
             "--pid",
             "host",
             "--group-add",
             socket_group(),
             "-v",
-            "/var/run/docker.sock:/var/run/docker.sock",
+            f"{daemon_socket()}:/var/run/docker.sock",
             "-v",
-            f"{volume}:/run/unicon",
+            f"{directory}:/run/unicon",
             "-e",
             f"UNICON_FILTER_IMAGES={','.join(images)}",
             *extra,
@@ -194,7 +263,7 @@ class Lab:
         )
         for _ in range(50):
             if '"decision": "start"' in docker("logs", name, check=False):
-                return name, volume
+                return name, directory
             time.sleep(0.2)
         raise AssertionError(
             f"the filter did not start: {docker('logs', name, check=False)}"
@@ -225,6 +294,20 @@ class Lab:
             docker("volume", "rm", "-f", volume, check=False)
         for network in self.networks:
             docker("network", "rm", network, check=False)
+        for directory in self.directories:
+            docker(
+                "run",
+                "--rm",
+                "--userns",
+                "host",
+                "-v",
+                f"{DIRECTORIES}:/d",
+                PYTHON,
+                "rm",
+                "-rf",
+                f"/d/{directory}",
+                check=False,
+            )
 
 
 @contextmanager

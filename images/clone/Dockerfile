@@ -39,6 +39,14 @@
 # it in the cache the step mounts. A few hundred bytes each, in a store that
 # exists to hold gigabytes, is what that costs. `-text` keeps every file
 # exactly as it was committed, which is what a grading should see.
+#
+# The third is a lock around the download. Gradings that start together on a
+# machine whose cache does not yet hold a dataset each found it missing and
+# each downloaded it (measured 2026-10-04, experiment D2: eight checkouts at
+# once, eight downloads). `git-lfs` in this image is a short script in front
+# of the real one, which makes `git lfs fetch` wait for any other fetch of the
+# same commit into the same cache; the comment at its top says why the commit
+# is the key and why only the fetch is under the lock.
 # Built from the repo root: docker build -f images/clone/Dockerfile .
 
 # woodpeckerci/plugin-git 2.10.1, by the digest of its multi-platform index,
@@ -52,4 +60,8 @@ LABEL org.opencontainers.image.title="unicon-clone" \
 
 RUN git config --system lfs.storage /lfs-cache \
  && printf '* filter=lfs diff=lfs merge=lfs -text\n' > /etc/unicon-gitattributes \
- && git config --system core.attributesFile /etc/unicon-gitattributes
+ && git config --system core.attributesFile /etc/unicon-gitattributes \
+ && mkdir -p /usr/libexec/unicon \
+ && mv /usr/bin/git-lfs /usr/libexec/unicon/git-lfs
+
+COPY --chmod=0755 images/clone/git-lfs /usr/bin/git-lfs

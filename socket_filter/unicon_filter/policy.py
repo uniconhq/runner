@@ -380,8 +380,12 @@ def _check_host(host: Mapping[str, Any], workspace: str, config: Config) -> None
         or set(restart) - {"Name", "MaximumRetryCount"}
     ):
         raise RefusedError("no restart policy")
-    if host.get("IpcMode", "") not in ("", "private", "none"):
-        raise RefusedError("IpcMode must be private or none")
+    if host.get("Init") is not False:
+        raise RefusedError(
+            "Init must be false: the step is the container's first process"
+        )
+    if host.get("IpcMode") != "none":
+        raise RefusedError("IpcMode must be none: a step has no shared memory")
     if host.get("CgroupnsMode", "") not in ("", "private"):
         raise RefusedError("CgroupnsMode must be private")
     if host.get("MemorySwappiness") not in (None, -1, 0):
@@ -392,7 +396,7 @@ def _check_host(host: Mapping[str, Any], workspace: str, config: Config) -> None
     carried = set(
         """
         NetworkMode ReadonlyRootfs CapDrop SecurityOpt Memory MemorySwap NanoCpus
-        PidsLimit Ulimits Mounts LogConfig RestartPolicy IpcMode CgroupnsMode
+        PidsLimit Ulimits Mounts LogConfig RestartPolicy Init IpcMode CgroupnsMode
         MemorySwappiness MaskedPaths ReadonlyPaths Capabilities
         """.split()
     )
