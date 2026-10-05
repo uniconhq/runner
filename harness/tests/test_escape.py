@@ -61,6 +61,11 @@ memory limit below the 512 MB the fixture holds when it is not stopped, with
 room beside the 256 MB `/tmp` the disk attack fills, since a tmpfs's pages
 count against the container's memory; and an output limit below the
 fixture's one 128 MB file."""
+DISK_MEMORY_MB = 300
+"""The disk attack's own memory limit, above the 256 MB `/tmp` it fills:
+sandbox-run counts a run's files in its directory, which is on that tmpfs,
+as memory, so under the other attacks' 64 MB it would be stopped for memory
+before it could show the directory is bounded by the tmpfs."""
 DIRECT_SECONDS = 20.0
 """How long a run of the fixture alone may take before the test, standing in
 for the harness's wall clock, kills it."""
@@ -243,7 +248,7 @@ class Fixtures:
                         "binary": {"file": "in/binary"},
                         "input": {"file": f"in/{attack}"},
                         "time_limit": 1,
-                        "memory_limit": 64,
+                        "memory_limit": DISK_MEMORY_MB if attack == "disk" else 64,
                     },
                 }
                 for attack in ATTACKS
