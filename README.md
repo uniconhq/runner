@@ -437,9 +437,9 @@ primitive contract the primitive is built against, and pass that same tag as
 ```yaml
 jobs:
   ci:
-    uses: uniconhq/runner/.github/workflows/primitive-ci.yaml@v0.4.0
+    uses: uniconhq/runner/.github/workflows/primitive-ci.yaml@v0.5.0
     with:
-      runner-ref: v0.4.0
+      runner-ref: v0.5.0
 ```
 
 A called workflow cannot tell which ref of its own repo it was called at, so
