@@ -69,7 +69,9 @@ staff in `error`, never a grade.
   step) as one directory `in/<n>/<its name>/` with its layout, and a file
   given to a port the plan's `folders` names as a folder holding that one
   file, `in/<n>/<port>/<its name>`. Nothing a step wrote reaches another step
-  except through the plan's references.
+  except through the plan's references. A port wired to an optional output
+  (a `?` in the plan's `outputs`) that its step did not write is left out of
+  `inputs.json`.
 - Values the harness fills in: a contestant input from `submission.json`
   (inside an entry for one test, a per-test input is that test's file), a
   secret from the envelope, written into `inputs.json` as text, and a template
@@ -77,8 +79,9 @@ staff in `error`, never a grade.
   with no exponent (`2.50` is `2.5`, `2.0` is `2`), a boolean as `true` or
   `false`, text and an enum as they are, and `{{` and `}}` as braces.
 - A step that runs once and returns an `outcome` other than `accepted` stops
-  the run: later steps are skipped, every test is `skipped`, and the result's
-  `stopped` is that outcome (a failed compile is `compile_error`).
+  the run: later steps are skipped, every test is `skipped`, the result's
+  `stopped` is that outcome (a failed compile is `compile_error`) and its
+  `stopped_by` the step's id.
 - A per-test step runs only for the tests with no outcome yet. One returning
   another outcome for a test gives the test that outcome and skips its later
   steps (a batch leaves it out).
@@ -93,12 +96,15 @@ staff in `error`, never a grade.
   within its `at_least` and `at_most`, compared exactly as written
   (`1.0000000000000000001` is past `at_most: 1`). Any of these failing is a
   system error.
-- A single-test step killed at its wall clock gives the test `time_limit`, and
-  one that wrote nothing after the kernel killed it at its memory limit
-  `memory_limit`. A run-once or batch step killed that way is a system error.
-  A step that wrote a valid `outputs.json` is taken at its word even when
-  Docker reports an out-of-memory kill inside it, because under `sandbox-run`
-  that kill is the contestant's program.
+- A step's container killed at its time limit, or one that wrote nothing
+  after the kernel killed it at its memory limit, is a system error naming
+  the step, whether it runs once, for one test or as a batch. The primitive
+  keeps a contestant's program within the test's own limits and says how it
+  ended, so a container that outran its own limits is a fault of the
+  platform or of setter code, never the test's `time_limit`. A step that
+  wrote a valid `outputs.json` is taken at its word even when Docker reports
+  an out-of-memory kill inside it, because under `sandbox-run` that kill is
+  the contestant's program.
 - This machine gives a step no network and no GPUs, so a step whose plan entry
   says `network: true` or `gpus` above 0 is a system error before its
   container is made.
@@ -160,7 +166,7 @@ Created through the filter from the step's image by digest, with:
 | CPU | one CPU (`NanoCpus`), and a `cpu` ulimit of `cpu_ms` rounded up to seconds per process |
 | Processes | `PidsLimit: pids` |
 | Output | an `fsize` ulimit of `output_mb` per file |
-| Wall clock | `time_ms`, after which the harness kills it; the label `unicon.time_ms` carries it for the filter's reaper |
+| Wall clock | `time_ms` and a start allowance of 10 seconds for the container's own start, after which the harness kills it; the label `unicon.time_ms` carries the sum for the filter's reaper |
 | `/work` | the step's own directory, `unicon-steps/<n>-<step>` of the run's workspace volume, as a volume subpath mount with `NoCopy`, read-write |
 | `/tmp` | a tmpfs, at most 256 MB and never more than the memory limit |
 | Labels | `unicon.grading=<grading id>`, `unicon.step=<step id>`, `unicon.time_ms`; the filter adds `unicon.harness` |
@@ -415,11 +421,11 @@ and an output with the `at_least` and `at_most` a number keeps. Beyond the
 schema the harness checks that a step id names one step or the entries of
 one per-test step, that every step that runs once comes before every step
 that runs per test, that every test named is in `tests`, that every
-reference points at an output that a step running earlier declares and that
-no step that runs once reads one that runs per test, that every contestant
-input named is declared and of the kind its value needs, that every template
-is well formed, and that the report reads a declared text, number or enum
-output of a step the plan has.
+reference points at an output declared by another step that runs earlier
+and that no step that runs once reads one that runs per test, that every
+contestant input named is declared and of the kind its value needs, that
+every template is well formed, and that the report reads a declared text or
+number output of a step the plan has.
 
 **`envelope.schema.json`.** Served by the `forge` repo at the run's envelope
 URL. `grading_id`, `submission`, `attempt`, `checkouts` (`/woodpecker/task`,
@@ -433,13 +439,16 @@ reporting.
 
 **`result.schema.json`.** Posted in the final callback; checked by the
 `forge` repo and kept on the grading row. `stopped` (null, the outcome of a
-step that runs once and stopped the run, or `system_error`), `tests` (one row
-per plan test, in plan order, `{test, outcome, values}`), `values` (the once
-names of the report), `run_log` (the log's URL without its presigned query,
-or null) and `error` (a sentence for staff exactly when `stopped` is
-`system_error`). The outcomes are `accepted`, `wrong_answer`, `time_limit`,
-`memory_limit`, `output_limit`, `runtime_error`, `compile_error`, `skipped`
-and `system_error`; a step returns neither of the last two, and a row is
+step that runs once and stopped the run, or `system_error`), `stopped_by`
+(the id of that step when one stopped the run, otherwise null, a
+`system_error` included; the platform holds a stop back until the task's
+reveal only when this step is sealed), `tests` (one row per plan test, in
+plan order, `{test, outcome, values}`), `values` (the once names of the
+report), `run_log` (the log's URL without its presigned query, or null) and
+`error` (a sentence for staff exactly when `stopped` is `system_error`). The
+outcomes are `accepted`, `wrong_answer`, `time_limit`, `memory_limit`,
+`output_limit`, `runtime_error`, `compile_error`, `skipped` and
+`system_error`; a step returns neither of the last two, and a row is
 never `system_error`. A value is a number exactly as the primitive wrote it,
 or a text of at most 10,000 characters. The callback URL and its token name
 the grading, so the result does not. Every other outcome, and every number
@@ -476,13 +485,16 @@ commit: `{"schema_version": 5, "inputs": {id: entry}}`, one entry per
 contestant input the plan declares, where an entry is `{"files":
 ["files/<id>/<path>", ...]}` for a `file` input (one file), a `folder` input
 (its files at their paths in the folder) or a per-test input (one file per
-test it answers, `files/<id>/<group>/<test>` with or without an ending), or
+test it answers, `files/<id>/<group>/<test>` or
+`files/<id>/<group>/<test>.<ending>` with an ending that is not empty), or
 `{"value": ...}` for `text`, `number`, `boolean` and `enum`. The harness
 refuses one that leaves out an input, gives one the plan does not declare,
-gives files for a value or a value for files, or names a file for no test of
-the plan. A `{"submission": id}` plan value gives the one file of a file
-input, the files of a folder input as one folder, the test's file of a
-per-test input, or the value.
+gives files for a value or a value for files, or gives a per-test file named
+neither way or two files for one test. A per-test file for a test the plan
+does not have, which a rejudge against a plan that dropped or renamed the
+test meets, is noted in the CI log and not read. A `{"submission": id}` plan
+value gives the one file of a file input, the files of a folder input as one
+folder, the test's file of a per-test input, or the value.
 
 ## The primitives' workflows
 
