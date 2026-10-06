@@ -169,7 +169,7 @@ jobs:
           files: |
             schemas/plan.schema.json
             schemas/envelope.schema.json
-            schemas/verdict.schema.json
+            schemas/result.schema.json
             schemas/primitive.schema.json
             schemas/submission.schema.json
             images.json
