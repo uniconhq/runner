@@ -1,46 +1,64 @@
 """Running a plan: the rules the forge compiler relies on.
 
-1. Steps run in plan order. A step's file inputs are copied into its working
-   directory under in/, files from earlier steps included; nothing a step
-   wrote is visible to another step except through the plan's references.
-2. An output named outcome is special. A run-once step that returns an outcome
-   other than accepted stops the grading there: every later step is skipped
-   and the run's outcome is that one.
-3. A per-test step that returns an outcome other than accepted for a test
-   skips every later step of that test (left out of a batch), and that
-   outcome is the test's.
-4. Anything unexpected is a GradingError, which becomes a system_error. A
-   container of a single-test step killed by its wall or memory limit gives
-   that test time_limit or memory_limit; a batch or run-once step killed that
-   way is a fault.
+1. A test with no file in a per-test contestant input is skipped before any
+   step runs, and left out of every per-test step.
+2. Steps run in plan order, every step that runs once first. A step's file
+   and folder inputs are copied into its working directory under in/, files
+   from earlier steps included; nothing a step wrote is visible to another
+   step except through the plan's references. A port wired to an optional
+   output its step did not write is left out of inputs.json.
+3. A step that runs once and returns an outcome other than accepted stops the
+   grading there: every later step is skipped and so is every test.
+4. A per-test step runs only for the tests with no outcome yet. One that
+   returns an outcome other than accepted for a test gives the test that
+   outcome and skips its later steps (left out of a batch).
+5. Anything unexpected is a GradingError, which stops the run as a
+   system_error. A step's container killed at its time or memory limit is
+   one, whatever the step's shape: the primitive keeps a contestant's
+   program within the test's own limits and says how it ended, so a
+   container that outran its own limits is a fault of the platform or of
+   setter code. This machine gives a step no network and no GPUs, so a step
+   that asks for either is a fault too.
 
-What a step wrote is checked against the primitive contract before anything
-reads it: outputs.json's shape, one batch entry per item in order, every file
-a regular file under out/, the total under out/ within the step's output
-limit, and an outcome from the verdict's list.
+What a step wrote is checked against the primitive contract and the plan
+before anything reads it: outputs.json's shape, one batch entry per item in
+order, the total under out/ within the step's output limit, and per item an
+outcome a step may return, every output the plan declares for the step and no
+other, each of its declared type (a file a regular file under out/, a folder
+a directory under out/, a number finite), every output without a `?` present
+on accepted, and every number the report reads within its bounds, compared
+exactly as written.
 """
 
 from __future__ import annotations
 
-import json
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
+from unicon_harness import exact
 from unicon_harness.contracts import SCHEMA_VERSION, violation
 from unicon_harness.faults import GradingError
-from unicon_harness.files import copy_into, inside, read_bounded, tree_size
-from unicon_harness.plan import Item, Plan, Step
+from unicon_harness.files import (
+    copy_into,
+    folder_inside,
+    inside,
+    read_bounded,
+    tree,
+    tree_size,
+)
+from unicon_harness.plan import Item, Plan, Step, pieces
 from unicon_harness.runlog import RunLog
 from unicon_harness.sandbox import MIB, Ended, Sandbox
 from unicon_harness.submission import Given, Scalar
 from unicon_harness.workspace import Workspace
 
 ACCEPTED = "accepted"
+SKIPPED = "skipped"
 OUTCOMES = (
     "accepted",
-    "partial",
     "wrong_answer",
     "time_limit",
     "memory_limit",
@@ -67,14 +85,23 @@ class FileValue:
     path: Path
 
 
-Value = Scalar | FileValue | list[FileValue] | list[Scalar]
+@dataclass(frozen=True)
+class FolderValue:
+    """A folder a value names: its name, and its files by their paths in it."""
+
+    name: str
+    files: tuple[tuple[str, Path], ...]
+
+
+Value = Scalar | FileValue | FolderValue
 Outputs = dict[str, Value]
 
 
 @dataclass
 class Grading:
     """What running the plan left: every step's outputs, each test's first
-    non-accepted outcome, and the outcome that stopped the run, if one did.
+    non-accepted outcome, and the outcome that stopped the run and the id of
+    the step that stopped it, if a step that runs once did.
     """
 
     once: dict[str, Outputs] = field(default_factory=dict)
@@ -85,27 +112,47 @@ class Grading:
 
 
 class Placer:
-    """Lays one container's input files out under in/: each distinct source file
-    once, at in/<n>/<its own name>, so a hundred tests sharing one binary copy
-    it once and a primitive still sees the file's name.
+    """Lays one container's input files out under in/, each distinct value
+    once, so a hundred tests sharing one binary copy it once: a file at
+    in/<n>/<its own name>, a folder as one directory in/<n>/<its name>/ with
+    its layout, and a file given to a folder port as a folder holding that
+    one file, in/<n>/<port>/<its own name>.
     """
 
     def __init__(self, directory: Path) -> None:
         self._directory = directory
-        self._placed: dict[Path, str] = {}
+        self._placed: dict[object, str] = {}
 
-    def place(self, source: Path) -> str:
-        known = self._placed.get(source)
+    def file(self, source: Path) -> str:
+        return self._place(source, source.name, ((source.name, source),), False)
+
+    def folder(self, folder: FolderValue) -> str:
+        return self._place(folder, folder.name, folder.files, True)
+
+    def file_as_folder(self, source: Path, port: str) -> str:
+        return self._place((port, source), port, ((source.name, source),), True)
+
+    def _place(
+        self,
+        key: object,
+        name: str,
+        files: tuple[tuple[str, Path], ...],
+        folder: bool,
+    ) -> str:
+        known = self._placed.get(key)
         if known is not None:
             return known
-        relative = f"in/{len(self._placed) + 1}/{source.name}"
+        relative = f"in/{len(self._placed) + 1}/{name}"
         try:
-            copy_into(source, self._directory / relative)
+            if folder:
+                (self._directory / relative).mkdir(parents=True)
+                for inner, source in files:
+                    copy_into(source, self._directory / relative / inner)
+            else:
+                copy_into(files[0][1], self._directory / relative)
         except OSError as exc:
-            raise GradingError(
-                f"could not copy {source.name} in: {exc.strerror}"
-            ) from None
-        self._placed[source] = relative
+            raise GradingError(f"could not copy {name} in: {exc.strerror}") from None
+        self._placed[key] = relative
         return relative
 
 
@@ -115,6 +162,7 @@ class Grader:
         plan: Plan,
         task: Path,
         given: Mapping[str, Given],
+        secrets: Mapping[str, str],
         workspace: Workspace,
         sandbox: Sandbox,
         log: RunLog,
@@ -124,6 +172,7 @@ class Grader:
         self._plan = plan
         self._task = task
         self._given = given
+        self._secrets = secrets
         self._workspace = workspace
         self._sandbox = sandbox
         self._log = log
@@ -136,7 +185,13 @@ class Grader:
         for step in plan.steps:
             self._totals[step.id] = self._totals.get(step.id, 0) + len(step.items)
 
+    @property
+    def grading(self) -> Grading:
+        """What the run has left so far, which a fault part way keeps."""
+        return self._grading
+
     def run(self) -> Grading:
+        self._skip_unanswered()
         for step in self._plan.steps:
             if self._grading.stopped is not None:
                 self._log.tell(
@@ -152,20 +207,29 @@ class Grader:
                 self._batch(step)
         return self._grading
 
+    def _skip_unanswered(self) -> None:
+        """Skip every test a per-test contestant input has no file for."""
+        for input_id, declared in self._plan.contestant.items():
+            if not declared.per_test:
+                continue
+            answered = self._given[input_id].tests
+            for test in self._plan.tests:
+                if test not in answered and test not in self._grading.test_outcomes:
+                    self._log.tell(
+                        f"test {test}: skipped, input {input_id} has no file for it"
+                    )
+                    self._grading.test_outcomes[test] = SKIPPED
+
     def _once(self, step: Step) -> None:
-        ended, outputs = self._container(step, list(step.items))
-        if ended.killed is not None:
-            raise GradingError(_killed(step, ended))
-        if outputs is None:
-            raise GradingError(_no_outputs(step, ended))
+        outputs = self._container(step, list(step.items))
         self._grading.once[step.id] = outputs[0]
-        outcome = outputs[0].get("outcome")
-        if outcome is not None and outcome != ACCEPTED:
+        outcome = outputs[0]["outcome"]
+        if outcome != ACCEPTED:
             self._log.tell(f"{_named(step)}: {outcome}, so the run stops here")
             self._grading.stopped = str(outcome)
             self._grading.stopped_by = step.id
         else:
-            self._log.tell(f"{_named(step)}: {outcome or 'done'}")
+            self._log.tell(f"{_named(step)}: {outcome}")
 
     def _single(self, step: Step) -> None:
         test = _tested(step.items[0])
@@ -174,58 +238,31 @@ class Grader:
                 step, 1, f"test {test} is already {self._grading.test_outcomes[test]}"
             )
             return
-        ended, outputs = self._container(step, list(step.items))
-        if ended.killed == "run_clock":
-            raise GradingError(_killed(step, ended))
-        if ended.killed == "time":
-            self._fail(test, step, "time_limit")
-            return
-        if outputs is None:
-            if ended.out_of_memory:
-                self._fail(test, step, "memory_limit")
-                return
-            raise GradingError(_no_outputs(step, ended))
+        outputs = self._container(step, list(step.items))
         self._record(step, test, outputs[0])
-        outcome = outputs[0].get("outcome")
-        self._log.tell(f"{_named(step)}: {outcome or 'done'}")
+        self._log.tell(f"{_named(step)}: {outputs[0]['outcome']}")
 
     def _batch(self, step: Step) -> None:
         items = [i for i in step.items if i.test not in self._grading.test_outcomes]
         left_out = len(step.items) - len(items)
         if not items:
-            self._skip(step, left_out, "every test of it has already failed")
+            self._skip(step, left_out, "every test of it already has an outcome")
             return
-        ended, outputs = self._container(step, items, left_out)
-        if ended.killed is not None:
-            raise GradingError(_killed(step, ended))
-        if outputs is None:
-            if ended.out_of_memory:
-                raise GradingError(
-                    f"the batch of step {step.id} was killed at its memory limit of "
-                    f"{step.limits.memory_mb} MB"
-                )
-            raise GradingError(_no_outputs(step, ended))
+        outputs = self._container(step, items, left_out)
         self._log.tell(
             f"{_named(step)}: {len(items)} tests"
-            + (f", {left_out} left out as already failed" if left_out else "")
+            + (f", {left_out} left out as already done" if left_out else "")
         )
         for item, item_outputs in zip(items, outputs, strict=True):
             test = _tested(item)
             self._record(step, test, item_outputs)
-            self._log.tell(f"  test {test}: {item_outputs.get('outcome') or 'done'}")
+            self._log.tell(f"  test {test}: {item_outputs['outcome']}")
 
     def _record(self, step: Step, test: str, outputs: Outputs) -> None:
         self._grading.per_test.setdefault(step.id, {})[test] = outputs
-        outcome = outputs.get("outcome")
-        if outcome is not None and outcome != ACCEPTED:
+        outcome = outputs["outcome"]
+        if outcome != ACCEPTED:
             self._grading.test_outcomes[test] = str(outcome)
-
-    def _fail(self, test: str, step: Step, outcome: str) -> None:
-        self._log.tell(
-            f"{_named(step)}: {outcome}, stopped at its "
-            f"{'time' if outcome == 'time_limit' else 'memory'} limit"
-        )
-        self._grading.test_outcomes[test] = outcome
 
     def _skip(self, step: Step, count: int, why: str) -> None:
         self._log.tell(f"{_named(step)}: skipped, {why}")
@@ -238,23 +275,33 @@ class Grader:
 
     def _container(
         self, step: Step, items: list[Item], left_out: int = 0
-    ) -> tuple[Ended, list[Outputs] | None]:
-        """Run one container over `items` and read back what it wrote, or None
-        for outputs when it wrote no outputs.json or was killed.
+    ) -> list[Outputs]:
+        """Run one container over `items` and read back what it wrote, one
+        entry per item. A container killed at a limit, or one that wrote no
+        outputs.json, is a fault.
         """
+        if step.network:
+            raise GradingError(
+                f"step {step.label} asks for the network, and this machine gives no "
+                "network to a step"
+            )
+        if step.limits.gpus > 0:
+            raise GradingError(
+                f"step {step.label} asks for GPUs, and this machine has no GPUs"
+            )
         self._containers += 1
         directory = self._workspace.new_step_dir(f"{self._containers:03d}-{step.id}")
         placer = Placer(directory)
         document: dict[str, Any] = {"schema_version": SCHEMA_VERSION}
         if step.kind == "batch":
             document["batch"] = [
-                {"id": item.test, "inputs": self._inputs(step, item, placer)}
+                {"test": item.test, "inputs": self._inputs(step, item, placer)}
                 for item in items
             ]
         else:
             document["inputs"] = self._inputs(step, items[0], placer)
         (directory / "inputs.json").write_text(
-            json.dumps(document, indent=2), encoding="utf-8"
+            exact.dumps(document, indent=2), encoding="utf-8"
         )
         self._log.event(
             f"step {step.label}: {step.primitive} from {step.image}"
@@ -267,92 +314,103 @@ class Grader:
             + (", out of memory" if ended.out_of_memory else "")
             + (f", killed at the {_clock_name(ended)}" if ended.killed else "")
         )
-        outputs = None if ended.killed else self._outputs(step, directory, items)
+        if ended.killed is not None:
+            raise GradingError(_killed(step, ended))
+        outputs = self._outputs(step, directory, items)
+        if outputs is None:
+            raise GradingError(_no_outputs(step, ended))
         self._advance(step, len(items) + left_out)
-        return ended, outputs
+        return outputs
 
     def _inputs(self, step: Step, item: Item, placer: Placer) -> dict[str, Any]:
-        return {
-            name: _placed(self._resolve(step, item, name, value), placer)
-            for name, value in item.inputs.items()
-        }
+        inputs: dict[str, Any] = {}
+        for name, value in item.inputs.items():
+            resolved = self._resolve(step, item, name, value)
+            if resolved is None:
+                self._log.event(
+                    f"input {name} of step {step.label} is left out: step "
+                    f"{value['step']} did not write its optional output "
+                    f"{value['output']}"
+                )
+                continue
+            inputs[name] = _placed(resolved, placer, name, step.folders)
+        return inputs
 
     def _resolve(
         self, step: Step, item: Item, name: str, value: Mapping[str, Any]
-    ) -> Value:
+    ) -> Value | None:
+        """What a plan value gives, or None for an optional output its step
+        did not write.
+        """
         where = f"input {name} of step {step.label}"
         if "value" in value:
             literal: Scalar = value["value"]
             return literal
         if "task" in value:
-            paths = value["task"]
-            if isinstance(paths, str):
-                return FileValue(inside(self._task, paths, f"task file {paths}"))
-            return [FileValue(inside(self._task, p, f"task file {p}")) for p in paths]
+            return self._task_value(value["task"])
         if "submission" in value:
-            return self._contestant(value["submission"], value.get("field"), where)
-        return self._output(value["step"], value["output"], value.get("test"), where)
-
-    def _contestant(self, input_id: str, wanted: str | None, where: str) -> Value:
-        given = self._given.get(input_id)
-        if given is None:
-            raise GradingError(
-                f"submission.json has no input {input_id}, which {where} needs"
-            )
-        if wanted == "language":
-            if given.language is None:
+            return self._contestant(value["submission"], item.test, where)
+        if "secret" in value:
+            secret = self._secrets.get(value["secret"])
+            if secret is None:
                 raise GradingError(
-                    f"input {input_id} has no language, which {where} needs"
+                    f"the envelope has no secret {value['secret']}, which {where} needs"
                 )
-            return given.language
+            return secret
+        if "template" in value:
+            parts = [self._scalar(part["submission"], where) for part in value["parts"]]
+            return "".join(
+                spelled(parts[piece]) if isinstance(piece, int) else piece
+                for piece in pieces(value["template"])
+            )
+        return self._output(value["step"], value["output"], item.test, where)
+
+    def _task_value(self, path: str) -> Value:
+        if not path.endswith("/"):
+            return FileValue(inside(self._task, path, f"task file {path}"))
+        relative = path.removesuffix("/")
+        what = f"task folder {path}"
+        root = folder_inside(self._task, relative, what)
+        return FolderValue(relative.rsplit("/", 1)[-1], tree(root, what))
+
+    def _contestant(self, input_id: str, test: str | None, where: str) -> Value:
+        given = self._given[input_id]
+        if self._plan.contestant[input_id].per_test:
+            if test is None or test not in given.tests:
+                raise GradingError(
+                    f"input {input_id} has no file for test {test}, which {where} needs"
+                )
+            return FileValue(given.tests[test])
+        if self._plan.contestant[input_id].type == "folder":
+            return FolderValue(input_id, given.files)
         if given.files:
-            files = [FileValue(path) for path in given.files]
-            return files[0] if len(files) == 1 else files
-        if given.value is None:
-            raise GradingError(f"input {input_id} has neither files nor a value")
-        return given.value
+            return FileValue(given.files[0][1])
+        return self._scalar(input_id, where)
 
-    def _output(self, source: str, output: str, test: str | None, where: str) -> Value:
-        if not self._plan.per_test(source):
-            outputs = self._grading.once.get(source, {})
-            if output not in outputs:
-                raise GradingError(
-                    f"step {source} gave no output {output}, which {where} needs"
-                )
-            return outputs[output]
-        runs = self._grading.per_test.get(source, {})
-        if test is not None:
-            if output not in runs.get(test, {}):
-                raise GradingError(
-                    f"step {source} gave no output {output} for test {test}, which "
-                    f"{where} needs"
-                )
-            return runs[test][output]
-        return self._over_tests(source, output, where)
+    def _scalar(self, input_id: str, where: str) -> Scalar:
+        value = self._given[input_id].value
+        if value is None:
+            raise GradingError(f"input {input_id} has no value, which {where} needs")
+        return value
 
-    def _over_tests(self, source: str, output: str, where: str) -> Value:
-        """A per-test output over every test, in test order. A test the step did
-        not reach has no value and is left out, except for outcome, where it
-        gives that test's own outcome so a scorer still sees one per test.
+    def _output(
+        self, source: str, output: str, test: str | None, where: str
+    ) -> Value | None:
+        """An earlier step's output, the test's own of a per-test step, or None
+        when the step ran and did not write an output it declares optional.
         """
-        runs = self._grading.per_test.get(source, {})
-        covered = set(self._plan.tests_of(source))
-        values: list[Any] = []
-        for test in self._plan.tests:
-            if test not in covered:
-                continue
-            if output in runs.get(test, {}):
-                values.append(runs[test][output])
-            elif output == "outcome" and test in self._grading.test_outcomes:
-                values.append(self._grading.test_outcomes[test])
-        if any(isinstance(v, list) for v in values):
-            raise GradingError(
-                f"{where} would be a list of lists, which no primitive takes"
-            )
-        kinds = {isinstance(v, FileValue) for v in values}
-        if len(kinds) > 1:
-            raise GradingError(f"{where} would mix files and values in one list")
-        return values
+        if self._plan.per_test(source):
+            runs = self._grading.per_test.get(source, {})
+            written = runs.get(test) if test is not None else None
+            gave = f"step {source} gave no output {output} for test {test}"
+        else:
+            written = self._grading.once.get(source)
+            gave = f"step {source} gave no output {output}"
+        if written is not None and output in written:
+            return written[output]
+        if written is not None and self._plan.output(source, output).optional:
+            return None
+        raise GradingError(f"{gave}, which {where} needs")
 
     def _outputs(
         self, step: Step, directory: Path, items: list[Item]
@@ -365,8 +423,8 @@ class Grader:
             inside(directory, "outputs.json", what), OUTPUTS_LIMIT_BYTES, what
         )
         try:
-            document = json.loads(raw)
-        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            document = exact.loads(raw)
+        except (UnicodeDecodeError, ValueError) as exc:
             raise GradingError(f"{what} is not JSON: {exc}") from None
         if (
             not isinstance(document, dict)
@@ -386,56 +444,138 @@ class Grader:
                 raise GradingError(
                     f"{what} has no batch, and step {step.id} is a batch"
                 )
-            ids = [entry["id"] for entry in entries]
+            tests = [entry["test"] for entry in entries]
             wanted = [item.test for item in items]
-            if ids != wanted:
+            if tests != wanted:
                 raise GradingError(
-                    f"{what} answers for tests {ids}, and the batch was {wanted}"
+                    f"{what} answers for tests {tests}, and the batch was {wanted}"
                 )
-            raw_outputs = [entry["outputs"] for entry in entries]
+            raw_outputs = [(entry["test"], entry["outputs"]) for entry in entries]
         else:
             if "outputs" not in document:
                 raise GradingError(
                     f"{what} has a batch, and step {step.label} is not one"
                 )
-            raw_outputs = [document["outputs"]]
+            raw_outputs = [(items[0].test, document["outputs"])]
         budget = step.limits.output_mb * MIB * len(items)
         if tree_size(directory / "out") > budget:
             raise GradingError(
                 f"step {step.label} wrote more than {step.limits.output_mb} MB per run "
                 "under out/"
             )
-        return [self._read_values(step, directory, one) for one in raw_outputs]
+        read = [
+            self._read_values(step, directory, test, one) for test, one in raw_outputs
+        ]
+        for (test, _), outputs in zip(raw_outputs, read, strict=True):
+            self._check_bounds(step, test, outputs)
+        return read
 
-    def _read_values(self, step: Step, directory: Path, raw: dict[str, Any]) -> Outputs:
+    def _read_values(
+        self, step: Step, directory: Path, test: str | None, raw: dict[str, Any]
+    ) -> Outputs:
+        where = f"step {step.id} for test {test}" if test else f"step {step.label}"
         outputs: Outputs = {}
         for name, value in raw.items():
-            outputs[name] = self._read_value(step, directory, name, value)
+            declared = step.outputs.get(name)
+            if declared is None:
+                raise GradingError(
+                    f"{where} wrote output {name}, which its primitive does not declare"
+                )
+            outputs[name] = _read_value(directory, where, name, declared.type, value)
         outcome = outputs.get("outcome")
-        if outcome is not None and outcome not in STEP_OUTCOMES:
+        if outcome is None:
+            raise GradingError(f"{where} returned no outcome")
+        if outcome not in STEP_OUTCOMES:
             raise GradingError(
-                f"step {step.label} returned outcome {outcome!r}, which is not one a "
-                "step may return"
+                f"{where} returned outcome {outcome!r}, which is not one a step may "
+                "return"
             )
+        if outcome == ACCEPTED:
+            for name, declared in step.outputs.items():
+                if not declared.optional and name not in outputs:
+                    raise GradingError(
+                        f"{where} returned accepted without its output {name}"
+                    )
         return outputs
 
-    def _read_value(self, step: Step, directory: Path, name: str, value: Any) -> Value:
-        def file(entry: dict[str, str]) -> FileValue:
-            relative = entry["file"]
-            what = f"output {name} of step {step.label}, {relative}"
-            if not relative.startswith("out/"):
-                raise GradingError(f"{what}, is not under out/")
-            return FileValue(inside(directory, relative, what))
+    def _check_bounds(self, step: Step, test: str | None, outputs: Outputs) -> None:
+        """Every number the report reads from this step, within the bounds the
+        report gives it, compared exactly as written.
+        """
+        for name, entry in self._plan.report.items():
+            value = outputs.get(entry.output)
+            if entry.step != step.id or not isinstance(value, int | Decimal):
+                continue
+            where = f"report {name}, output {entry.output} of step {step.id}" + (
+                f" for test {test}" if test else ""
+            )
+            if entry.at_least is not None and value < entry.at_least:
+                raise GradingError(
+                    f"{where}, is {value}, below its at_least of {entry.at_least}"
+                )
+            if entry.at_most is not None and value > entry.at_most:
+                raise GradingError(
+                    f"{where}, is {value}, above its at_most of {entry.at_most}"
+                )
 
-        if isinstance(value, dict):
-            return file(value)
-        if isinstance(value, list):
-            if all(isinstance(entry, dict) for entry in value):
-                return [file(entry) for entry in value]
-            scalars: list[Scalar] = value
-            return scalars
-        scalar: Scalar = value
-        return scalar
+
+def spelled(value: Scalar) -> str:
+    """A scalar as a template writes it in: a number as the shortest decimal,
+    with no exponent, no trailing zeros and no point when it is whole; a
+    boolean as true or false; text as it is.
+    """
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, int):
+        return str(value)
+    if isinstance(value, Decimal):
+        text = format(value, "f")
+        if "." in text:
+            text = text.rstrip("0").rstrip(".")
+        return "0" if text in ("-0", "") else text
+    return value
+
+
+def _read_value(
+    directory: Path, where: str, name: str, declared: str, value: Any
+) -> Value:
+    """One output, as its declared type, or a fault saying how it is not."""
+    what = f"output {name} of {where}"
+    if declared in ("file", "folder"):
+        if not isinstance(value, dict) or declared not in value:
+            raise GradingError(f"{what} is {_kind(value)}, not a {declared}")
+        relative = value[declared]
+        if not relative.startswith("out/"):
+            raise GradingError(f"{what}, {relative}, is not under out/")
+        if declared == "file":
+            return FileValue(inside(directory, relative, f"{what}, {relative},"))
+        root = folder_inside(directory, relative, f"{what}, {relative},")
+        return FolderValue(
+            relative.rsplit("/", 1)[-1], tree(root, f"{what}, {relative},")
+        )
+    if declared == "number":
+        if isinstance(value, bool) or not isinstance(value, int | Decimal):
+            raise GradingError(f"{what} is {_kind(value)}, not a number")
+        if isinstance(value, Decimal) and not value.is_finite():
+            raise GradingError(f"{what} is {value}, not a finite number")
+        return value
+    if declared == "boolean":
+        if not isinstance(value, bool):
+            raise GradingError(f"{what} is {_kind(value)}, not a boolean")
+        return value
+    if not isinstance(value, str):
+        raise GradingError(f"{what} is {_kind(value)}, not text")
+    return value
+
+
+def _kind(value: Any) -> str:
+    if isinstance(value, dict):
+        return "a file" if "file" in value else "a folder"
+    if isinstance(value, bool):
+        return "a boolean"
+    if isinstance(value, str):
+        return "text"
+    return "a number"
 
 
 def _tested(item: Item) -> str:
@@ -445,16 +585,18 @@ def _tested(item: Item) -> str:
     return item.test
 
 
-def _placed(value: Value, placer: Placer) -> Any:
+def _placed(value: Value, placer: Placer, port: str, folders: frozenset[str]) -> Any:
     if isinstance(value, FileValue):
-        return {"file": placer.place(value.path)}
-    if isinstance(value, list):
-        return [_placed(entry, placer) for entry in value]
+        if port in folders:
+            return {"folder": placer.file_as_folder(value.path, port)}
+        return {"file": placer.file(value.path)}
+    if isinstance(value, FolderValue):
+        return {"folder": placer.folder(value)}
     return value
 
 
 def _named(step: Step) -> str:
-    """A step as the contestant's log names it: its label and its primitive."""
+    """A step as the run log names it: its label and its primitive."""
     return f"{step.label} ({step.primitive})"
 
 
@@ -469,6 +611,7 @@ def _clock_name(ended: Ended) -> str:
 
 
 def _no_outputs(step: Step, ended: Ended) -> str:
+    """Why a container that was not killed wrote no outputs.json."""
     if ended.out_of_memory:
         return (
             f"step {step.label} was killed at its memory limit of "

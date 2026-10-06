@@ -19,20 +19,20 @@ def test_the_published_example_is_accepted(example_envelope: dict[str, Any]) -> 
 
 
 def test_a_future_schema_version_is_refused(example_envelope: dict[str, Any]) -> None:
-    example_envelope["schema_version"] = 5
+    example_envelope["schema_version"] = 6
 
     with pytest.raises(EnvelopeError) as refusal:
         load(_serialise(example_envelope))
 
     assert refusal.value.code == "schema_version_mismatch"
+    assert "6" in refusal.value.message
     assert "5" in refusal.value.message
-    assert "4" in refusal.value.message
 
 
 def test_the_previous_schema_version_is_refused(
     example_envelope: dict[str, Any],
 ) -> None:
-    example_envelope["schema_version"] = 2
+    example_envelope["schema_version"] = 4
 
     with pytest.raises(EnvelopeError) as refusal:
         load(_serialise(example_envelope))
@@ -118,6 +118,33 @@ def test_a_relative_checkout_path_is_refused(example_envelope: dict[str, Any]) -
 
     assert refusal.value.code == "schema_violation"
     assert "submission" in refusal.value.message
+
+
+def test_an_envelope_with_a_stage_is_refused(example_envelope: dict[str, Any]) -> None:
+    example_envelope["stage"] = "default"
+
+    with pytest.raises(EnvelopeError) as refusal:
+        load(_serialise(example_envelope))
+
+    assert refusal.value.code == "schema_violation"
+    assert "stage" in refusal.value.message
+
+
+def test_the_secrets_are_always_there_and_are_texts(
+    example_envelope: dict[str, Any],
+) -> None:
+    example_envelope["secrets"] = {}
+    assert load(_serialise(example_envelope))["secrets"] == {}
+
+    example_envelope["secrets"] = {"model-key": 7}
+    with pytest.raises(EnvelopeError) as refusal:
+        load(_serialise(example_envelope))
+    assert refusal.value.code == "schema_violation"
+
+    del example_envelope["secrets"]
+    with pytest.raises(EnvelopeError) as refusal:
+        load(_serialise(example_envelope))
+    assert "secrets" in refusal.value.message
 
 
 def test_bytes_that_are_not_json_are_refused() -> None:

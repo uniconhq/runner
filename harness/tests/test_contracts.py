@@ -1,12 +1,11 @@
 """What the plan, primitive and submission schemas accept and refuse. The
-verdict has its own file; the envelope is tested through the harness that
+result has its own file; the envelope is tested through the harness that
 reads it.
 """
 
 from __future__ import annotations
 
 import copy
-from pathlib import Path
 from typing import Any
 
 import pytest
@@ -26,19 +25,22 @@ def plan() -> dict[str, Any]:
     return example("plan.json")
 
 
-def test_the_example_plan_for_the_classic_workflow_is_accepted(
-    plan: dict[str, Any],
-) -> None:
+@pytest.fixture
+def declaration() -> dict[str, Any]:
+    return _yaml("primitive.yaml")
+
+
+def test_the_example_plan_is_accepted(plan: dict[str, Any]) -> None:
     assert violation(plan, "plan") is None
 
 
 def test_a_step_without_a_digest_is_refused(plan: dict[str, Any]) -> None:
-    plan["steps"][0]["image"] = "ghcr.io/uniconhq/primitive-compile:v1"
+    plan["steps"][0]["image"] = "ghcr.io/uniconhq/primitive-compile:v2"
     assert violation(plan, "plan") is not None
 
 
 def test_a_harness_image_by_tag_is_refused(plan: dict[str, Any]) -> None:
-    plan["harness_image"] = "ghcr.io/uniconhq/harness:v0.3.0"
+    plan["harness_image"] = "ghcr.io/uniconhq/harness:v0.6.0"
     assert violation(plan, "plan") is not None
 
 
@@ -50,10 +52,32 @@ def test_a_local_registry_with_a_port_is_a_digest_reference(
 
 
 @pytest.mark.parametrize(
-    "limit", ["time_ms", "cpu_ms", "memory_mb", "pids", "output_mb"]
+    "limit", ["time_ms", "cpu_ms", "memory_mb", "pids", "output_mb", "gpus"]
 )
 def test_a_step_missing_any_limit_is_refused(plan: dict[str, Any], limit: str) -> None:
     del plan["steps"][1]["limits"][limit]
+    assert violation(plan, "plan") is not None
+
+
+@pytest.mark.parametrize("field", ["network", "outputs"])
+def test_a_step_says_whether_it_has_the_network_and_what_it_writes(
+    plan: dict[str, Any], field: str
+) -> None:
+    del plan["steps"][0][field]
+    assert violation(plan, "plan") is not None
+
+
+def test_every_step_declares_its_outcome(plan: dict[str, Any]) -> None:
+    del plan["steps"][0]["outputs"]["outcome"]
+    assert violation(plan, "plan") is not None
+    plan["steps"][0]["outputs"]["outcome"] = "text"
+    assert violation(plan, "plan") is not None
+
+
+def test_an_optional_output_is_marked_after_its_name(plan: dict[str, Any]) -> None:
+    plan["steps"][0]["outputs"]["binary?"] = plan["steps"][0]["outputs"].pop("binary")
+    assert violation(plan, "plan") is None
+    plan["steps"][0]["outputs"]["?binary"] = "file"
     assert violation(plan, "plan") is not None
 
 
@@ -63,7 +87,13 @@ def test_a_step_with_both_inputs_and_a_batch_is_refused(plan: dict[str, Any]) ->
 
 
 def test_a_batch_step_naming_one_test_is_refused(plan: dict[str, Any]) -> None:
-    plan["steps"][1]["test"] = "1"
+    plan["steps"][1]["test"] = "main/1"
+    assert violation(plan, "plan") is not None
+
+
+@pytest.mark.parametrize("test", ["1", "main", "main/1/2", "main/a.b", "/1"])
+def test_a_test_id_is_a_group_and_a_test(plan: dict[str, Any], test: str) -> None:
+    plan["tests"][0] = test
     assert violation(plan, "plan") is not None
 
 
@@ -74,10 +104,17 @@ def test_a_batch_step_naming_one_test_is_refused(plan: dict[str, Any]) -> None:
         {"task": "../secret"},
         {"task": "/etc/passwd"},
         {"task": "data//1.in"},
+        {"task": "data/./1.in"},
         {"task": []},
-        {"submission": "submission", "field": "files"},
+        {"submission": "submission", "field": "language"},
         {"step": "compile"},
+        {"step": "compile", "output": "binary", "test": "main/1"},
         {"value": None},
+        {"value": [1]},
+        {"secret": ""},
+        {"template": "{0}"},
+        {"template": "{0}", "parts": []},
+        {"template": "{0}", "parts": [{"value": 1}]},
     ],
 )
 def test_an_input_value_is_exactly_one_known_form(
@@ -87,13 +124,41 @@ def test_an_input_value_is_exactly_one_known_form(
     assert violation(plan, "plan") is not None
 
 
-def test_the_verdict_needs_an_outcome(plan: dict[str, Any]) -> None:
-    del plan["verdict"]["outcome"]
+@pytest.mark.parametrize(
+    "value",
+    [
+        {"task": "rubric/"},
+        {"task": "tests/main/1/input"},
+        {"secret": "model-key"},
+        {"template": "{{0}}", "parts": [{"submission": "seed"}]},
+    ],
+)
+def test_the_value_forms_a_plan_carries(
+    plan: dict[str, Any], value: dict[str, Any]
+) -> None:
+    plan["steps"][0]["inputs"]["source"] = value
+    assert violation(plan, "plan") is None
+
+
+def test_a_per_test_contestant_input_is_a_file(plan: dict[str, Any]) -> None:
+    plan["contestant"]["seed"]["per_test"] = True
+    assert violation(plan, "plan") is not None
+
+
+def test_an_enum_contestant_input_carries_its_options(plan: dict[str, Any]) -> None:
+    del plan["contestant"]["language"]["options"]
+    assert violation(plan, "plan") is not None
+
+
+def test_a_report_entry_names_a_step_and_an_output(plan: dict[str, Any]) -> None:
+    plan["report"]["time_ms"] = {"step": "run"}
+    assert violation(plan, "plan") is not None
+    plan["report"]["time_ms"] = {"step": "run", "output": "time_ms", "fold": "sum"}
     assert violation(plan, "plan") is not None
 
 
 def test_a_plan_of_the_previous_version_is_refused(plan: dict[str, Any]) -> None:
-    plan["schema_version"] = 2
+    plan["schema_version"] = 4
     assert violation(plan, "plan") is not None
 
 
@@ -110,93 +175,108 @@ def test_every_primitive_example_is_accepted() -> None:
 
 
 def test_a_primitive_that_writes_no_outputs_fails_the_check() -> None:
-    assert violation({"schema_version": 4}, "primitive", "outputs_file") is not None
+    assert violation({"schema_version": 5}, "primitive", "outputs_file") is not None
 
 
 @pytest.mark.parametrize(
     "path",
     ["in/../../etc/passwd", "out/../../../host", "in//abs", "out/./x", "work/x", "out"],
 )
-def test_a_file_value_cannot_leave_its_directory(path: str) -> None:
-    outputs = {"schema_version": 4, "outputs": {"binary": {"file": path}}}
-    assert violation(outputs, "primitive", "outputs_file") is not None
+def test_a_file_or_folder_value_cannot_leave_its_directory(path: str) -> None:
+    for kind in ("file", "folder"):
+        outputs = {"schema_version": 5, "outputs": {"binary": {kind: path}}}
+        assert violation(outputs, "primitive", "outputs_file") is not None
 
 
 def test_outputs_carry_either_one_run_or_a_batch() -> None:
-    both = {"schema_version": 4, "outputs": {}, "batch": []}
+    both = {"schema_version": 5, "outputs": {}, "batch": []}
     assert violation(both, "primitive", "outputs_file") is not None
 
 
-def test_a_list_value_is_all_files_or_all_plain_values() -> None:
-    mixed = {"schema_version": 4, "outputs": {"x": [{"file": "out/a"}, "b"]}}
-    assert violation(mixed, "primitive", "outputs_file") is not None
+def test_a_value_is_never_a_list() -> None:
+    files = {"schema_version": 5, "outputs": {"x": [{"file": "out/a"}]}}
+    assert violation(files, "primitive", "outputs_file") is not None
+    texts = {"schema_version": 5, "outputs": {"x": ["a", "b"]}}
+    assert violation(texts, "primitive", "outputs_file") is not None
 
 
-def test_a_declaration_without_an_image_is_refused() -> None:
-    declaration = _yaml("primitive.yaml")
+def test_a_batch_item_is_keyed_by_its_test() -> None:
+    item = {"id": "main/1", "inputs": {}}
+    batch = {"schema_version": 5, "batch": [item]}
+    assert violation(batch, "primitive", "inputs_file") is not None
+
+
+def test_a_declaration_without_an_image_is_refused(
+    declaration: dict[str, Any],
+) -> None:
     del declaration["image"]
     assert violation(declaration, "primitive", "declaration") is not None
 
 
-def test_an_enum_carries_its_values_and_nothing_else_does() -> None:
-    declaration = _yaml("primitive.yaml")
-    enum = copy.deepcopy(declaration)
-    del enum["inputs"]["mode"]["values"]
-    assert violation(enum, "primitive", "declaration") is not None
-    text = copy.deepcopy(declaration)
-    text["inputs"]["note"]["values"] = ["a"]
-    assert violation(text, "primitive", "declaration") is not None
-
-
-def test_a_declared_type_is_one_of_the_seven() -> None:
-    declaration = _yaml("primitive.yaml")
-    declaration["outputs"]["output"]["type"] = "directory"
+@pytest.mark.parametrize("field", ["name", "version", "schema_version"])
+def test_a_declaration_names_neither_itself_nor_its_version(
+    declaration: dict[str, Any], field: str
+) -> None:
+    declaration[field] = "v2"
     assert violation(declaration, "primitive", "declaration") is not None
 
 
-def test_the_contract_example_compile_declaration_is_accepted(tmp_path: Path) -> None:
-    """The declaration exactly as the contract note writes it for compile."""
+def test_an_enum_carries_its_options_and_nothing_else_does(
+    declaration: dict[str, Any],
+) -> None:
+    enum = copy.deepcopy(declaration)
+    del enum["inputs"]["mode"]["options"]
+    assert violation(enum, "primitive", "declaration") is not None
+    text = copy.deepcopy(declaration)
+    text["inputs"]["api_key"]["options"] = ["a"]
+    assert violation(text, "primitive", "declaration") is not None
+
+
+def test_every_file_or_folder_input_says_whether_it_runs(
+    declaration: dict[str, Any],
+) -> None:
+    unmarked = copy.deepcopy(declaration)
+    del unmarked["inputs"]["binary"]["runs"]
+    assert violation(unmarked, "primitive", "declaration") is not None
+    folder = copy.deepcopy(declaration)
+    del folder["inputs"]["data"]["runs"]
+    assert violation(folder, "primitive", "declaration") is not None
+    scalar = copy.deepcopy(declaration)
+    scalar["inputs"]["time_limit"]["runs"] = False
+    assert violation(scalar, "primitive", "declaration") is not None
+
+
+def test_only_an_input_is_a_secret(declaration: dict[str, Any]) -> None:
+    declaration["outputs"]["output"]["secret"] = True
+    assert violation(declaration, "primitive", "declaration") is not None
+
+
+def test_a_declared_type_is_one_of_the_six_or_outcome(
+    declaration: dict[str, Any],
+) -> None:
+    declaration["outputs"]["output"]["type"] = "file[]"
+    assert violation(declaration, "primitive", "declaration") is not None
+    declaration["outputs"]["output"]["type"] = "outcome"
+    assert violation(declaration, "primitive", "declaration") is not None
+
+
+def test_a_declaration_carries_all_six_limits(declaration: dict[str, Any]) -> None:
+    del declaration["limits"]["gpus"]
+    assert violation(declaration, "primitive", "declaration") is not None
+
+
+def test_the_compile_declaration_of_the_spec_is_accepted() -> None:
     text = (
-        "name: unicon/compile\n"
-        "version: v1\n"
         f"image: ghcr.io/uniconhq/primitive-compile@sha256:{'0' * 64}\n"
-        "batch: false\n"
         "limits: {time_ms: 60000, cpu_ms: 60000, memory_mb: 1024, pids: 128, "
-        "output_mb: 64}\n"
-        "limits_from: {}\n"
+        "output_mb: 64, gpus: 0}\n"
         "inputs:\n"
-        "  source: {type: file}\n"
-        "  language: {type: enum, values: [python, cpp, c, java]}\n"
+        "  source: {type: folder, runs: true}\n"
+        "  entry: {type: text, optional: true}\n"
+        "  language: {type: enum, options: [python, cpp, c, java]}\n"
         "outputs:\n"
-        "  binary: {type: file, optional: true}\n"
-        "  compile_log: {type: text}\n"
-        "  outcome: {type: outcome}\n"
-    )
-    assert violation(yaml.safe_load(text), "primitive", "declaration") is None
-
-
-def test_sandbox_runs_own_declaration_is_accepted() -> None:
-    """limits_from without a scale, as the sandbox-run repo writes it."""
-    text = (
-        "name: unicon/sandbox-run\n"
-        "version: v1\n"
-        f"image: ghcr.io/uniconhq/primitive-sandbox-run@sha256:{'0' * 64}\n"
-        "batch: true\n"
-        "limits: {time_ms: 5000, cpu_ms: 5000, memory_mb: 256, pids: 128, "
-        "output_mb: 64}\n"
-        "limits_from:\n"
-        "  time_ms: {input: time_limit, scale: 2000, add: 3000}\n"
-        "  cpu_ms: {input: time_limit, scale: 2000, add: 3000}\n"
-        "  memory_mb: {input: memory_limit, add: 256}\n"
-        "inputs:\n"
         "  binary: {type: file}\n"
-        "  input: {type: file}\n"
-        "  time_limit: {type: number}\n"
-        "  memory_limit: {type: number}\n"
-        "outputs:\n"
-        "  output: {type: file}\n"
-        "  time_ms: {type: number}\n"
-        "  memory_kb: {type: number}\n"
+        "  compile_log: {type: text}\n"
         "  outcome: {type: outcome}\n"
     )
     assert violation(yaml.safe_load(text), "primitive", "declaration") is None
@@ -212,11 +292,20 @@ def test_the_example_submission_is_accepted() -> None:
         {"files": []},
         {"files": ["main.py"]},
         {"files": ["files/submission/../x"]},
-        {"files": ["files/submission/dir/main.py"]},
+        {"files": ["files/submission/./x"]},
+        {"files": ["files/submission"]},
         {"value": [1]},
+        {"value": None},
         {"files": ["files/a/b"], "value": 1},
+        {"files": ["files/a/b"], "language": "python"},
     ],
 )
 def test_a_submission_entry_is_files_or_a_value(entry: dict[str, Any]) -> None:
-    document = {"schema_version": 4, "inputs": {"submission": entry}}
+    document = {"schema_version": 5, "inputs": {"submission": entry}}
     assert violation(document, "submission") is not None
+
+
+def test_a_folder_input_may_hold_nested_paths() -> None:
+    entry = {"files": ["files/submission/main.py", "files/submission/lib/a.py"]}
+    document = {"schema_version": 5, "inputs": {"submission": entry}}
+    assert violation(document, "submission") is None

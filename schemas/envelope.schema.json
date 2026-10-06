@@ -8,20 +8,20 @@
     "schema_version",
     "grading_id",
     "submission",
-    "stage",
     "attempt",
     "checkouts",
     "callback",
     "log_put",
     "deadline",
-    "limits"
+    "limits",
+    "secrets"
   ],
   "additionalProperties": false,
   "properties": {
     "schema_version": {
       "description": "The envelope shape this file is written against. The harness refuses a version it does not speak instead of guessing at the fields.",
       "type": "integer",
-      "const": 4
+      "const": 5
     },
     "grading_id": {
       "description": "The gradings row this run belongs to. Also passed to the image as UNICON_GRADING_ID; the harness refuses an envelope whose id disagrees with its environment.",
@@ -29,18 +29,13 @@
       "format": "uuid"
     },
     "submission": { "$ref": "#/$defs/submission" },
-    "stage": {
-      "description": "Which grading stage this attempt is, for example public or final. Stage names are the contest's, not the platform's. The plan to run is plans/<stage>.json in the publication checkout.",
-      "type": "string",
-      "minLength": 1
-    },
     "attempt": {
-      "description": "1 for the first grading of this submission in this stage, higher for a rejudge. Part of the result key, so a rejudge overwrites nothing.",
+      "description": "1 for the first grading of this submission, higher for a retry or a rejudge. Part of the log's key, so a later attempt overwrites nothing.",
       "type": "integer",
       "minimum": 1
     },
     "checkouts": {
-      "description": "Where the CI put the two checkouts, as absolute paths inside the harness container: /woodpecker/task and /woodpecker/submission, the paths the forge repo's CI answer clones into. The publication checkout holds the task files, the tests and the plan at the publication's commit, with its large files pulled; the submission checkout holds submission.json and the contestant's files at the submission's commit.",
+      "description": "Where the CI put the two checkouts, as absolute paths inside the harness container: /woodpecker/task and /woodpecker/submission, the paths the forge repo's CI answer clones into. The publication checkout holds the task files, the tests and plans/plan.json at the publication's commit, with its large files pulled; the submission checkout holds submission.json and the contestant's files at the submission's commit.",
       "type": "object",
       "required": ["task", "submission"],
       "additionalProperties": false,
@@ -58,7 +53,7 @@
       }
     },
     "callback": {
-      "description": "Where the harness posts the started and progress events and the final verdict, each with the token as a bearer credential. The token is good for this run only.",
+      "description": "Where the harness posts the started and progress events and the final result, each with the token as a bearer credential. The token is good for this run only.",
       "type": "object",
       "required": ["url", "token"],
       "additionalProperties": false,
@@ -81,7 +76,7 @@
       "format": "uri"
     },
     "deadline": {
-      "description": "After this instant the callback token is dead and the forge repo treats the run as lost. The harness stops rather than posting a verdict it cannot deliver.",
+      "description": "After this instant the callback token is dead and the forge repo treats the run as lost. The harness stops rather than posting a result it cannot deliver.",
       "type": "string",
       "format": "date-time"
     },
@@ -97,6 +92,12 @@
           "minimum": 1
         }
       }
+    },
+    "secrets": {
+      "description": "The value of every secret the plan names, by name, which the forge reads from the org's store at dispatch. The harness writes each into inputs.json of the steps that take it, as text and nowhere else, and replaces any occurrence of a value in a reported text with ***. Empty when the plan names none.",
+      "type": "object",
+      "propertyNames": { "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$" },
+      "additionalProperties": { "type": "string" }
     }
   },
   "$defs": {

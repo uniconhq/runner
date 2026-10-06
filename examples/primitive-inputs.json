@@ -1,11 +1,15 @@
 {
-  "schema_version": 4,
+  "schema_version": 5,
   "inputs": {
-    "source": { "file": "in/1/main.py" },
-    "headers": [{ "file": "in/2/util.h" }, { "file": "in/3/io.h" }],
-    "results": ["accepted", "wrong_answer", "accepted"],
+    "source": {
+      "folder": "in/1/source"
+    },
+    "entry": "main.py",
     "language": "python",
     "optimise": true,
-    "stack_mb": 256
+    "stack_mb": 256,
+    "input": {
+      "file": "in/2/input"
+    }
   }
 }

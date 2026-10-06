@@ -62,3 +62,12 @@ def test_lines_are_stamped_with_seconds_since_the_run_began() -> None:
     log = RunLog(clock=lambda: next(ticks), echo=False)
     log.tell("hello")
     assert log.text().startswith("[    1.500s] hello")
+
+
+def test_a_secret_holding_another_is_hidden_whole() -> None:
+    log = RunLog(echo=False)
+    log.hide("key")
+    log.hide("key-and-more")
+    log.tell("sent key-and-more")
+
+    assert log.text().endswith(f"sent {REDACTED}\n")

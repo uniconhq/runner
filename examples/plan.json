@@ -1,95 +1,344 @@
 {
-  "schema_version": 4,
+  "schema_version": 5,
   "harness_image": "ghcr.io/uniconhq/harness@sha256:3f1c0a8b5d6e4f2a1b0c9d8e7f6a5b4c3d2e1f0a9b8c7d6e5f4a3b2c1d0e9f8a",
-  "stage": "default",
-  "tests": ["1", "2", "10"],
+  "tests": [
+    "main/1",
+    "main/2",
+    "samples/1"
+  ],
+  "contestant": {
+    "submission": {
+      "type": "file"
+    },
+    "language": {
+      "type": "enum",
+      "options": [
+        "c",
+        "cpp",
+        "java",
+        "python"
+      ]
+    },
+    "seed": {
+      "type": "number"
+    },
+    "answers": {
+      "type": "file",
+      "per_test": true
+    }
+  },
   "steps": [
     {
       "id": "compile",
-      "primitive": "compile@v1",
+      "primitive": "unicon/compile@v2",
       "image": "ghcr.io/uniconhq/primitive-compile@sha256:1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f809",
-      "limits": { "time_ms": 60000, "cpu_ms": 60000, "memory_mb": 1024, "pids": 128, "output_mb": 64 },
+      "network": false,
+      "limits": {
+        "time_ms": 60000,
+        "cpu_ms": 60000,
+        "memory_mb": 1024,
+        "pids": 128,
+        "output_mb": 64,
+        "gpus": 0
+      },
+      "outputs": {
+        "binary": "file",
+        "compile_log": "text",
+        "outcome": "outcome"
+      },
+      "folders": [
+        "source"
+      ],
       "inputs": {
-        "source": { "submission": "submission" },
-        "language": { "submission": "submission", "field": "language" }
+        "source": {
+          "submission": "submission"
+        },
+        "language": {
+          "submission": "language"
+        }
       }
     },
     {
       "id": "run",
-      "primitive": "sandbox-run@v1",
+      "primitive": "unicon/sandbox-run@v2",
       "image": "ghcr.io/uniconhq/primitive-sandbox-run@sha256:2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a",
-      "limits": { "time_ms": 12000, "cpu_ms": 12000, "memory_mb": 384, "pids": 64, "output_mb": 64 },
+      "network": false,
+      "limits": {
+        "time_ms": 21000,
+        "cpu_ms": 21000,
+        "memory_mb": 512,
+        "pids": 128,
+        "output_mb": 64,
+        "gpus": 0
+      },
+      "outputs": {
+        "output": "file",
+        "time_ms": "number",
+        "memory_kb": "number",
+        "outcome": "outcome"
+      },
       "batch": [
         {
-          "test": "1",
+          "test": "main/1",
           "inputs": {
-            "binary": { "step": "compile", "output": "binary" },
-            "input": { "task": "data/testcases/1.in" },
-            "time_limit": { "value": 2.0 },
-            "memory_limit": { "value": 256 }
+            "binary": {
+              "step": "compile",
+              "output": "binary"
+            },
+            "input": {
+              "task": "tests/main/1/input"
+            },
+            "args": {
+              "template": "--seed {0} --verbose {{off}}",
+              "parts": [
+                {
+                  "submission": "seed"
+                }
+              ]
+            },
+            "time_limit": {
+              "value": 2
+            },
+            "memory_limit": {
+              "value": 256
+            }
           }
         },
         {
-          "test": "2",
+          "test": "main/2",
           "inputs": {
-            "binary": { "step": "compile", "output": "binary" },
-            "input": { "task": "data/testcases/2.in" },
-            "time_limit": { "value": 2.0 },
-            "memory_limit": { "value": 256 }
+            "binary": {
+              "step": "compile",
+              "output": "binary"
+            },
+            "input": {
+              "task": "tests/main/2/input"
+            },
+            "args": {
+              "template": "--seed {0} --verbose {{off}}",
+              "parts": [
+                {
+                  "submission": "seed"
+                }
+              ]
+            },
+            "time_limit": {
+              "value": 2
+            },
+            "memory_limit": {
+              "value": 256
+            }
           }
         },
         {
-          "test": "10",
+          "test": "samples/1",
           "inputs": {
-            "binary": { "step": "compile", "output": "binary" },
-            "input": { "task": "data/testcases/10.in" },
-            "time_limit": { "value": 2.0 },
-            "memory_limit": { "value": 256 }
+            "binary": {
+              "step": "compile",
+              "output": "binary"
+            },
+            "input": {
+              "task": "tests/samples/1/input"
+            },
+            "args": {
+              "template": "--seed {0} --verbose {{off}}",
+              "parts": [
+                {
+                  "submission": "seed"
+                }
+              ]
+            },
+            "time_limit": {
+              "value": 2
+            },
+            "memory_limit": {
+              "value": 256
+            }
           }
         }
       ]
     },
     {
       "id": "check",
-      "primitive": "diff-check@v1",
+      "primitive": "unicon/diff-check@v2",
       "image": "ghcr.io/uniconhq/primitive-diff-check@sha256:3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2b",
-      "limits": { "time_ms": 15000, "cpu_ms": 15000, "memory_mb": 128, "pids": 16, "output_mb": 8 },
-      "test": "1",
+      "network": false,
+      "limits": {
+        "time_ms": 15000,
+        "cpu_ms": 15000,
+        "memory_mb": 256,
+        "pids": 32,
+        "output_mb": 1,
+        "gpus": 0
+      },
+      "outputs": {
+        "outcome": "outcome"
+      },
+      "batch": [
+        {
+          "test": "main/1",
+          "inputs": {
+            "actual": {
+              "step": "run",
+              "output": "output"
+            },
+            "expected": {
+              "task": "tests/main/1/answer"
+            }
+          }
+        },
+        {
+          "test": "main/2",
+          "inputs": {
+            "actual": {
+              "step": "run",
+              "output": "output"
+            },
+            "expected": {
+              "task": "tests/main/2/answer"
+            }
+          }
+        },
+        {
+          "test": "samples/1",
+          "inputs": {
+            "actual": {
+              "step": "run",
+              "output": "output"
+            },
+            "expected": {
+              "task": "tests/samples/1/answer"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "judge",
+      "primitive": "acme/rubric@v1",
+      "image": "ghcr.io/acme/rubric@sha256:4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c",
+      "network": true,
+      "limits": {
+        "time_ms": 60000,
+        "cpu_ms": 60000,
+        "memory_mb": 512,
+        "pids": 64,
+        "output_mb": 8,
+        "gpus": 0
+      },
+      "outputs": {
+        "fraction?": "number",
+        "note?": "text",
+        "outcome": "outcome"
+      },
+      "test": "main/1",
       "inputs": {
-        "actual": { "step": "run", "output": "output", "test": "1" },
-        "expected": { "task": "data/testcases/1.ans" }
+        "answer": {
+          "step": "run",
+          "output": "output"
+        },
+        "rubric": {
+          "task": "rubric/"
+        },
+        "api_key": {
+          "secret": "model-key"
+        },
+        "strict": {
+          "value": true
+        }
       }
     },
     {
-      "id": "check",
-      "primitive": "diff-check@v1",
-      "image": "ghcr.io/uniconhq/primitive-diff-check@sha256:3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2b",
-      "limits": { "time_ms": 15000, "cpu_ms": 15000, "memory_mb": 128, "pids": 16, "output_mb": 8 },
-      "test": "2",
+      "id": "judge",
+      "primitive": "acme/rubric@v1",
+      "image": "ghcr.io/acme/rubric@sha256:4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c",
+      "network": true,
+      "limits": {
+        "time_ms": 60000,
+        "cpu_ms": 60000,
+        "memory_mb": 512,
+        "pids": 64,
+        "output_mb": 8,
+        "gpus": 0
+      },
+      "outputs": {
+        "fraction?": "number",
+        "note?": "text",
+        "outcome": "outcome"
+      },
+      "test": "main/2",
       "inputs": {
-        "actual": { "step": "run", "output": "output", "test": "2" },
-        "expected": { "task": "data/testcases/2.ans" }
+        "answer": {
+          "step": "run",
+          "output": "output"
+        },
+        "rubric": {
+          "task": "rubric/"
+        },
+        "api_key": {
+          "secret": "model-key"
+        },
+        "strict": {
+          "value": true
+        }
       }
     },
     {
-      "id": "check",
-      "primitive": "diff-check@v1",
-      "image": "ghcr.io/uniconhq/primitive-diff-check@sha256:3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2b",
-      "limits": { "time_ms": 15000, "cpu_ms": 15000, "memory_mb": 128, "pids": 16, "output_mb": 8 },
-      "test": "10",
+      "id": "judge",
+      "primitive": "acme/rubric@v1",
+      "image": "ghcr.io/acme/rubric@sha256:4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c",
+      "network": true,
+      "limits": {
+        "time_ms": 60000,
+        "cpu_ms": 60000,
+        "memory_mb": 512,
+        "pids": 64,
+        "output_mb": 8,
+        "gpus": 0
+      },
+      "outputs": {
+        "fraction?": "number",
+        "note?": "text",
+        "outcome": "outcome"
+      },
+      "test": "samples/1",
       "inputs": {
-        "actual": { "step": "run", "output": "output", "test": "10" },
-        "expected": { "task": "data/testcases/10.ans" }
+        "answer": {
+          "step": "run",
+          "output": "output"
+        },
+        "rubric": {
+          "task": "rubric/"
+        },
+        "api_key": {
+          "secret": "model-key"
+        },
+        "strict": {
+          "value": true
+        }
       }
     }
   ],
-  "verdict": {
-    "outcome": { "step": "check", "output": "outcome" },
-    "metrics": { "points": { "step": "check", "output": "points" } },
-    "tests": {
-      "time_ms": { "step": "run", "output": "time_ms" },
-      "memory_kb": { "step": "run", "output": "memory_kb" }
+  "report": {
+    "time_ms": {
+      "step": "run",
+      "output": "time_ms",
+      "at_least": 0
     },
-    "summary": { "step": "compile", "output": "compile_log" }
+    "memory_kb": {
+      "step": "run",
+      "output": "memory_kb",
+      "at_least": 0
+    },
+    "fraction": {
+      "step": "judge",
+      "output": "fraction",
+      "at_least": 0,
+      "at_most": 1
+    },
+    "log": {
+      "step": "compile",
+      "output": "compile_log"
+    }
   }
 }

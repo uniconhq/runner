@@ -48,5 +48,9 @@ def made(volume: Path) -> Checkouts:
     """Three tests of the sum task and a submission that solves them."""
     return checkouts(
         volume,
-        {"1": ("1 2\n", "3\n"), "2": ("10 20 30\n", "60\n"), "10": ("5\n", "5\n")},
+        {
+            "main/1": ("1 2\n", "3\n"),
+            "main/2": ("10 20 30\n", "60\n"),
+            "main/10": ("5\n", "5\n"),
+        },
     )

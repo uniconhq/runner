@@ -1,7 +1,12 @@
 {
-  "schema_version": 4,
+  "schema_version": 5,
   "outputs": {
-    "binary": { "file": "out/binary" },
+    "binary": {
+      "file": "out/binary"
+    },
+    "build": {
+      "folder": "out/build"
+    },
     "compile_log": "main.py: compiled",
     "outcome": "accepted"
   }
