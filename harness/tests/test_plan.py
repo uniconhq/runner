@@ -98,6 +98,17 @@ def test_a_reference_to_a_later_step_is_refused() -> None:
     assert "does not run before it" in _refusal(plan)
 
 
+def test_an_entry_of_a_per_test_step_reading_its_own_step_is_refused() -> None:
+    """The entry for main/2 comes after main/1's, which declares output, but
+    a step never reads itself.
+    """
+    plan = classic_plan(TESTS)
+    plan["steps"][3]["inputs"]["actual"] = {"step": "check", "output": "outcome"}
+    assert "input actual of step check for test main/2 reads its own step check" in (
+        _refusal(plan)
+    )
+
+
 def test_a_reference_to_a_step_the_plan_does_not_have_is_refused() -> None:
     plan = classic_plan(TESTS)
     plan["steps"][1]["batch"][0]["inputs"]["binary"]["step"] = "build"
@@ -196,7 +207,14 @@ def test_a_report_naming_an_undeclared_output_is_refused() -> None:
 def test_a_report_of_a_file_is_refused() -> None:
     plan = classic_plan(TESTS)
     plan["report"]["out"] = {"step": "run", "output": "output"}
-    assert "a file, which a result cannot carry" in _refusal(plan)
+    assert "of type file, and a result carries only text and numbers" in _refusal(plan)
+
+
+def test_a_report_of_an_enum_is_refused() -> None:
+    plan = classic_plan(TESTS)
+    plan["steps"][0]["outputs"]["dialect"] = "enum"
+    plan["report"]["dialect"] = {"step": "compile", "output": "dialect"}
+    assert "of type enum, and a result carries only" in _refusal(plan)
 
 
 def test_bounds_on_a_text_are_refused() -> None:

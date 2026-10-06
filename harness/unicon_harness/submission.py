@@ -5,10 +5,12 @@ plan declares.
 A file input gives its one file and a folder input its files, each under
 `files/<input id>/` at its path in the folder. A per-test file input gives at
 most one file per test, at `files/<input id>/<group>/<test>` or
-`files/<input id>/<group>/<test>.<ending>`; a file that names no test of the
-plan is refused, and a test without one is skipped. A text, number, boolean
-or enum input gives its value. Numbers are read as the decimals they are
-written as.
+`files/<input id>/<group>/<test>.<ending>`, the ending not empty. A file
+named any other way, or a second file for one test, is refused; a file for a
+test the plan does not have, which a rejudge against a plan that dropped or
+renamed the test meets, is noted in the CI log and not read; and a test
+without a file is skipped. A text, number, boolean or enum input gives its
+value. Numbers are read as the decimals they are written as.
 """
 
 from __future__ import annotations
@@ -24,6 +26,7 @@ from unicon_harness.contracts import SCHEMA_VERSION, violation
 from unicon_harness.faults import GradingError
 from unicon_harness.files import inside, read_bounded
 from unicon_harness.plan import ContestantInput, Plan
+from unicon_harness.runlog import RunLog
 
 SUBMISSION_FILE = "submission.json"
 SUBMISSION_LIMIT_BYTES = 1024 * 1024
@@ -43,7 +46,7 @@ class Given:
     value: Scalar | None = None
 
 
-def load(checkout: Path, plan: Plan) -> dict[str, Given]:
+def load(checkout: Path, plan: Plan, log: RunLog) -> dict[str, Given]:
     path = inside(checkout, SUBMISSION_FILE, SUBMISSION_FILE)
     raw = read_bounded(path, SUBMISSION_LIMIT_BYTES, SUBMISSION_FILE)
     try:
@@ -76,7 +79,9 @@ def load(checkout: Path, plan: Plan) -> dict[str, Given]:
                 "declare"
             )
     return {
-        input_id: _given(checkout, plan, input_id, plan.contestant[input_id], entry)
+        input_id: _given(
+            checkout, plan, log, input_id, plan.contestant[input_id], entry
+        )
         for input_id, entry in entries.items()
     }
 
@@ -84,6 +89,7 @@ def load(checkout: Path, plan: Plan) -> dict[str, Given]:
 def _given(
     checkout: Path,
     plan: Plan,
+    log: RunLog,
     input_id: str,
     declared: ContestantInput,
     entry: dict[str, Any],
@@ -102,7 +108,7 @@ def _given(
         source = inside(checkout, relative, f"submission file {relative}")
         files.append((relative.removeprefix(prefix), source))
     if declared.per_test:
-        return Given(tests=_by_test(where, plan, files))
+        return Given(tests=_by_test(where, plan, log, files))
     if declared.type == "file" and len(files) != 1:
         raise GradingError(f"{where} gives {len(files)} files, and it is one file")
     return Given(files=tuple(files))
@@ -125,15 +131,26 @@ def _value(where: str, declared: ContestantInput, value: Scalar) -> Scalar:
     return value
 
 
-def _by_test(where: str, plan: Plan, files: list[tuple[str, Path]]) -> dict[str, Path]:
+def _by_test(
+    where: str, plan: Plan, log: RunLog, files: list[tuple[str, Path]]
+) -> dict[str, Path]:
     known = set(plan.tests)
-    tests: dict[str, Path] = {}
+    named: dict[str, Path] = {}
     for relative, source in files:
         matched = PER_TEST_FILE.match(relative)
-        test = matched.group(1) if matched else None
-        if test is None or test not in known:
-            raise GradingError(f"{where} gives {relative}, which names no test")
-        if test in tests:
+        if matched is None:
+            raise GradingError(
+                f"{where} gives {relative}, which is not named <group>/<test> or "
+                "<group>/<test>.<ending>"
+            )
+        test = matched.group(1)
+        if test in named:
             raise GradingError(f"{where} gives more than one file for test {test}")
-        tests[test] = source
-    return tests
+        named[test] = source
+    for test in named:
+        if test not in known:
+            log.event(
+                f"{where} gives a file for test {test}, which the plan does not "
+                "have; it is not read"
+            )
+    return {test: source for test, source in named.items() if test in known}

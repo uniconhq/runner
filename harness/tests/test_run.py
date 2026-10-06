@@ -144,9 +144,11 @@ def test_a_correct_submission_is_accepted_on_every_test(
     assert all(row["values"]["memory_kb"] == 1024 for row in result["tests"])
     assert all(isinstance(row["values"]["time_ms"], int) for row in result["tests"])
     assert result["values"] == {"log": "main.py: compiled for python"}
+    assert result["stopped_by"] is None
     assert set(result) == {
         "schema_version",
         "stopped",
+        "stopped_by",
         "tests",
         "values",
         "run_log",
@@ -255,6 +257,7 @@ def test_a_compile_error_stops_the_run_and_skips_every_test(
     result = platform.result()
     assert results.check(result) is None
     assert result["stopped"] == "compile_error"
+    assert result["stopped_by"] == "compile"
     assert result["error"] is None
     assert rows(result) == {
         "main/1": "skipped",
@@ -299,6 +302,7 @@ def test_a_system_error_part_way_keeps_the_rows_it_had(
     result = platform.result()
     assert results.check(result) is None
     assert result["stopped"] == "system_error"
+    assert result["stopped_by"] is None
     assert (
         "step check for test main/10 could not work: the disk broke"
         in (result["error"])
@@ -652,6 +656,61 @@ def test_a_secret_in_a_fault_is_masked_in_the_error(
     )
 
 
+def test_a_port_wired_to_an_optional_output_not_written_is_left_out(
+    judged: Checkouts, docker: FakeDocker, platform: Platform
+) -> None:
+    """The judge accepts without its optional note, so the explain step after
+    it gets no note port at all.
+    """
+    plan = judged_plan(list(judged.tests))
+    plan["steps"] += [
+        {
+            "id": "explain",
+            "primitive": "acme/explain@v1",
+            "image": JUDGE,
+            "network": False,
+            "limits": limits(),
+            "outputs": {"outcome": "outcome"},
+            "test": test,
+            "inputs": {
+                "note": {"step": "judge", "output": "note"},
+                "fraction": {"step": "judge", "output": "fraction"},
+            },
+        }
+        for test in judged.tests
+    ]
+    judged.write_plan(plan)
+    docker.does(
+        "judge",
+        Does(
+            before=writes(
+                '{"schema_version": 5, "outputs": '
+                '{"fraction": 1, "outcome": "accepted"}}'
+            ),
+            runs_fixture=False,
+        ),
+    )
+    docker.does(
+        "explain",
+        Does(
+            before=writes('{"schema_version": 5, "outputs": {"outcome": "accepted"}}'),
+            runs_fixture=False,
+        ),
+    )
+    log = RunLog(echo=False)
+
+    assert grade(judged, docker, platform, log=log) == EXIT_OK
+
+    result = platform.result()
+    assert result["stopped"] is None
+    assert set(rows(result).values()) == {"accepted"}
+    assert inputs_of(judged, "explain")["inputs"] == {"fraction": 1}
+    assert (
+        "input note of step explain for test main/1 is left out: step judge did not "
+        "write its optional output note"
+    ) in log.staff_text()
+
+
 def test_a_folder_of_the_task_given_to_a_folder_port_keeps_its_layout(
     judged: Checkouts, docker: FakeDocker, platform: Platform
 ) -> None:
@@ -754,7 +813,8 @@ def test_every_step_container_carries_the_whole_sandbox_set(
         assert work["VolumeOptions"]["NoCopy"] is True
         assert tmp["Type"] == "tmpfs" and tmp["Target"] == "/tmp"
     run = docker.bodies()[1]
-    assert run["Labels"]["unicon.time_ms"] == "30000"
+    # The step's 30 s and the container's start allowance of 10 s.
+    assert run["Labels"]["unicon.time_ms"] == "40000"
 
 
 def test_every_container_is_removed(
@@ -939,31 +999,46 @@ def test_a_run_once_step_past_its_time_limit_is_killed_and_a_system_error(
     assert all(c.removed for c in docker.containers.values())
 
 
-def test_a_single_test_step_killed_at_its_limits_gives_that_test_the_limit(
-    made: Checkouts, docker: FakeDocker, platform: Platform
+@pytest.mark.parametrize(
+    ("does", "found"),
+    [
+        (
+            Does(hangs=True),
+            "step check for test main/2 was killed at its time limit of 10000 ms",
+        ),
+        (
+            Does(exit_code=137, out_of_memory=True, runs_fixture=False),
+            "step check for test main/2 was killed at its memory limit of 256 MB",
+        ),
+    ],
+)
+def test_a_single_test_step_killed_at_its_limits_is_a_system_error(
+    made: Checkouts, docker: FakeDocker, platform: Platform, does: Does, found: str
 ) -> None:
+    """The primitive keeps the contestant's program within the test's limits,
+    so a check that outran its container's own is a fault, not the test's.
+    """
     checks: list[FakeContainer] = []
 
     def on_create(step: str, container: FakeContainer) -> None:
-        if step != "check":
-            return
-        checks.append(container)
-        if len(checks) == 2:
-            container.does = Does(hangs=True)
-        if len(checks) == 3:
-            container.does = Does(exit_code=137, out_of_memory=True, runs_fixture=False)
+        if step == "check":
+            checks.append(container)
+            if len(checks) == 2:
+                container.does = does
 
     docker.on_create = on_create
 
     grade(made, docker, platform)
 
     result = platform.result()
+    assert result["stopped"] == "system_error"
+    assert result["stopped_by"] is None
+    assert found in result["error"]
     assert rows(result) == {
         "main/1": "accepted",
-        "main/2": "time_limit",
-        "main/10": "memory_limit",
+        "main/2": "skipped",
+        "main/10": "skipped",
     }
-    assert result["stopped"] is None
 
 
 def test_a_batch_killed_at_its_memory_limit_is_a_system_error(
@@ -975,7 +1050,7 @@ def test_a_batch_killed_at_its_memory_limit_is_a_system_error(
 
     result = platform.result()
     assert result["stopped"] == "system_error"
-    assert "batch of step run was killed at its memory limit" in result["error"]
+    assert "step run was killed at its memory limit of 256 MB" in result["error"]
 
 
 def test_valid_outputs_count_even_when_docker_saw_an_oom_kill_inside(
@@ -1124,24 +1199,80 @@ def test_a_submission_that_does_not_match_the_plan_is_a_system_error(
     assert docker.order == []
 
 
-def test_a_per_test_file_that_names_no_test_is_a_system_error(
+def answers_plan(tests: list[str]) -> dict[str, Any]:
+    """The classic plan with a per-test answers input every check reads."""
+    plan = classic_plan(tests)
+    plan["contestant"]["answers"] = {"type": "file", "per_test": True}
+    for check in plan["steps"][2:]:
+        check["inputs"]["expected"] = {"submission": "answers"}
+    return plan
+
+
+def test_a_per_test_file_for_a_test_the_plan_does_not_have_is_not_read(
     made: Checkouts, docker: FakeDocker, platform: Platform
 ) -> None:
-    plan = classic_plan(list(made.tests))
-    plan["contestant"]["answers"] = {"type": "file", "per_test": True}
-    made.write_plan(plan)
+    """A rejudge against a plan that dropped main/3: its file is noted for
+    staff and the tests the plan has are graded.
+    """
+    made.write_plan(answers_plan(list(made.tests)))
+    answers = {
+        f"files/answers/{test}.txt": answer for test, (_, answer) in made.tests.items()
+    }
     made.write_submission(
         {
             "submission": {"files": ["files/submission/main.py"]},
             "language": {"value": "python"},
-            "answers": {"files": ["files/answers/main/3.txt"]},
+            "answers": {"files": [*answers, "files/answers/main/3.txt"]},
         },
-        {"files/answers/main/3.txt": "3\n"},
+        answers | {"files/answers/main/3.txt": "3\n"},
+    )
+    log = RunLog(echo=False)
+
+    assert grade(made, docker, platform, log=log) == EXIT_OK
+
+    result = platform.result()
+    assert result["stopped"] is None
+    assert set(rows(result).values()) == {"accepted"}
+    assert (
+        "input answers of submission.json gives a file for test main/3, which the "
+        "plan does not have; it is not read"
+    ) in log.staff_text()
+    assert "main/3" not in platform.logs[0].decode()
+
+
+@pytest.mark.parametrize(
+    ("files", "found"),
+    [
+        (["main/1."], "gives main/1., which is not named <group>/<test>"),
+        (["main"], "gives main, which is not named <group>/<test>"),
+        (["main/1/x"], "gives main/1/x, which is not named <group>/<test>"),
+        (["main/1", "main/1.txt"], "gives more than one file for test main/1"),
+        (["main/3", "main/3.txt"], "gives more than one file for test main/3"),
+    ],
+)
+def test_a_malformed_per_test_file_or_a_second_one_is_a_system_error(
+    made: Checkouts,
+    docker: FakeDocker,
+    platform: Platform,
+    files: list[str],
+    found: str,
+) -> None:
+    made.write_plan(answers_plan(list(made.tests)))
+    made.write_submission(
+        {
+            "submission": {"files": ["files/submission/main.py"]},
+            "language": {"value": "python"},
+            "answers": {"files": [f"files/answers/{name}" for name in files]},
+        },
+        {f"files/answers/{name}": "3\n" for name in files},
     )
 
     grade(made, docker, platform)
 
-    assert "gives main/3.txt, which names no test" in platform.result()["error"]
+    result = platform.result()
+    assert result["stopped"] == "system_error"
+    assert found in result["error"]
+    assert docker.order == []
 
 
 @pytest.mark.skipif(os.name == "nt", reason="symbolic links need privileges on Windows")

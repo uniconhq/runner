@@ -8,6 +8,13 @@ contestant code became root in a user namespace of its own), a non-root user,
 no swap, and the plan's memory, CPU, pids and wall-clock limits. The socket
 filter refuses a create that carries less, so the set is enforced on the
 machine and not only here.
+
+A step's `time_ms` is what its primitive needs to do its work, summed over a
+batch's items; the container gets `START_ALLOWANCE_SECONDS` more for its own
+start, the interpreter and the primitive loading before the first item, which
+no item's allowance should pay for. The forge's run budget keeps 15 seconds
+per step for this (`STEP_OVERHEAD`), so the allowance never takes the run past
+the wall clock its envelope gives.
 """
 
 from __future__ import annotations
@@ -28,7 +35,10 @@ from unicon_harness.workspace import Workspace
 GRADING_LABEL = "unicon.grading"
 STEP_LABEL = "unicon.step"
 TIME_LABEL = "unicon.time_ms"
-"""The container's wall clock, which the socket filter's reaper holds it to."""
+"""The container's wall clock, its start allowance included, which the socket
+filter's reaper holds it to."""
+START_ALLOWANCE_SECONDS = 10
+"""What a container is given beyond its step's `time_ms` for its own start."""
 
 SECURITY_OPTIONS = ("no-new-privileges", "seccomp=builtin")
 CPUS = 1
@@ -69,7 +79,7 @@ def create_body(
         "Labels": {
             GRADING_LABEL: grading_id,
             STEP_LABEL: step.id,
-            TIME_LABEL: str(limits.time_ms),
+            TIME_LABEL: str(limits.time_ms + START_ALLOWANCE_SECONDS * 1000),
         },
         "NetworkDisabled": True,
         "HostConfig": {
@@ -141,8 +151,9 @@ class Sandbox:
 
     def run(self, step: Step, directory: Path, run_ends: float) -> Ended:
         """Create, start and wait on one container, kill it at whichever comes
-        first of the step's time limit and the run's wall clock (`run_ends`, on
-        the sandbox's clock), then read its log into the run log and remove it.
+        first of the step's time limit with the start allowance and the run's
+        wall clock (`run_ends`, on the sandbox's clock), then read its log into
+        the run log and remove it.
         """
         body = create_body(step, self._workspace, directory, self._grading_id)
         container = self._call(
@@ -152,7 +163,7 @@ class Sandbox:
         self._live.append(container)
         self._call(f"start step {step.label}", lambda: self._docker.start(container))
         began = self._clock()
-        limit = step.limits.time_ms / 1000
+        limit = step.limits.time_ms / 1000 + START_ALLOWANCE_SECONDS
         allowed = min(limit, run_ends - began)
         exit_code = self._call(
             f"wait on step {step.label}", lambda: self._docker.wait(container, allowed)

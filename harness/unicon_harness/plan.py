@@ -3,11 +3,11 @@ cannot run exactly. The schema fixes the shape; this module checks what a
 schema cannot say: that a step id names one step or the entries of one
 per-test step, that every step that runs once comes before every step that
 runs per test, that every test named is in the plan's test list, that every
-reference points at an output a step that runs earlier declares and that a
-step that runs once reads no step that runs per test, that every contestant
-input a value names is one the plan declares, of the kind the value needs,
-that every template is well formed, and that the report reads outputs that
-can be reported.
+reference points at an output declared by another step that runs earlier,
+and that a step that runs once reads no step that runs per test, that every
+contestant input a value names is one the plan declares, of the kind the
+value needs, that every template is well formed, and that the report reads
+only text and number outputs.
 """
 
 from __future__ import annotations
@@ -27,7 +27,7 @@ from unicon_harness.files import inside, read_bounded
 PLAN_FILE = "plans/plan.json"
 PLAN_LIMIT_BYTES = 32 * 1024 * 1024
 SCALARS = frozenset({"text", "number", "boolean", "enum"})
-REPORTABLE = frozenset({"text", "number", "enum"})
+REPORTABLE = frozenset({"text", "number"})
 TEMPLATE_TOKEN = re.compile(r"\{\{|\}\}|\{([0-9]+)\}|[{}]")
 
 Kind = Literal["once", "test", "batch"]
@@ -119,6 +119,10 @@ class Plan:
         a batch.
         """
         return any(s.id == step_id and s.kind != "once" for s in self.steps)
+
+    def output(self, step_id: str, name: str) -> Output:
+        """An output port a step of the plan declares."""
+        return next(s.outputs[name] for s in self.steps if s.id == step_id)
 
     def tests_of(self, step_id: str) -> list[str]:
         """The tests a per-test step covers, in plan order."""
@@ -271,6 +275,8 @@ def _check_input(
 ) -> None:
     where = f"input {name} of step {step.label}"
     if "step" in value:
+        if value["step"] == step.id:
+            raise GradingError(f"{where} reads its own step {step.id}")
         source = earlier.get(value["step"])
         if source is None:
             raise GradingError(
@@ -338,7 +344,8 @@ def _check_report(steps: Mapping[str, Step], name: str, entry: Report) -> None:
     if output.type not in REPORTABLE:
         raise GradingError(
             f"the plan's report {name} reads output {entry.output} of step "
-            f"{step.id}, a {output.type}, which a result cannot carry"
+            f"{step.id}, of type {output.type}, and a result carries only text "
+            "and numbers"
         )
     bounded = entry.at_least is not None or entry.at_most is not None
     if bounded and output.type != "number":

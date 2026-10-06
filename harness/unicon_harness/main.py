@@ -216,7 +216,7 @@ def _grade(
             f"steps run as {workspace.user} in volume {volume} under {workspace.steps}"
         )
         plan = plans.load(task)
-        given = submissions.load(Path(envelope["checkouts"]["submission"]), plan)
+        given = submissions.load(Path(envelope["checkouts"]["submission"]), plan, log)
         log.event(
             f"plan: {len(plan.steps)} steps over {len(plan.tests)} tests, "
             f"harness {plan.harness_image}"

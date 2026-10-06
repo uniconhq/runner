@@ -5,17 +5,20 @@
 2. Steps run in plan order, every step that runs once first. A step's file
    and folder inputs are copied into its working directory under in/, files
    from earlier steps included; nothing a step wrote is visible to another
-   step except through the plan's references.
+   step except through the plan's references. A port wired to an optional
+   output its step did not write is left out of inputs.json.
 3. A step that runs once and returns an outcome other than accepted stops the
    grading there: every later step is skipped and so is every test.
 4. A per-test step runs only for the tests with no outcome yet. One that
    returns an outcome other than accepted for a test gives the test that
    outcome and skips its later steps (left out of a batch).
 5. Anything unexpected is a GradingError, which stops the run as a
-   system_error. A container of a single-test step killed by its wall or
-   memory limit gives that test time_limit or memory_limit; a batch or
-   run-once step killed that way is a fault. This machine gives a step no
-   network and no GPUs, so a step that asks for either is a fault too.
+   system_error. A step's container killed at its time or memory limit is
+   one, whatever the step's shape: the primitive keeps a contestant's
+   program within the test's own limits and says how it ended, so a
+   container that outran its own limits is a fault of the platform or of
+   setter code. This machine gives a step no network and no GPUs, so a step
+   that asks for either is a fault too.
 
 What a step wrote is checked against the primitive contract and the plan
 before anything reads it: outputs.json's shape, one batch entry per item in
@@ -97,8 +100,8 @@ Outputs = dict[str, Value]
 @dataclass
 class Grading:
     """What running the plan left: every step's outputs, each test's first
-    non-accepted outcome, and the outcome that stopped the run, if a step
-    that runs once stopped it.
+    non-accepted outcome, and the outcome that stopped the run and the id of
+    the step that stopped it, if a step that runs once did.
     """
 
     once: dict[str, Outputs] = field(default_factory=dict)
@@ -218,11 +221,7 @@ class Grader:
                     self._grading.test_outcomes[test] = SKIPPED
 
     def _once(self, step: Step) -> None:
-        ended, outputs = self._container(step, list(step.items))
-        if ended.killed is not None:
-            raise GradingError(_killed(step, ended))
-        if outputs is None:
-            raise GradingError(_no_outputs(step, ended))
+        outputs = self._container(step, list(step.items))
         self._grading.once[step.id] = outputs[0]
         outcome = outputs[0]["outcome"]
         if outcome != ACCEPTED:
@@ -239,17 +238,7 @@ class Grader:
                 step, 1, f"test {test} is already {self._grading.test_outcomes[test]}"
             )
             return
-        ended, outputs = self._container(step, list(step.items))
-        if ended.killed == "run_clock":
-            raise GradingError(_killed(step, ended))
-        if ended.killed == "time":
-            self._fail(test, step, "time_limit")
-            return
-        if outputs is None:
-            if ended.out_of_memory:
-                self._fail(test, step, "memory_limit")
-                return
-            raise GradingError(_no_outputs(step, ended))
+        outputs = self._container(step, list(step.items))
         self._record(step, test, outputs[0])
         self._log.tell(f"{_named(step)}: {outputs[0]['outcome']}")
 
@@ -259,16 +248,7 @@ class Grader:
         if not items:
             self._skip(step, left_out, "every test of it already has an outcome")
             return
-        ended, outputs = self._container(step, items, left_out)
-        if ended.killed is not None:
-            raise GradingError(_killed(step, ended))
-        if outputs is None:
-            if ended.out_of_memory:
-                raise GradingError(
-                    f"the batch of step {step.id} was killed at its memory limit of "
-                    f"{step.limits.memory_mb} MB"
-                )
-            raise GradingError(_no_outputs(step, ended))
+        outputs = self._container(step, items, left_out)
         self._log.tell(
             f"{_named(step)}: {len(items)} tests"
             + (f", {left_out} left out as already done" if left_out else "")
@@ -284,13 +264,6 @@ class Grader:
         if outcome != ACCEPTED:
             self._grading.test_outcomes[test] = str(outcome)
 
-    def _fail(self, test: str, step: Step, outcome: str) -> None:
-        self._log.tell(
-            f"{_named(step)}: {outcome}, stopped at its "
-            f"{'time' if outcome == 'time_limit' else 'memory'} limit"
-        )
-        self._grading.test_outcomes[test] = outcome
-
     def _skip(self, step: Step, count: int, why: str) -> None:
         self._log.tell(f"{_named(step)}: skipped, {why}")
         self._advance(step, count)
@@ -302,9 +275,10 @@ class Grader:
 
     def _container(
         self, step: Step, items: list[Item], left_out: int = 0
-    ) -> tuple[Ended, list[Outputs] | None]:
-        """Run one container over `items` and read back what it wrote, or None
-        for outputs when it wrote no outputs.json or was killed.
+    ) -> list[Outputs]:
+        """Run one container over `items` and read back what it wrote, one
+        entry per item. A container killed at a limit, or one that wrote no
+        outputs.json, is a fault.
         """
         if step.network:
             raise GradingError(
@@ -340,21 +314,34 @@ class Grader:
             + (", out of memory" if ended.out_of_memory else "")
             + (f", killed at the {_clock_name(ended)}" if ended.killed else "")
         )
-        outputs = None if ended.killed else self._outputs(step, directory, items)
+        if ended.killed is not None:
+            raise GradingError(_killed(step, ended))
+        outputs = self._outputs(step, directory, items)
+        if outputs is None:
+            raise GradingError(_no_outputs(step, ended))
         self._advance(step, len(items) + left_out)
-        return ended, outputs
+        return outputs
 
     def _inputs(self, step: Step, item: Item, placer: Placer) -> dict[str, Any]:
-        return {
-            name: _placed(
-                self._resolve(step, item, name, value), placer, name, step.folders
-            )
-            for name, value in item.inputs.items()
-        }
+        inputs: dict[str, Any] = {}
+        for name, value in item.inputs.items():
+            resolved = self._resolve(step, item, name, value)
+            if resolved is None:
+                self._log.event(
+                    f"input {name} of step {step.label} is left out: step "
+                    f"{value['step']} did not write its optional output "
+                    f"{value['output']}"
+                )
+                continue
+            inputs[name] = _placed(resolved, placer, name, step.folders)
+        return inputs
 
     def _resolve(
         self, step: Step, item: Item, name: str, value: Mapping[str, Any]
-    ) -> Value:
+    ) -> Value | None:
+        """What a plan value gives, or None for an optional output its step
+        did not write.
+        """
         where = f"input {name} of step {step.label}"
         if "value" in value:
             literal: Scalar = value["value"]
@@ -406,21 +393,24 @@ class Grader:
             raise GradingError(f"input {input_id} has no value, which {where} needs")
         return value
 
-    def _output(self, source: str, output: str, test: str | None, where: str) -> Value:
-        if not self._plan.per_test(source):
-            outputs = self._grading.once.get(source, {})
-            if output not in outputs:
-                raise GradingError(
-                    f"step {source} gave no output {output}, which {where} needs"
-                )
-            return outputs[output]
-        runs = self._grading.per_test.get(source, {})
-        if test is None or output not in runs.get(test, {}):
-            raise GradingError(
-                f"step {source} gave no output {output} for test {test}, which "
-                f"{where} needs"
-            )
-        return runs[test][output]
+    def _output(
+        self, source: str, output: str, test: str | None, where: str
+    ) -> Value | None:
+        """An earlier step's output, the test's own of a per-test step, or None
+        when the step ran and did not write an output it declares optional.
+        """
+        if self._plan.per_test(source):
+            runs = self._grading.per_test.get(source, {})
+            written = runs.get(test) if test is not None else None
+            gave = f"step {source} gave no output {output} for test {test}"
+        else:
+            written = self._grading.once.get(source)
+            gave = f"step {source} gave no output {output}"
+        if written is not None and output in written:
+            return written[output]
+        if written is not None and self._plan.output(source, output).optional:
+            return None
+        raise GradingError(f"{gave}, which {where} needs")
 
     def _outputs(
         self, step: Step, directory: Path, items: list[Item]
@@ -621,6 +611,7 @@ def _clock_name(ended: Ended) -> str:
 
 
 def _no_outputs(step: Step, ended: Ended) -> str:
+    """Why a container that was not killed wrote no outputs.json."""
     if ended.out_of_memory:
         return (
             f"step {step.label} was killed at its memory limit of "
