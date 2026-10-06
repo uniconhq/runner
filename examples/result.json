@@ -1,0 +1,33 @@
+{
+  "schema_version": 5,
+  "stopped": null,
+  "tests": [
+    {
+      "test": "main/1",
+      "outcome": "accepted",
+      "values": {
+        "time_ms": 120,
+        "memory_kb": 1520,
+        "fraction": 0.75
+      }
+    },
+    {
+      "test": "main/2",
+      "outcome": "wrong_answer",
+      "values": {
+        "time_ms": 15,
+        "memory_kb": 1490
+      }
+    },
+    {
+      "test": "samples/1",
+      "outcome": "skipped",
+      "values": {}
+    }
+  ],
+  "values": {
+    "log": ""
+  },
+  "run_log": "http://proxy/unicon-results/logs/0199a2c1-6b7e-7c3a-9f10-5d2e4b8a6c31/1.log",
+  "error": null
+}

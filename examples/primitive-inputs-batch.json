@@ -1,21 +1,30 @@
 {
-  "schema_version": 4,
+  "schema_version": 5,
   "batch": [
     {
-      "id": "1",
+      "test": "main/1",
       "inputs": {
-        "binary": { "file": "in/1/binary" },
-        "input": { "file": "in/2/1.in" },
-        "time_limit": 2.0,
+        "binary": {
+          "file": "in/1/binary"
+        },
+        "input": {
+          "file": "in/2/input"
+        },
+        "args": "--seed 7",
+        "time_limit": 2,
         "memory_limit": 256
       }
     },
     {
-      "id": "2",
+      "test": "main/2",
       "inputs": {
-        "binary": { "file": "in/1/binary" },
-        "input": { "file": "in/3/2.in" },
-        "time_limit": 2.0,
+        "binary": {
+          "file": "in/1/binary"
+        },
+        "input": {
+          "file": "in/3/input"
+        },
+        "time_limit": 2,
         "memory_limit": 256
       }
     }
