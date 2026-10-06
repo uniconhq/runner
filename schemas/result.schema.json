@@ -4,7 +4,7 @@
   "title": "Unicon grading result",
   "description": "What the harness posts back through the callback at the end of a run, result.json. The forge repo checks it against this schema and keeps it whole on the gradings row. The callback it is posted to, and that callback's token, say which grading it is for. Nothing in it knows about test groups, points or boards: it is an outcome per test and the values the workflow's report names, per test or once. The platform works out every other outcome, and every number shown, from the rows.",
   "type": "object",
-  "required": ["schema_version", "stopped", "tests", "values", "run_log", "error"],
+  "required": ["schema_version", "stopped", "stopped_by", "tests", "values", "run_log", "error"],
   "additionalProperties": false,
   "allOf": [
     {
@@ -14,6 +14,14 @@
       },
       "then": { "properties": { "error": { "type": "string", "minLength": 1 } } },
       "else": { "properties": { "error": { "type": "null" } } }
+    },
+    {
+      "if": {
+        "properties": { "stopped": { "$ref": "#/$defs/step_stop" } },
+        "required": ["stopped"]
+      },
+      "then": { "properties": { "stopped_by": { "$ref": "#/$defs/step_id" } } },
+      "else": { "properties": { "stopped_by": { "type": "null" } } }
     }
   ],
   "properties": {
@@ -25,6 +33,10 @@
     "stopped": {
       "description": "What stopped the run, or null. A once step returning an outcome other than accepted stops the run before its tests, every test being skipped, and this is that outcome. system_error when a fault of the platform or of setter code ended the run; the rows keep the outcomes they had when it struck and every other test is skipped.",
       "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/stop" }]
+    },
+    "stopped_by": {
+      "description": "The id of the step that runs once and stopped the run, when one did; null otherwise, a system_error included. The platform holds a stop back until the task's reveal when this step is sealed, and shows it at once when it is not.",
+      "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/step_id" }]
     },
     "tests": {
       "description": "One row per plan test, in plan order.",
@@ -59,6 +71,22 @@
         "compile_error",
         "skipped",
         "system_error"
+      ]
+    },
+    "step_id": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9_-]*$"
+    },
+    "step_stop": {
+      "description": "An outcome a step that runs once stops the run with.",
+      "type": "string",
+      "enum": [
+        "wrong_answer",
+        "time_limit",
+        "memory_limit",
+        "output_limit",
+        "runtime_error",
+        "compile_error"
       ]
     },
     "stop": {

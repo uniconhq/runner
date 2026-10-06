@@ -1,6 +1,7 @@
 {
   "schema_version": 5,
   "stopped": null,
+  "stopped_by": null,
   "tests": [
     {
       "test": "main/1",

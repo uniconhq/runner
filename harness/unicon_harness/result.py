@@ -2,15 +2,18 @@
 could not be graded.
 
 `stopped` is the outcome of the step that runs once and stopped the run,
-system_error when a fault ended it, otherwise null; `error` is the fault's
-sentence for staff exactly when stopped is system_error. A test's row: its
-outcome is the first non-accepted outcome among its steps; otherwise
-accepted when the run went on to the end, or when a fault struck after every
-per-test step of the test had run for it; otherwise skipped. Its values are
-every per-test name of the report whose step ran for the test and wrote the
-output, a wrong answer's included, and a skipped test has none. The once
-values are every once name of the report whose step wrote the output, kept
-when a fault struck later.
+system_error when a fault ended it, otherwise null. `stopped_by` is that
+step's id when a step stopped the run, and null otherwise, a system_error
+included. `error` is the fault's sentence for staff exactly when stopped is
+system_error.
+
+A test's row: its outcome is the first non-accepted outcome among its steps;
+otherwise accepted when the run went on to the end, or when a fault struck
+after every per-test step of the test had run for it; otherwise skipped. Its
+values are every per-test name of the report whose step ran for the test and
+wrote the output, a wrong answer's included, and a skipped test has none. The
+once values are every once name of the report whose step wrote the output,
+kept when a fault struck later.
 
 A number is written exactly as the primitive wrote it. A text has every
 secret's value replaced by *** and is cut at 10,000 characters.
@@ -45,6 +48,7 @@ def graded(
     reader = _Reader(plan, grading, stopped, hidden)
     return _document(
         stopped=stopped,
+        stopped_by=None if error is not None else grading.stopped_by,
         tests=[reader.row(test) for test in plan.tests],
         values=reader.once_values(),
         error=None if error is None else _error(error, hidden),
@@ -57,6 +61,7 @@ def system_error(message: str, secrets: Iterable[str]) -> dict[str, Any]:
     """
     return _document(
         stopped=SYSTEM_ERROR,
+        stopped_by=None,
         tests=[],
         values={},
         error=_error(message, _hidden(secrets)),
@@ -71,6 +76,7 @@ def check(result: dict[str, Any]) -> str | None:
 def _document(
     *,
     stopped: str | None,
+    stopped_by: str | None,
     tests: list[dict[str, Any]],
     values: dict[str, Any],
     error: str | None,
@@ -78,6 +84,7 @@ def _document(
     return {
         "schema_version": SCHEMA_VERSION,
         "stopped": stopped,
+        "stopped_by": stopped_by,
         "tests": tests,
         "values": values,
         "run_log": None,

@@ -1,8 +1,8 @@
-"""What result.schema.json accepts: what stopped the run, a row per test with
-its outcome and values, the once values, and an error exactly when a fault
-ended the run. The results the harness builds are checked against it in
-test_run.py; here are its rules, and the harness's own builder for the
-shapes a run can take.
+"""What result.schema.json accepts: what stopped the run and which step that
+runs once stopped it, a row per test with its outcome and values, the once
+values, and an error exactly when a fault ended the run. The results the
+harness builds are checked against it in test_run.py; here are its rules,
+and the harness's own builder for the shapes a run can take.
 """
 
 from __future__ import annotations
@@ -84,7 +84,7 @@ def test_an_error_comes_exactly_with_a_system_error(
     assert _refusals(broken | {"error": None}) != []
     assert _refusals(broken | {"error": ""}) != []
     assert _refusals(graded | {"error": "something"}) != []
-    stopped = graded | {"stopped": "compile_error"}
+    stopped = graded | {"stopped": "compile_error", "stopped_by": "compile"}
     assert _refusals(stopped) == []
     assert _refusals(stopped | {"error": "the compile failed"}) != []
 
@@ -93,8 +93,21 @@ def test_a_run_is_stopped_by_any_outcome_but_accepted_and_skipped(
     graded: dict[str, Any],
 ) -> None:
     for outcome in OUTCOMES:
-        refused = _refusals(graded | {"stopped": outcome})
+        refused = _refusals(graded | {"stopped": outcome, "stopped_by": "compile"})
         assert (refused != []) == (outcome in ("accepted", "skipped")), outcome
+
+
+def test_the_step_that_stopped_the_run_is_named_exactly_when_one_did(
+    graded: dict[str, Any], broken: dict[str, Any]
+) -> None:
+    stopped = graded | {"stopped": "compile_error", "stopped_by": "compile"}
+    assert _refusals(stopped | {"stopped_by": None}) != []
+    assert _refusals(stopped | {"stopped_by": "Compile step"}) != []
+    assert _refusals(graded | {"stopped_by": "compile"}) != []
+    assert _refusals(broken | {"stopped_by": "compile"}) != []
+    without = dict(graded)
+    del without["stopped_by"]
+    assert _refusals(without) != []
 
 
 def test_a_row_takes_any_outcome_but_system_error(graded: dict[str, Any]) -> None:
@@ -143,12 +156,28 @@ def test_a_result_that_never_read_its_plan_has_no_rows() -> None:
     built = results.system_error("the plan is missing", ["unused"])
     assert results.check(built) is None
     assert built["tests"] == [] and built["stopped"] == "system_error"
+    assert built["stopped_by"] is None
+
+
+def test_a_result_names_the_step_that_stopped_it_but_not_after_a_fault() -> None:
+    plan = parse(classic_plan(TESTS))
+    grading = Grading(once={"compile": {"outcome": "compile_error"}})
+    grading.stopped = "compile_error"
+    grading.stopped_by = "compile"
+
+    built = results.graded(plan, grading, [])
+    faulted = results.graded(plan, grading, [], error="the log could not be read")
+
+    assert results.check(built) is None and results.check(faulted) is None
+    assert (built["stopped"], built["stopped_by"]) == ("compile_error", "compile")
+    assert (faulted["stopped"], faulted["stopped_by"]) == ("system_error", None)
 
 
 def test_a_long_text_is_cut_and_a_secret_in_it_masked() -> None:
     plan = parse(classic_plan(TESTS))
     grading = Grading(once={"compile": {"compile_log": "key=s3cr3t " + "x" * 20_000}})
     grading.stopped = "compile_error"
+    grading.stopped_by = "compile"
 
     built = results.graded(plan, grading, ["s3cr3t"])
 
