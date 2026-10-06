@@ -8,11 +8,14 @@ as DOCKER_HOST.
 2. Post started, then grade: find the run's workspace, give up root, read the
    plan and task files from the task checkout and the contestant's files from
    the submission checkout, and run the plan one sandboxed container per step.
-3. Put the log by its presigned URL, and post the verdict, checked against
-   verdict.schema.json, in the final callback. Anything unexpected on the way
-   is a system_error verdict, never a grade.
+3. Put the log by its presigned URL, and post the result, checked against
+   result.schema.json, in the final callback. Anything unexpected on the way
+   stops the run as a system_error, never a grade.
 
-Exit 0 once the forge accepted the verdict, 1 when it could not be delivered,
+Every secret the envelope carries is hidden from both logs and masked in
+every text the result reports.
+
+Exit 0 once the forge accepted the result, 1 when it could not be delivered,
 2 when the run never began.
 """
 
@@ -32,14 +35,14 @@ from typing import Any
 import httpx
 
 from unicon_harness import plan as plans
+from unicon_harness import result as results
 from unicon_harness import submission as submissions
-from unicon_harness import verdict as verdicts
 from unicon_harness import workspace as workspaces
 from unicon_harness.contracts import SCHEMA_VERSION, SchemasMissingError
 from unicon_harness.docker import Docker, DockerClient
 from unicon_harness.envelope import EnvelopeError, load
 from unicon_harness.faults import GradingError
-from unicon_harness.grading import Grader
+from unicon_harness.grading import Grader, Grading
 from unicon_harness.report import RefusedError, Reporter, without_query
 from unicon_harness.runlog import RunLog
 from unicon_harness.sandbox import Sandbox
@@ -55,7 +58,7 @@ FETCH_IO_TIMEOUT_SECONDS = 30.0
 ENVELOPE_TRIES = 5
 ENVELOPE_PAUSE_SECONDS = 3.0
 REPORT_MARGIN_SECONDS = 30.0
-"""Kept back from the deadline for putting the log and posting the verdict."""
+"""Kept back from the deadline for putting the log and posting the result."""
 
 EXIT_OK = 0
 EXIT_NOT_DELIVERED = 1
@@ -147,13 +150,13 @@ def grade_and_report(
     mountinfo: Callable[[], str],
 ) -> int:
     """Everything after the envelope is accepted: started, the grading, the log
-    and the final callback.
+    and the final callback. Every secret's value is hidden from both logs from
+    the start.
     """
+    for secret in envelope["secrets"].values():
+        log.hide(secret)
     began = time.monotonic()
-    log.tell(
-        f"Grading {envelope['submission']['tag']}, stage {envelope['stage']}, "
-        f"attempt {envelope['attempt']}."
-    )
+    log.tell(f"Grading {envelope['submission']['tag']}, attempt {envelope['attempt']}.")
     left = reporter.seconds_left()
     if left <= 0:
         log.event("the envelope's deadline has already passed; nothing is reported")
@@ -167,22 +170,22 @@ def grade_and_report(
         log.event(f"the forge refused the run with {refused.status}; it will not grade")
         return EXIT_NOT_DELIVERED
 
-    verdict = _grade(envelope, log, reporter, docker_factory, mountinfo, began, budget)
-    verdict["log"] = reporter.log_url()
-    found = verdicts.check(verdict)
+    result = _grade(envelope, log, reporter, docker_factory, mountinfo, began, budget)
+    result["run_log"] = reporter.log_url()
+    found = results.check(result)
     if found is not None:
         message = (
-            f"the verdict the harness built does not match verdict.schema.json {found}"
+            f"the result the harness built does not match result.schema.json {found}"
         )
         log.event(f"system error: {message}")
-        verdict = verdicts.system_error(message)
-        verdict["log"] = reporter.log_url()
-    _tell_verdict(log, verdict)
+        result = results.system_error(message, envelope["secrets"].values())
+        result["run_log"] = reporter.log_url()
+    _tell_result(log, result)
     if not reporter.put_log(log.to_bytes()):
-        verdict["log"] = None
-    delivered = reporter.finished(verdict)
+        result["run_log"] = None
+    delivered = reporter.finished(result)
     print(
-        f"unicon-harness: verdict {verdict['outcome']} "
+        f"unicon-harness: result {_said(result)} "
         f"{'delivered' if delivered else 'not delivered'}"
     )
     return EXIT_OK if delivered else EXIT_NOT_DELIVERED
@@ -197,8 +200,11 @@ def _grade(
     began: float,
     budget: float,
 ) -> dict[str, Any]:
+    secrets: dict[str, str] = envelope["secrets"]
     sandbox: Sandbox | None = None
     docker: Docker | None = None
+    plan: plans.Plan | None = None
+    grader: Grader | None = None
     try:
         if budget <= 0:
             raise GradingError("the run has no time left before its deadline")
@@ -209,8 +215,8 @@ def _grade(
         log.event(
             f"steps run as {workspace.user} in volume {volume} under {workspace.steps}"
         )
-        plan = plans.load(task, envelope["stage"])
-        given = submissions.load(Path(envelope["checkouts"]["submission"]))
+        plan = plans.load(task)
+        given = submissions.load(Path(envelope["checkouts"]["submission"]), plan)
         log.event(
             f"plan: {len(plan.steps)} steps over {len(plan.tests)} tests, "
             f"harness {plan.harness_image}"
@@ -221,22 +227,23 @@ def _grade(
             plan,
             task,
             given,
+            secrets,
             workspace,
             sandbox,
             log,
             began + budget,
             reporter.progress,
         )
-        grading = grader.run()
-        verdict = verdicts.graded(plan, grading)
-        log.event(f"graded: {verdict['outcome']}")
-        return verdict
+        result = results.graded(plan, grader.run(), secrets.values())
+        log.event(f"graded: {_said(result)}")
+        return result
     except GradingError as fault:
         log.event(f"system error: {fault.message}")
-        return verdicts.system_error(fault.message)
+        return _failed(fault.message, plan, grader, secrets)
     except Exception as exc:
         log.block("the harness failed", traceback.format_exc())
-        return verdicts.system_error(f"the harness failed: {type(exc).__name__}: {exc}")
+        message = f"the harness failed: {type(exc).__name__}: {exc}"
+        return _failed(message, plan, grader, secrets)
     finally:
         if sandbox is not None:
             sandbox.clean_up()
@@ -244,18 +251,41 @@ def _grade(
             docker.close()
 
 
-def _tell_verdict(log: RunLog, verdict: dict[str, Any]) -> None:
-    """The last lines of the contestant's log. A system error says only that
-    there was one: its reason is for staff and is in the CI log.
+def _failed(
+    message: str,
+    plan: plans.Plan | None,
+    grader: Grader | None,
+    secrets: dict[str, str],
+) -> dict[str, Any]:
+    """The result of a run a fault ended: the rows as far as it got, or none
+    when the plan was never read.
     """
-    if verdict["outcome"] == "system_error":
+    if plan is None:
+        return results.system_error(message, secrets.values())
+    grading = grader.grading if grader is not None else Grading()
+    return results.graded(plan, grading, secrets.values(), error=message)
+
+
+def _tell_result(log: RunLog, result: dict[str, Any]) -> None:
+    """The last line of the run log. A system error says only that there was
+    one: its reason is for staff and is in the CI log.
+    """
+    if result["stopped"] == results.SYSTEM_ERROR:
         log.tell(
             "The run could not be graded because of a system error. The "
             "platform's staff can see what went wrong."
         )
         return
-    log.tell(f"Verdict: {verdict['outcome']}.")
-    log.tell_block("Summary", verdict["summary"])
+    said = _said(result)
+    log.tell(f"{said[0].upper()}{said[1:]}.")
+
+
+def _said(result: dict[str, Any]) -> str:
+    """The result in a few words: what stopped it, or how many tests passed."""
+    if result["stopped"] is not None:
+        return f"stopped at {result['stopped']}"
+    accepted = sum(1 for row in result["tests"] if row["outcome"] == "accepted")
+    return f"{accepted} of {len(result['tests'])} tests accepted"
 
 
 def _terminate(signum: int, frame: FrameType | None) -> None:
@@ -296,7 +326,7 @@ def _summary(envelope: dict[str, Any]) -> str:
     return (
         f"envelope accepted: grading={envelope['grading_id']} "
         f"submission={submission['org']}/{submission['repo']}@{submission['tag']} "
-        f"stage={envelope['stage']} attempt={envelope['attempt']} "
+        f"attempt={envelope['attempt']} "
         f"schema_version={SCHEMA_VERSION}"
     )
 

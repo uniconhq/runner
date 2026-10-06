@@ -1,6 +1,6 @@
 """Where the contract files live, which version of them this harness speaks, and
 the one way the harness checks a document against one of them. The plan,
-envelope, verdict, primitive and submission schemas ship as release assets
+envelope, result, primitive and submission schemas ship as release assets
 beside the images, and the rest of the platform pins one runner release.
 """
 
@@ -11,7 +11,7 @@ from typing import Any
 
 from jsonschema import Draft202012Validator, FormatChecker
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 MESSAGE_LIMIT = 300
 

@@ -1,39 +1,54 @@
 """Reading `submission.json` from the submission checkout: what the contestant
-gave for each input, and where its files are.
+gave for each input, and where its files are, checked against the inputs the
+plan declares.
+
+A file input gives its one file and a folder input its files, each under
+`files/<input id>/` at its path in the folder. A per-test file input gives at
+most one file per test, at `files/<input id>/<group>/<test>` or
+`files/<input id>/<group>/<test>.<ending>`; a file that names no test of the
+plan is refused, and a test without one is skipped. A text, number, boolean
+or enum input gives its value. Numbers are read as the decimals they are
+written as.
 """
 
 from __future__ import annotations
 
-import json
-from dataclasses import dataclass
+import re
+from dataclasses import dataclass, field
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
+from unicon_harness import exact
 from unicon_harness.contracts import SCHEMA_VERSION, violation
 from unicon_harness.faults import GradingError
 from unicon_harness.files import inside, read_bounded
+from unicon_harness.plan import ContestantInput, Plan
 
 SUBMISSION_FILE = "submission.json"
 SUBMISSION_LIMIT_BYTES = 1024 * 1024
+PER_TEST_FILE = re.compile(r"^([A-Za-z0-9_-]+/[A-Za-z0-9_-]+)(\.[^/]+)?$")
 
-Scalar = str | int | float | bool
+Scalar = str | int | Decimal | bool
 
 
 @dataclass(frozen=True)
 class Given:
-    """One contestant input: its files and chosen language, or its value."""
+    """One contestant input: its files by their path under `files/<input id>/`,
+    its files by test for a per-test input, or its value.
+    """
 
-    files: tuple[Path, ...] = ()
-    language: str | None = None
+    files: tuple[tuple[str, Path], ...] = ()
+    tests: dict[str, Path] = field(default_factory=dict)
     value: Scalar | None = None
 
 
-def load(checkout: Path) -> dict[str, Given]:
+def load(checkout: Path, plan: Plan) -> dict[str, Given]:
     path = inside(checkout, SUBMISSION_FILE, SUBMISSION_FILE)
     raw = read_bounded(path, SUBMISSION_LIMIT_BYTES, SUBMISSION_FILE)
     try:
-        document = json.loads(raw)
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        document = exact.loads(raw)
+    except (UnicodeDecodeError, ValueError) as exc:
         raise GradingError(f"{SUBMISSION_FILE} is not JSON: {exc}") from None
     if not isinstance(document, dict):
         raise GradingError(f"{SUBMISSION_FILE} is not a JSON object")
@@ -48,22 +63,77 @@ def load(checkout: Path) -> dict[str, Given]:
         raise GradingError(
             f"{SUBMISSION_FILE} does not match submission.schema.json {found}"
         )
+    entries: dict[str, Any] = document["inputs"]
+    for input_id in plan.contestant:
+        if input_id not in entries:
+            raise GradingError(
+                f"{SUBMISSION_FILE} has no input {input_id}, which the plan declares"
+            )
+    for input_id in entries:
+        if input_id not in plan.contestant:
+            raise GradingError(
+                f"{SUBMISSION_FILE} gives input {input_id}, which the plan does not "
+                "declare"
+            )
     return {
-        input_id: _given(checkout, input_id, entry)
-        for input_id, entry in document["inputs"].items()
+        input_id: _given(checkout, plan, input_id, plan.contestant[input_id], entry)
+        for input_id, entry in entries.items()
     }
 
 
-def _given(checkout: Path, input_id: str, entry: dict[str, Any]) -> Given:
+def _given(
+    checkout: Path,
+    plan: Plan,
+    input_id: str,
+    declared: ContestantInput,
+    entry: dict[str, Any],
+) -> Given:
     """One entry, already checked against the schema."""
+    where = f"input {input_id} of {SUBMISSION_FILE}"
     if "value" in entry:
-        return Given(value=entry["value"])
-    paths = []
+        return Given(value=_value(where, declared, entry["value"]))
+    if declared.type not in ("file", "folder"):
+        raise GradingError(f"{where} gives files, and its type is {declared.type}")
+    prefix = f"files/{input_id}/"
+    files = []
     for relative in entry["files"]:
-        if not relative.startswith(f"files/{input_id}/"):
-            raise GradingError(
-                f"{SUBMISSION_FILE} lists {relative} for input {input_id}, outside "
-                f"files/{input_id}/"
-            )
-        paths.append(inside(checkout, relative, f"submission file {relative}"))
-    return Given(files=tuple(paths), language=entry.get("language"))
+        if not relative.startswith(prefix):
+            raise GradingError(f"{where} lists {relative}, outside {prefix}")
+        source = inside(checkout, relative, f"submission file {relative}")
+        files.append((relative.removeprefix(prefix), source))
+    if declared.per_test:
+        return Given(tests=_by_test(where, plan, files))
+    if declared.type == "file" and len(files) != 1:
+        raise GradingError(f"{where} gives {len(files)} files, and it is one file")
+    return Given(files=tuple(files))
+
+
+def _value(where: str, declared: ContestantInput, value: Scalar) -> Scalar:
+    kind = declared.type
+    if kind in ("file", "folder"):
+        raise GradingError(f"{where} gives a value, and its type is {kind}")
+    if kind == "number":
+        number = not isinstance(value, bool) and isinstance(value, int | Decimal)
+        if not number or (isinstance(value, Decimal) and not value.is_finite()):
+            raise GradingError(f"{where} is {value!r}, not a finite number")
+    elif kind == "boolean" and not isinstance(value, bool):
+        raise GradingError(f"{where} is {value!r}, not a boolean")
+    elif kind in ("text", "enum") and not isinstance(value, str):
+        raise GradingError(f"{where} is {value!r}, not text")
+    if kind == "enum" and value not in declared.options:
+        raise GradingError(f"{where} is {value!r}, which is not one of its options")
+    return value
+
+
+def _by_test(where: str, plan: Plan, files: list[tuple[str, Path]]) -> dict[str, Path]:
+    known = set(plan.tests)
+    tests: dict[str, Path] = {}
+    for relative, source in files:
+        matched = PER_TEST_FILE.match(relative)
+        test = matched.group(1) if matched else None
+        if test is None or test not in known:
+            raise GradingError(f"{where} gives {relative}, which names no test")
+        if test in tests:
+            raise GradingError(f"{where} gives more than one file for test {test}")
+        tests[test] = source
+    return tests

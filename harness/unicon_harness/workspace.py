@@ -3,7 +3,7 @@
 The Docker daemon resolves a mount's source on the machine, not inside the
 harness, so a directory the harness made at its own /woodpecker/x means
 nothing to the daemon: bind-mounting it gives the step an empty directory and
-a silently wrong verdict. The harness therefore asks the daemon, through the
+a silently wrong result. The harness therefore asks the daemon, through the
 socket filter, how its own container is mounted, finds the volume the CI put
 the checkouts in, and gives each step a directory of that volume as a volume
 subpath mount at /work. A volume name and a subpath are something the socket
