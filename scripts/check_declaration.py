@@ -7,8 +7,10 @@ against, in the shared workflows `primitive-ci.yaml` and
 `primitive-release.yaml`. The repository's `primitive.yaml` has no image line:
 bootstrap writes the image by digest from the release manifest into the
 version it creates at the forge. So this check refuses an image line, fills in
-a placeholder digest and validates the result against the schema's
-declaration. Exits 1 and lists every problem when there is one.
+a placeholder image and validates the result against the schema's
+declaration. The declaration names neither the primitive nor its version: the
+repository at the forge is the name and its tag the version. Exits 1 and
+lists every problem when there is one.
 """
 
 import json
@@ -20,7 +22,7 @@ import yaml
 from jsonschema import Draft202012Validator
 from referencing import Registry, Resource
 
-PLACEHOLDER_DIGEST = "sha256:" + "0" * 64
+PLACEHOLDER_IMAGE = "ghcr.io/uniconhq/primitive@sha256:" + "0" * 64
 DECLARATION = "primitive.yaml"
 
 
@@ -34,9 +36,7 @@ def load_declaration(root: Path) -> dict[str, Any]:
 
 def with_placeholder_image(declaration: dict[str, Any]) -> dict[str, Any]:
     """The declaration with the image line bootstrap would write, by a fake digest."""
-    name = str(declaration.get("name", "")).rpartition("/")[2]
-    image = f"ghcr.io/uniconhq/primitive-{name}@{PLACEHOLDER_DIGEST}"
-    return {**declaration, "image": image}
+    return {**declaration, "image": PLACEHOLDER_IMAGE}
 
 
 def problems(schema: dict[str, Any], root: Path) -> list[str]:

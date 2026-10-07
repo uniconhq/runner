@@ -67,21 +67,23 @@ jobs:
             exit 1
           fi
 
-      # The tag must be the package version, and must belong to the version
-      # primitive.yaml declares: v1.2.3 is a release of v1.
-      - name: Check the tag matches the declared versions
+      # The tag must be the package version, v<major>.<minor>.<patch>. Its
+      # major is the primitive's version at the forge, the set of ports it
+      # declares: v2.0.0 and v2.1.3 are both v2 there, so a release that
+      # changes a port raises the major.
+      - name: Check the tag matches the package version
         run: |
+          if ! echo "$GITHUB_REF_NAME" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "tag $GITHUB_REF_NAME is not v<major>.<minor>.<patch>"
+            exit 1
+          fi
           tagged="${GITHUB_REF_NAME#v}"
           declared="$(grep -m1 '^version = ' pyproject.toml | cut -d'"' -f2)"
           if [ "$tagged" != "$declared" ]; then
             echo "tag $GITHUB_REF_NAME does not match pyproject version $declared"
             exit 1
           fi
-          interface="$(grep -m1 '^version: ' primitive.yaml | cut -d' ' -f2)"
-          case "$GITHUB_REF_NAME" in
-            "$interface".*) ;;
-            *) echo "tag $GITHUB_REF_NAME is not a release of $interface"; exit 1 ;;
-          esac
+          echo "$GITHUB_REF_NAME is ${GITHUB_REF_NAME%%.*} at the forge"
 
       # The same checks as CI: a tag on a red commit must not become a release.
       - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
@@ -187,6 +189,11 @@ jobs:
           EOF
           cat images.json
 
+      # The tag's major, which the check job has already held to v<n>.
+      - id: forge
+        name: Read the version at the forge
+        run: echo "version=${GITHUB_REF_NAME%%.*}" >> "$GITHUB_OUTPUT"
+
       # The digest is what bootstrap writes into the forge's primitive.yaml as
       # the image line, and what deploy/images.json pins.
       - uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
@@ -195,6 +202,8 @@ jobs:
             | Image | Digest |
             |---|---|
             | `${{ env.IMAGE }}:${{ github.ref_name }}` | `${{ needs.publish.outputs.digest }}` |
+
+            Version `${{ steps.forge.outputs.version }}` at the forge, the major of this tag.
           files: |
             images.json
             primitive.yaml

@@ -4,9 +4,12 @@ network calls the harness makes.
 
 `started` and `progress` are for a person watching the grading; losing one is
 not worth failing a run over, so they are tried briefly and let go. The final
-callback carries the verdict and is retried until the envelope's deadline,
+callback carries the result and is retried until the envelope's deadline,
 after which the token is dead anyway. A refusal the forge means (401, 403, 404,
 409, 410: not this token, not this grading, or no longer running) is final.
+
+Every body is written with each number exactly as it is held, so a number a
+primitive wrote reaches the forge as the decimal it wrote.
 """
 
 from __future__ import annotations
@@ -18,6 +21,7 @@ from typing import Any
 
 import httpx
 
+from unicon_harness import exact
 from unicon_harness.runlog import RunLog
 
 REQUEST_TIMEOUT_SECONDS = 15.0
@@ -80,9 +84,9 @@ class Reporter:
         except RefusedError as refused:
             self._log.event(f"the progress callback was refused with {refused.status}")
 
-    def finished(self, verdict: dict[str, Any]) -> bool:
-        """Whether the forge accepted the verdict."""
-        body = {"event": "finished", "verdict": verdict}
+    def finished(self, result: dict[str, Any]) -> bool:
+        """Whether the forge accepted the result."""
+        body = {"event": "finished", "result": result}
         waits = iter(FINAL_BACKOFF_SECONDS)
         while True:
             try:
@@ -101,7 +105,7 @@ class Reporter:
                 return False
             wait = next(waits, FINAL_BACKOFF_SECONDS[-1])
             if self.seconds_left() <= wait:
-                self._log.event("the deadline came before the verdict was delivered")
+                self._log.event("the deadline came before the result was delivered")
                 return False
             self._sleep(wait)
 
@@ -146,6 +150,11 @@ class Reporter:
 
     def _post(self, body: dict[str, Any]) -> int:
         response = self._client.post(
-            self._url, json=body, headers={"Authorization": f"Bearer {self._token}"}
+            self._url,
+            content=exact.dumps(body).encode("utf-8"),
+            headers={
+                "Authorization": f"Bearer {self._token}",
+                "Content-Type": "application/json",
+            },
         )
         return response.status_code

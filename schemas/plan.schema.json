@@ -2,67 +2,44 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://raw.githubusercontent.com/uniconhq/runner/main/schemas/plan.schema.json",
   "title": "Unicon grading plan",
-  "description": "What the compiler in the forge repo writes at every valid save of a task, as plans/<stage>.json in the task repo, in the commit its publication points at. Flat and fully resolved: every foreach is expanded over the task's actual tests, and folded into one batch step where the primitive takes a batch. Every step carries its primitive image by digest and its limits, and its container runs the image's own entrypoint; the plan names the harness image by digest; nothing is left to resolve at grade time, because the harness may not talk to the forge. The harness runs the steps in order, one sandboxed container each, and never reads workflow YAML or a primitive's declaration.",
+  "description": "What the compiler in the forge repo writes at every valid save of a task, as plans/plan.json in the task repo, in the commit its publication points at: the task's workflow with the task's values filled in, flat. Every per-test step is expanded over the task's tests, and folded into one batch step where the primitive takes a batch. Every step carries its primitive image by digest, its limits and its declared outputs; the plan names the harness image by digest; nothing of the task's or the workflow's is resolved at grade time, and the harness fills in only the contestant's values and the secrets. The harness runs the steps in order, one sandboxed container each, and never reads a workflow or a primitive's declaration. The plan carries no test groups, rule weights or show: those are scoring, which the platform does from task.yaml.",
   "type": "object",
-  "required": ["schema_version", "harness_image", "stage", "tests", "steps", "verdict"],
+  "required": ["schema_version", "harness_image", "tests", "contestant", "steps", "report"],
   "additionalProperties": false,
   "properties": {
     "schema_version": {
-      "description": "The plan shape this file is written against. The harness refuses a version it does not speak, because a compiler that emits a shape the harness reads differently produces a wrong verdict rather than an error.",
+      "description": "The plan shape this file is written against. The harness refuses a version it does not speak, because a compiler that emits a shape the harness reads differently produces a wrong result rather than an error.",
       "type": "integer",
-      "const": 4
+      "const": 5
     },
     "harness_image": {
       "description": "The harness image this plan was compiled for, as a full reference by content digest and never by tag, so a task keeps grading on the image it was published with. The forge repo tells the CI to run exactly this image.",
       "$ref": "#/$defs/image"
     },
-    "stage": {
-      "description": "The grading stage this plan belongs to. A task compiles one plan per stage.",
-      "type": "string",
-      "minLength": 1
-    },
     "tests": {
-      "description": "The test list, in order: the stems of the files of the foreach list, sorted with numbers compared as numbers. Every per-test step and every batch item names one of these. Empty when no step runs per test.",
+      "description": "Every test of the task, by id, <group>/<test>: groups in name order and tests in natural order within each (2 before 10), so the list depends on the folders alone. The harness grades every test, and result.json has one row per entry in this order.",
       "type": "array",
+      "minItems": 1,
       "uniqueItems": true,
       "items": { "$ref": "#/$defs/test_id" }
     },
+    "contestant": {
+      "description": "The inputs the contestant gives, as the workflow declares them: what a submit checks submission.json against, with the task's form details in task.yaml, and what the harness checks it against before any step runs. A per_test input gives one file per test.",
+      "type": "object",
+      "propertyNames": { "$ref": "#/$defs/input_id" },
+      "additionalProperties": { "$ref": "#/$defs/contestant_input" }
+    },
     "steps": {
-      "description": "Run in order, one container each. A step sees another step's outputs only through the references in its inputs.",
+      "description": "Run in order, one container each. Every step that runs once comes before every step that runs per test. A step sees another step's outputs only through the references in its inputs, and only when that step's outcome was accepted.",
       "type": "array",
       "minItems": 1,
       "items": { "$ref": "#/$defs/step" }
     },
-    "verdict": {
-      "description": "The workflow's outputs block compiled: which step outputs fill the verdict. A reference to a per-test step is read per test.",
+    "report": {
+      "description": "The workflow's report compiled: each name a step and an output, with the bounds the workflow declares for a number. A per-test step's entry is read per test, a once step's once. The harness refuses a reported number that is not finite or lies outside its bounds, compared exactly as written. How a value folds and which way is better are not here: they are meaning, read only by the platform.",
       "type": "object",
-      "required": ["outcome"],
-      "additionalProperties": false,
-      "properties": {
-        "outcome": {
-          "description": "The run's outcome. For a per-test step: accepted when every test is, otherwise the first non-accepted test's outcome in test order.",
-          "$ref": "#/$defs/output_reference"
-        },
-        "metrics": {
-          "description": "Named numbers over the run. A per-test reference is summed over the tests and also fills each test row's metrics; a run-once reference is taken as it is.",
-          "type": "object",
-          "propertyNames": { "pattern": "^[a-z][a-z0-9_]*$" },
-          "additionalProperties": { "$ref": "#/$defs/output_reference" }
-        },
-        "tests": {
-          "description": "Where each test row's time and memory come from. 0 when not given or when the test was skipped.",
-          "type": "object",
-          "additionalProperties": false,
-          "properties": {
-            "time_ms": { "$ref": "#/$defs/output_reference" },
-            "memory_kb": { "$ref": "#/$defs/output_reference" }
-          }
-        },
-        "summary": {
-          "description": "The contestant's summary, when that output is non-empty text; otherwise the harness writes one sentence.",
-          "$ref": "#/$defs/output_reference"
-        }
-      }
+      "propertyNames": { "$ref": "#/$defs/name" },
+      "additionalProperties": { "$ref": "#/$defs/report_entry" }
     }
   },
   "$defs": {
@@ -76,50 +53,92 @@
       "pattern": "^[a-z0-9][a-z0-9_-]*$"
     },
     "test_id": {
-      "description": "A test's name as the task spells it, the stem of its files.",
+      "description": "A test's id, <group>/<test>, its folder under tests/ in the task repo.",
       "type": "string",
-      "minLength": 1,
       "maxLength": 255,
-      "pattern": "^[^/\\u0000-\\u001f]+$"
+      "pattern": "^[A-Za-z0-9_-]+/[A-Za-z0-9_-]+$"
     },
     "name": {
-      "description": "An input or output name, as the primitive's declaration spells it.",
+      "description": "A port or report name.",
       "type": "string",
       "pattern": "^[a-z][a-z0-9_]*$"
     },
     "input_id": {
-      "description": "A task input id, as task.yaml and submission.json spell it.",
+      "description": "A workflow input id, as task.yaml and submission.json spell it.",
       "type": "string",
-      "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$"
+      "pattern": "^[a-z0-9][a-z0-9_-]*$"
+    },
+    "type": {
+      "description": "One of the six value types.",
+      "type": "string",
+      "enum": ["text", "number", "boolean", "enum", "file", "folder"]
+    },
+    "number": {
+      "description": "A finite number.",
+      "type": "number"
     },
     "path": {
-      "description": "A path relative to the root of a checkout, with no empty, . or .. segment.",
+      "description": "A path relative to the root of the publication checkout, with no empty, . or .. segment. A path ending in / names a folder.",
       "type": "string",
-      "pattern": "^((?!\\.\\.?/)[^/\\u0000]+/)*(?!\\.\\.?$)[^/\\u0000]+$"
+      "pattern": "^((?!\\.\\.?/)[^/\\u0000]+/)*((?!\\.\\.?/?$)[^/\\u0000]+/?)$"
+    },
+    "contestant_input": {
+      "type": "object",
+      "required": ["type"],
+      "additionalProperties": false,
+      "properties": {
+        "type": { "$ref": "#/$defs/type" },
+        "options": {
+          "description": "The values an enum takes, as the workflow declares them; the task may narrow them in its form details.",
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "per_test": {
+          "description": "One file per test, matched by the test's id; a test without one is skipped. Only on a file input.",
+          "type": "boolean"
+        }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "type": { "const": "enum" } } },
+          "then": { "required": ["options"] },
+          "else": { "not": { "required": ["options"] } }
+        },
+        {
+          "if": { "required": ["per_test"] },
+          "then": { "properties": { "type": { "const": "file" } } }
+        }
+      ]
     },
     "step": {
-      "description": "One container. Three shapes: runs once (inputs); one run for one test, an unfolded foreach (inputs and test, the pair of id and test unique in the plan); one container for many tests, a folded foreach (batch).",
+      "description": "One container. Three shapes: runs once (inputs); runs once for one test, one entry per test sharing the id, for a per-test step over a primitive that takes no batch (inputs and test); one container for many tests (batch).",
       "type": "object",
-      "required": ["id", "primitive", "image", "limits"],
+      "required": ["id", "primitive", "image", "network", "limits", "outputs"],
       "additionalProperties": false,
       "properties": {
         "id": {
-          "description": "How later steps name this one. Unique in the plan, except that the runs of an unfolded foreach share it, one per test.",
+          "description": "How later steps name this one. Unique in the plan, except that the entries of a per-test step without a batch share it, one per test.",
           "$ref": "#/$defs/step_id"
         },
         "primitive": {
-          "description": "Which primitive this step runs, as name@version, for example compile@v1, for the log. The image below is what actually runs; the name is never resolved at grade time.",
+          "description": "Which primitive this step runs, as owner/name@version, for example unicon/compile@v2, for the log. The image below is what actually runs; the name is never resolved at grade time.",
           "type": "string",
-          "pattern": "^([a-z0-9][a-z0-9_-]*/)?[a-z0-9][a-z0-9._-]*@[A-Za-z0-9][A-Za-z0-9._-]*$"
+          "pattern": "^[a-z0-9][a-z0-9_-]*/[a-z0-9][a-z0-9_-]*@[A-Za-z0-9][A-Za-z0-9._-]*$"
         },
         "image": {
           "description": "The primitive's image at that version, by digest, read from its declaration when the plan was compiled.",
           "$ref": "#/$defs/image"
         },
+        "network": {
+          "description": "Whether the step's container may reach the network, through the compute's proxy. Every other container has none.",
+          "type": "boolean"
+        },
         "limits": {
-          "description": "The container's limits, all five, so the socket filter can refuse a container that carries less. For a batch step time_ms and cpu_ms are already for the whole batch; the other three are per item.",
+          "description": "The container's limits, all six, so the socket filter can refuse a container that carries less. For a batch step time_ms and cpu_ms are already for the whole batch; the others are per item.",
           "type": "object",
-          "required": ["time_ms", "cpu_ms", "memory_mb", "pids", "output_mb"],
+          "required": ["time_ms", "cpu_ms", "memory_mb", "pids", "output_mb", "gpus"],
           "additionalProperties": false,
           "properties": {
             "time_ms": {
@@ -133,7 +152,7 @@
               "minimum": 1
             },
             "memory_mb": {
-              "description": "Memory cap for the container, with no swap. Over the limit is a kill, not a slowdown.",
+              "description": "Memory cap for the container, with no swap.",
               "type": "integer",
               "minimum": 1
             },
@@ -146,19 +165,40 @@
               "description": "How much one run may write: the largest file, and for a batch the total under out/ divided by the number of items.",
               "type": "integer",
               "minimum": 1
+            },
+            "gpus": {
+              "description": "GPU devices the container is given.",
+              "type": "integer",
+              "minimum": 0
             }
           }
+        },
+        "outputs": {
+          "description": "The primitive's declared output ports with their types, a ? after the name of one the primitive may leave out of an accepted result. On accepted every port without a ? must be written, with its type, or the run is a system_error. Every step declares outcome.",
+          "type": "object",
+          "required": ["outcome"],
+          "propertyNames": { "pattern": "^[a-z][a-z0-9_]*\\??$" },
+          "properties": {
+            "outcome": { "const": "outcome" }
+          },
+          "additionalProperties": { "$ref": "#/$defs/type" }
+        },
+        "folders": {
+          "description": "The names of the step's input ports of type folder. A file given to one is placed as a folder holding that one file under its name.",
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/name" }
         },
         "inputs": {
           "description": "The primitive's inputs, keyed by the names its declaration lists. Present for a step that runs once or for one test.",
           "$ref": "#/$defs/inputs"
         },
         "test": {
-          "description": "The test this run is for, one of the plan's tests. Present only on a run of an unfolded foreach.",
+          "description": "The test this entry runs for, one of the plan's tests.",
           "$ref": "#/$defs/test_id"
         },
         "batch": {
-          "description": "One item per test the container runs, in test order. A test that failed at an earlier step is left out when the harness runs the batch.",
+          "description": "One item per test the container runs, in test order. A test that already has an outcome is left out when the harness runs the batch.",
           "type": "array",
           "minItems": 1,
           "items": {
@@ -187,11 +227,11 @@
     },
     "inputs": {
       "type": "object",
-      "propertyNames": { "pattern": "^[a-z][a-z0-9_]*$" },
-      "additionalProperties": { "$ref": "#/$defs/input_value" }
+      "propertyNames": { "$ref": "#/$defs/name" },
+      "additionalProperties": { "$ref": "#/$defs/value" }
     },
-    "input_value": {
-      "description": "Exactly one of: a literal; a file or list of files in the publication checkout; a contestant input resolved through submission.json, or the language chosen for a code input; an output of an earlier step, for one test when that step runs per test. A reference to a per-test step without test gives that output over every test, in test order.",
+    "value": {
+      "description": "Exactly one of: a literal, with the task's and the test's scalars already written in; a file, or a folder ending in /, of the publication checkout; a contestant input, through submission.json, which in an entry for one test is that test's file of a per_test input; a secret by name, filled from the envelope; an output of an earlier step, which in an entry for one test is its value for that test; a template, text with contestant scalars written in. No value names a test.",
       "oneOf": [
         {
           "type": "object",
@@ -206,21 +246,20 @@
           "required": ["task"],
           "additionalProperties": false,
           "properties": {
-            "task": {
-              "oneOf": [
-                { "$ref": "#/$defs/path" },
-                { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/path" } }
-              ]
-            }
+            "task": { "$ref": "#/$defs/path" }
           }
         },
+        { "$ref": "#/$defs/submission_value" },
         {
           "type": "object",
-          "required": ["submission"],
+          "required": ["secret"],
           "additionalProperties": false,
           "properties": {
-            "submission": { "$ref": "#/$defs/input_id" },
-            "field": { "const": "language" }
+            "secret": {
+              "description": "The name of a secret the task's org holds. The forge puts its value in the envelope; the harness writes it into inputs.json and nowhere else.",
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$"
+            }
           }
         },
         {
@@ -229,20 +268,45 @@
           "additionalProperties": false,
           "properties": {
             "step": { "$ref": "#/$defs/step_id" },
-            "output": { "$ref": "#/$defs/name" },
-            "test": { "$ref": "#/$defs/test_id" }
+            "output": { "$ref": "#/$defs/name" }
+          }
+        },
+        {
+          "type": "object",
+          "required": ["template", "parts"],
+          "additionalProperties": false,
+          "properties": {
+            "template": {
+              "description": "Text with {0}, {1}, ... where the parts go, in order; a literal brace is written twice, {{ or }}.",
+              "type": "string"
+            },
+            "parts": {
+              "description": "The contestant's scalars, each written in its one spelling: a number as the shortest decimal, no exponent; a boolean as true or false; text and an enum as they are.",
+              "type": "array",
+              "minItems": 1,
+              "items": { "$ref": "#/$defs/submission_value" }
+            }
           }
         }
       ]
     },
-    "output_reference": {
-      "description": "An output of a step, by step id and output name.",
+    "submission_value": {
+      "type": "object",
+      "required": ["submission"],
+      "additionalProperties": false,
+      "properties": {
+        "submission": { "$ref": "#/$defs/input_id" }
+      }
+    },
+    "report_entry": {
       "type": "object",
       "required": ["step", "output"],
       "additionalProperties": false,
       "properties": {
         "step": { "$ref": "#/$defs/step_id" },
-        "output": { "$ref": "#/$defs/name" }
+        "output": { "$ref": "#/$defs/name" },
+        "at_least": { "$ref": "#/$defs/number" },
+        "at_most": { "$ref": "#/$defs/number" }
       }
     }
   }

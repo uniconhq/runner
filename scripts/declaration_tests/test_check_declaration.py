@@ -15,16 +15,15 @@ import check_declaration
 REPO_ROOT = Path(__file__).parents[2]
 
 DECLARATION = """\
-name: unicon/compile
-version: v1
 batch: false
-limits: {time_ms: 60000, cpu_ms: 60000, memory_mb: 1024, pids: 128, output_mb: 64}
-limits_from: {}
+limits:
+  {time_ms: 60000, cpu_ms: 60000, memory_mb: 1024, pids: 128, output_mb: 64, gpus: 0}
 inputs:
-  source: {type: file}
-  language: {type: enum, values: [python, c, cpp, java]}
+  source: {type: folder, runs: true}
+  entry: {type: text, optional: true}
+  language: {type: enum, options: [python, c, cpp, java]}
 outputs:
-  binary: {type: file, optional: true}
+  binary: {type: file}
   compile_log: {type: text}
   outcome: {type: outcome}
 """
@@ -57,6 +56,23 @@ def test_an_image_line_is_refused(schema: dict[str, Any], tmp_path: Path) -> Non
     assert found == [
         "primitive.yaml has an image line; the release manifest supplies it"
     ]
+
+
+@pytest.mark.parametrize("line", ["name: unicon/compile\n", "version: v2\n"])
+def test_the_declaration_names_neither_the_primitive_nor_its_version(
+    schema: dict[str, Any], tmp_path: Path, line: str
+) -> None:
+    """The repo at the forge is the name and its tag the version."""
+    found = check_declaration.problems(schema, _repo(tmp_path, line + DECLARATION))
+    assert len(found) == 1
+    assert line.split(":")[0] in found[0]
+
+
+def test_a_file_input_without_its_runs_mark_is_refused(
+    schema: dict[str, Any], tmp_path: Path
+) -> None:
+    text = DECLARATION.replace("{type: folder, runs: true}", "{type: folder}")
+    assert check_declaration.problems(schema, _repo(tmp_path, text)) != []
 
 
 def test_a_field_the_contract_does_not_know_is_refused(

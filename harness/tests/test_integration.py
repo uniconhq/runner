@@ -86,30 +86,28 @@ elif kind == "sandbox":
 """
 
 TESTS = {
-    "1": ("sum 1 2\n", "3\n"),
-    "2": ("sum 2 2\n", "5\n"),
-    "3": ("net\n", "blocked\n"),
-    "4": ("mem\n", "0\n"),
-    "5": ("fork\n", "blocked\n"),
-    "6": ("sandbox\n", "sandboxed\n"),
+    "main/1": ("sum 1 2\n", "3\n"),
+    "main/2": ("sum 2 2\n", "5\n"),
+    "sandbox/1": ("net\n", "blocked\n"),
+    "sandbox/2": ("mem\n", "0\n"),
+    "sandbox/3": ("fork\n", "blocked\n"),
+    "sandbox/4": ("sandbox\n", "sandboxed\n"),
 }
 
 
 def _workspace(fixture: str) -> dict[str, bytes | str]:
     plan = classic_plan(list(TESTS), image=fixture, run_memory_mb=128)
-    files: dict[str, bytes | str] = {"task/plans/default.json": json.dumps(plan)}
+    files: dict[str, bytes | str] = {"task/plans/plan.json": json.dumps(plan)}
     for test, (given, answer) in TESTS.items():
-        files[f"task/data/testcases/{test}.in"] = given
-        files[f"task/data/testcases/{test}.ans"] = answer
+        files[f"task/tests/{test}/input"] = given
+        files[f"task/tests/{test}/answer"] = answer
     files["submission/files/submission/main.py"] = PROGRAM
     files["submission/submission.json"] = json.dumps(
         {
-            "schema_version": 4,
+            "schema_version": 5,
             "inputs": {
-                "submission": {
-                    "files": ["files/submission/main.py"],
-                    "language": "python",
-                }
+                "submission": {"files": ["files/submission/main.py"]},
+                "language": {"value": "python"},
             },
         }
     )
@@ -185,31 +183,32 @@ def test_a_real_run_grades_through_the_filter_and_reports_back() -> None:
     ]
     assert callbacks[0] == {"event": "started"}
     assert any(c["event"] == "progress" for c in callbacks)
-    verdict = callbacks[-1]["verdict"]
+    result = callbacks[-1]["result"]
     assert callbacks[-1]["event"] == "finished"
     assert {r["authorization"] for r in received if r["method"] == "POST"} == {
         f"Bearer {TOKEN}"
     }
 
-    outcomes = {row["id"]: row["outcome"] for row in verdict["tests"]}
+    outcomes = {row["test"]: row["outcome"] for row in result["tests"]}
     assert outcomes == {
-        "1": "accepted",
-        "2": "wrong_answer",
-        "3": "accepted",
-        "4": "memory_limit",
-        "5": "accepted",
-        "6": "accepted",
-    }, verdict
-    assert verdict["outcome"] == "wrong_answer"
-    assert verdict["metrics"] == {"points": 4}
+        "main/1": "accepted",
+        "main/2": "wrong_answer",
+        "sandbox/1": "accepted",
+        "sandbox/2": "memory_limit",
+        "sandbox/3": "accepted",
+        "sandbox/4": "accepted",
+    }, result
+    assert result["stopped"] is None and result["error"] is None
+    assert result["values"] == {"log": "main.py: compiled for python"}
+    assert all("time_ms" in row["values"] for row in result["tests"])
 
     logs = [
         base64.b64decode(r["body"]).decode() for r in received if r["method"] == "PUT"
     ]
     assert len(logs) == 1
     assert TOKEN not in logs[0] and "lab-secret" not in logs[0]
-    assert verdict["log"] == "http://platform:8080/log"
-    assert "Verdict: wrong_answer." in logs[0]
+    assert result["run_log"] == "http://platform:8080/log"
+    assert "4 of 6 tests accepted." in logs[0]
     assert "sha256:" not in logs[0] and "unicon-lab-" not in logs[0]
     assert "sha256:" in harness_log and "unicon-lab-" in harness_log
     assert TOKEN not in harness_log and "lab-secret" not in harness_log
@@ -268,5 +267,5 @@ def test_a_harness_without_the_filter_cannot_start_a_step() -> None:
 
     assert code == 0
     finished = json.loads(base64.b64decode(received[-1]["body"]))
-    assert finished["verdict"]["outcome"] == "system_error"
-    assert "own container" in finished["verdict"]["summary"]
+    assert finished["result"]["stopped"] == "system_error"
+    assert "own container" in finished["result"]["error"]
