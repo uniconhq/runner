@@ -1,13 +1,16 @@
-"""A stand-in for the three classic primitives and a scorer, small enough to
-read at a glance: `compile` checks a Python source and hands it on as the
-binary, `run` runs the binary on each test's input in a batch, `check`
-compares an output with the expected answer, and `score` adds up the outcomes
-of every test. One program
-plays all four, telling which it is from the names of its inputs: a compile
-takes a `source`, a run a `binary`, a check an `actual` output and a scorer
-its `results`. The unit tests call `main` directly on a step directory; the
-Docker integration test builds it into an image, whose entrypoint it is, and
-runs it as a real step.
+"""A stand-in for the three classic primitives, small enough to read at a
+glance: `compile` checks a Python source and hands it on as the binary, `run`
+runs the binary on each test's input in a batch, and `check` compares an
+output with the expected answer, once per test or as a batch. One program
+plays all three, telling which it is from the names of its inputs: a compile
+takes a `source`, a run a `binary` and a check an `actual` output. The unit
+tests call `main` directly on a step directory; the Docker integration test
+builds it into an image, whose entrypoint it is, and runs it as a real step.
+
+A compile's source is a folder, as the classic plan gives a file to the
+folder port: the program is the file its `entry` input names, or the folder's
+one file. A run writes each test's output under out/<its index>/, since a
+test id holds a `/`.
 
 A few sources ask for something other than their answer, to exercise the
 harness: `# fixture: bad-outputs` writes an outputs.json that breaks the
@@ -24,12 +27,11 @@ import time
 from pathlib import Path
 from typing import Any
 
-VERSION = 4
+VERSION = 5
 KINDS = (
     ("source", "compile"),
     ("binary", "run"),
     ("actual", "check"),
-    ("results", "score"),
 )
 
 
@@ -42,8 +44,11 @@ def main(work: Path) -> int:
         result = {
             "schema_version": VERSION,
             "batch": [
-                {"id": item["id"], "outputs": _run(work, item["id"], item["inputs"])}
-                for item in document["batch"]
+                {
+                    "test": item["test"],
+                    "outputs": _run(work, index, item["inputs"]),
+                }
+                for index, item in enumerate(document["batch"], start=1)
             ],
         }
     elif kind == "check":
@@ -51,7 +56,7 @@ def main(work: Path) -> int:
             result = {
                 "schema_version": VERSION,
                 "batch": [
-                    {"id": item["id"], "outputs": _check(work, item["inputs"])}
+                    {"test": item["test"], "outputs": _check(work, item["inputs"])}
                     for item in document["batch"]
                 ],
             }
@@ -60,10 +65,6 @@ def main(work: Path) -> int:
                 "schema_version": VERSION,
                 "outputs": _check(work, document["inputs"]),
             }
-    elif kind == "score":
-        results = document["inputs"]["results"]
-        accepted = sum(1 for outcome in results if outcome == "accepted")
-        result = {"schema_version": VERSION, "outputs": {"points": accepted * 10}}
     else:
         result = {"schema_version": VERSION, "error": f"no such fixture {kind}"}
     if result is not None:
@@ -79,7 +80,7 @@ def kind_of(document: dict[str, Any]) -> str:
 
 
 def _compile(work: Path, inputs: dict[str, Any]) -> dict[str, Any] | None:
-    source = work / inputs["source"]["file"]
+    source = _program(work, inputs)
     text = source.read_text(encoding="utf-8")
     if "# fixture: sleep" in text:
         time.sleep(3600)
@@ -112,10 +113,24 @@ def _compile(work: Path, inputs: dict[str, Any]) -> dict[str, Any] | None:
     }
 
 
-def _run(work: Path, test: str, inputs: dict[str, Any]) -> dict[str, Any]:
+def _program(work: Path, inputs: dict[str, Any]) -> Path:
+    """The file to compile: a file source itself, or in a folder the file the
+    entry input names, or its one file.
+    """
+    source: dict[str, str] = inputs["source"]
+    if "file" in source:
+        return work / source["file"]
+    folder = work / source["folder"]
+    if "entry" in inputs:
+        return folder / str(inputs["entry"])
+    files = sorted(p for p in folder.rglob("*") if p.is_file())
+    return files[0]
+
+
+def _run(work: Path, index: int, inputs: dict[str, Any]) -> dict[str, Any]:
     binary = work / inputs["binary"]["file"]
     given = (work / inputs["input"]["file"]).read_bytes()
-    out = work / "out" / test
+    out = work / "out" / str(index)
     out.mkdir(parents=True, exist_ok=True)
     began = time.monotonic()
     try:
@@ -127,7 +142,6 @@ def _run(work: Path, test: str, inputs: dict[str, Any]) -> dict[str, Any]:
             check=False,
         )
     except subprocess.TimeoutExpired:
-        (out / "output").write_bytes(b"")
         outcome, printed = "time_limit", b""
     else:
         printed = finished.stdout
@@ -139,7 +153,7 @@ def _run(work: Path, test: str, inputs: dict[str, Any]) -> dict[str, Any]:
             outcome = "accepted"
     (out / "output").write_bytes(printed)
     return {
-        "output": {"file": f"out/{test}/output"},
+        "output": {"file": f"out/{index}/output"},
         "time_ms": round((time.monotonic() - began) * 1000),
         "memory_kb": 1024,
         "outcome": outcome,
@@ -154,10 +168,7 @@ def _check(work: Path, inputs: dict[str, Any]) -> dict[str, Any]:
         return [line.rstrip() for line in text.rstrip().splitlines()]
 
     same = lines(actual) == lines(expected)
-    return {
-        "outcome": "accepted" if same else "wrong_answer",
-        "points": 1 if same else 0,
-    }
+    return {"outcome": "accepted" if same else "wrong_answer"}
 
 
 if __name__ == "__main__":

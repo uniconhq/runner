@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://raw.githubusercontent.com/uniconhq/runner/main/schemas/submission.schema.json",
   "title": "Unicon submission",
-  "description": "submission.json at the root of a submission commit. A submit writes one commit to the contestant's submission repo, as the contestant: the files of every code, file and file[] input under files/<input id>/<file name>, and this file naming them. The harness resolves a plan's {\"submission\": ...} values through it: a code or file input gives its one file, a file[] input its list of files, a text, number or boolean input its value, and the field language the language chosen for a code input. Everything before the commit re-checks this against the task's contestant inputs, so the harness trusts its shape only after checking it here.",
+  "description": "submission.json at the root of a submission commit. A submit writes one commit to the contestant's submission repo, as the contestant: the files of every file and folder input under files/<input id>/, and this file naming them. The harness resolves a plan's {\"submission\": ...} values through it: a file input gives its one file, a folder input its files with their layout, a per_test input the one file of the test being run, and a text, number, boolean or enum input its value. Everything before the commit checks this against the plan's contestant inputs and the task's form details, and the harness checks it against the plan again before any step runs.",
   "type": "object",
   "required": ["schema_version", "inputs"],
   "additionalProperties": false,
@@ -10,12 +10,12 @@
     "schema_version": {
       "description": "The submission shape this file is written against.",
       "type": "integer",
-      "const": 4
+      "const": 5
     },
     "inputs": {
-      "description": "One entry per contestant input the task declares, keyed by the input id.",
+      "description": "One entry per contestant input the plan declares, keyed by the input id.",
       "type": "object",
-      "propertyNames": { "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$" },
+      "propertyNames": { "pattern": "^[a-z0-9][a-z0-9_-]*$" },
       "additionalProperties": { "$ref": "#/$defs/input" }
     }
   },
@@ -27,30 +27,25 @@
       ]
     },
     "files": {
-      "description": "A code, file or file[] input: its files in the commit, and for code the language chosen from the input's language list. code and file carry exactly one file; file[] one or more.",
+      "description": "A file or folder input: its files in the commit. A file input carries exactly one; a folder input one or more, at their paths in the folder; a per_test input one per test it answers, at files/<input id>/<group>/<test> or files/<input id>/<group>/<test>.<ending>.",
       "type": "object",
       "required": ["files"],
       "additionalProperties": false,
       "properties": {
         "files": {
-          "description": "Paths from the root of the commit, files/<input id>/<file name>.",
+          "description": "Paths from the root of the commit, files/<input id>/<relative path>.",
           "type": "array",
           "minItems": 1,
           "uniqueItems": true,
           "items": {
             "type": "string",
-            "pattern": "^files/[A-Za-z0-9][A-Za-z0-9_-]*/(?!\\.\\.?$)[^/\\u0000]+$"
+            "pattern": "^files/[a-z0-9][a-z0-9_-]*(/(?!\\.\\.?(/|$))[^/\\u0000]+)+$"
           }
-        },
-        "language": {
-          "description": "The language chosen for a code input.",
-          "type": "string",
-          "minLength": 1
         }
       }
     },
     "value": {
-      "description": "A text, number or boolean input, as the contestant gave it.",
+      "description": "A text, number, boolean or enum input, as the contestant gave it or as its default.",
       "type": "object",
       "required": ["value"],
       "additionalProperties": false,

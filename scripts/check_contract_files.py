@@ -29,7 +29,7 @@ EXAMPLES = REPO_ROOT / "examples"
 CONTRACTS: dict[str, list[tuple[str, str | None]]] = {
     "plan": [("plan.json", None)],
     "envelope": [("envelope.json", None)],
-    "verdict": [("verdict.json", None)],
+    "result": [("result.json", None)],
     "submission": [("submission.json", None)],
     "primitive": [
         ("primitive-inputs.json", "inputs_file"),
@@ -145,7 +145,7 @@ def _unexercised(
 
 def _schema_fields(node: Any, root: Any, prefix: str = "") -> Iterator[str]:
     """Every field path a document may carry, as dotted names. Array items extend
-    the path of the array itself, so `summary.id` is one row's id.
+    the path of the array itself, so `tests.test` is one row's test.
     """
     if not isinstance(node, dict):
         return

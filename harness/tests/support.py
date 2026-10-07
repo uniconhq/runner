@@ -13,6 +13,7 @@ import time
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass, field
+from decimal import Decimal
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
@@ -29,7 +30,7 @@ DIGEST = "0" * 64
 COMPILE = f"ghcr.io/uniconhq/primitive-compile@sha256:{'1' * 64}"
 RUN = f"ghcr.io/uniconhq/primitive-sandbox-run@sha256:{'2' * 64}"
 CHECK = f"ghcr.io/uniconhq/primitive-diff-check@sha256:{'3' * 64}"
-SCORE = f"ghcr.io/uniconhq/primitive-score@sha256:{'4' * 64}"
+JUDGE = f"ghcr.io/acme/rubric@sha256:{'4' * 64}"
 HARNESS = f"ghcr.io/uniconhq/harness@sha256:{'5' * 64}"
 
 
@@ -184,6 +185,7 @@ def limits(time_ms: int = 10_000, memory_mb: int = 256) -> dict[str, int]:
         "memory_mb": memory_mb,
         "pids": 64,
         "output_mb": 8,
+        "gpus": 0,
     }
 
 
@@ -193,32 +195,43 @@ def classic_plan(
     image: str | None = None,
     run_memory_mb: int = 256,
 ) -> dict[str, Any]:
-    """The classic workflow compiled over `tests`: compile once, run as a batch,
-    check once per test (or as a batch). `image` puts every step on one image,
-    the fixture's, for a real Docker.
+    """The classic workflow compiled over `tests`: compile once, its source a
+    file given to a folder port, run as a batch, check once per test (or as a
+    batch), reporting each test's time and memory and the compile log. `image`
+    puts every step on one image, the fixture's, for a real Docker.
     """
     compile_step = {
         "id": "compile",
-        "primitive": "compile@v1",
+        "primitive": "unicon/compile@v2",
         "image": image or COMPILE,
+        "network": False,
         "limits": limits(),
+        "outputs": {"binary": "file", "compile_log": "text", "outcome": "outcome"},
+        "folders": ["source"],
         "inputs": {
             "source": {"submission": "submission"},
-            "language": {"submission": "submission", "field": "language"},
+            "language": {"submission": "language"},
         },
     }
     run_step = {
         "id": "run",
-        "primitive": "sandbox-run@v1",
+        "primitive": "unicon/sandbox-run@v2",
         "image": image or RUN,
+        "network": False,
         "limits": limits(time_ms=30_000, memory_mb=run_memory_mb),
+        "outputs": {
+            "output": "file",
+            "time_ms": "number",
+            "memory_kb": "number",
+            "outcome": "outcome",
+        },
         "batch": [
             {
                 "test": test,
                 "inputs": {
                     "binary": {"step": "compile", "output": "binary"},
-                    "input": {"task": f"data/testcases/{test}.in"},
-                    "time_limit": {"value": 2.0},
+                    "input": {"task": f"tests/{test}/input"},
+                    "time_limit": {"value": 2},
                     "memory_limit": {"value": 64},
                 },
             }
@@ -227,15 +240,17 @@ def classic_plan(
     }
     check_base: dict[str, Any] = {
         "id": "check",
-        "primitive": "diff-check@v1",
+        "primitive": "unicon/diff-check@v2",
         "image": image or CHECK,
+        "network": False,
         "limits": limits(),
+        "outputs": {"outcome": "outcome"},
     }
 
     def check_inputs(test: str) -> dict[str, Any]:
         return {
-            "actual": {"step": "run", "output": "output", "test": test},
-            "expected": {"task": f"data/testcases/{test}.ans"},
+            "actual": {"step": "run", "output": "output"},
+            "expected": {"task": f"tests/{test}/answer"},
         }
 
     if check_batch:
@@ -246,19 +261,18 @@ def classic_plan(
     else:
         checks = [check_base | {"test": t, "inputs": check_inputs(t)} for t in tests]
     return {
-        "schema_version": 4,
+        "schema_version": 5,
         "harness_image": HARNESS,
-        "stage": "default",
         "tests": tests,
+        "contestant": {
+            "submission": {"type": "file"},
+            "language": {"type": "enum", "options": ["c", "python"]},
+        },
         "steps": [compile_step, run_step, *checks],
-        "verdict": {
-            "outcome": {"step": "check", "output": "outcome"},
-            "metrics": {"points": {"step": "check", "output": "points"}},
-            "tests": {
-                "time_ms": {"step": "run", "output": "time_ms"},
-                "memory_kb": {"step": "run", "output": "memory_kb"},
-            },
-            "summary": {"step": "compile", "output": "compile_log"},
+        "report": {
+            "time_ms": {"step": "run", "output": "time_ms", "at_least": 0},
+            "memory_kb": {"step": "run", "output": "memory_kb", "at_least": 0},
+            "log": {"step": "compile", "output": "compile_log"},
         },
     }
 
@@ -281,39 +295,48 @@ class Checkouts:
     def submission(self) -> Path:
         return self.root / "submission"
 
-    def write_plan(self, plan: dict[str, Any], stage: str = "default") -> None:
-        path = self.task / "plans" / f"{stage}.json"
+    def write_plan(self, plan: dict[str, Any]) -> None:
+        path = self.task / "plans" / "plan.json"
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(plan, indent=2), encoding="utf-8")
 
     def write_source(self, source: str, language: str = "python") -> None:
-        files = self.submission / "files" / "submission"
-        files.mkdir(parents=True, exist_ok=True)
-        (files / "main.py").write_text(source, encoding="utf-8")
-        document = {
-            "schema_version": 4,
-            "inputs": {
-                "submission": {
-                    "files": ["files/submission/main.py"],
-                    "language": language,
-                }
+        self.write_submission(
+            {
+                "submission": {"files": ["files/submission/main.py"]},
+                "language": {"value": language},
             },
-        }
+            {"files/submission/main.py": source},
+        )
+
+    def write_submission(
+        self, inputs: dict[str, Any], files: Mapping[str, str] | None = None
+    ) -> None:
+        """submission.json with these entries, and these files under the
+        checkout by their paths.
+        """
+        for relative, text in (files or {}).items():
+            path = self.submission / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(text, encoding="utf-8")
+        document = {"schema_version": 5, "inputs": inputs}
+        self.submission.mkdir(parents=True, exist_ok=True)
         (self.submission / "submission.json").write_text(
             json.dumps(document), encoding="utf-8"
         )
 
 
 def checkouts(root: Path, tests: Mapping[str, tuple[str, str]]) -> Checkouts:
-    """A task with the given tests (input, answer) and the classic plan, and a
-    submission of the sum program.
+    """A task with the given tests (input, answer) by id, at
+    tests/<group>/<test>/, and the classic plan, and a submission of the sum
+    program.
     """
     made = Checkouts(root, dict(tests))
-    data = made.task / "data" / "testcases"
-    data.mkdir(parents=True)
     for test, (given, answer) in tests.items():
-        (data / f"{test}.in").write_text(given, encoding="utf-8")
-        (data / f"{test}.ans").write_text(answer, encoding="utf-8")
+        folder = made.task / "tests" / test
+        folder.mkdir(parents=True)
+        (folder / "input").write_text(given, encoding="utf-8")
+        (folder / "answer").write_text(answer, encoding="utf-8")
     made.write_plan(classic_plan(list(tests)))
     made.write_source(SUM)
     return made
@@ -367,10 +390,19 @@ class Platform:
     def events(self) -> list[str]:
         return [c["event"] for c in self.callbacks]
 
-    def verdict(self) -> dict[str, Any]:
+    def result(self) -> dict[str, Any]:
+        """The result of the last final callback, its numbers as Decimals and
+        ints as the forge reads them.
+        """
         finished = [c for c in self.callbacks if c["event"] == "finished"]
         assert finished, self.events()
-        found: dict[str, Any] = finished[-1]["verdict"]
+        found: dict[str, Any] = finished[-1]["result"]
+        return found
+
+    @property
+    def bodies(self) -> list[bytes]:
+        """Every callback body as it was sent."""
+        found: list[bytes] = self._state["bodies"]
         return found
 
     def envelope_for(self, made: Checkouts, wall_seconds: int = 900) -> dict[str, Any]:
@@ -401,6 +433,7 @@ def platform_server() -> Iterator[Platform]:
         "status": 200,
         "delay": 0.0,
         "callbacks": [],
+        "bodies": [],
         "authorizations": [],
         "logs": [],
         "callback_statuses": [200],
@@ -416,9 +449,10 @@ def platform_server() -> Iterator[Platform]:
 
         def do_POST(self) -> None:
             body = self.rfile.read(int(self.headers.get("Content-Length", "0")))
-            document = json.loads(body)
+            document = json.loads(body, parse_float=Decimal)
             with lock:
                 state["callbacks"].append(document)
+                state["bodies"].append(body)
                 state["authorizations"].append(self.headers.get("Authorization", ""))
                 final = document.get("event") == "finished"
                 statuses = state["finished_statuses" if final else "callback_statuses"]

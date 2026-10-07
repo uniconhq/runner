@@ -21,6 +21,43 @@ def inside(root: Path, relative: str, what: str) -> Path:
     """The regular file `relative` names under `root`. `what` names the file in
     the fault, for example "task file data/1.in".
     """
+    return _reached(root, relative, what, folder=False)
+
+
+def folder_inside(root: Path, relative: str, what: str) -> Path:
+    """The directory `relative` names under `root`, reached the same way."""
+    return _reached(root, relative, what, folder=True)
+
+
+def tree(root: Path, what: str) -> tuple[tuple[str, Path], ...]:
+    """Every regular file under the directory `root`, by its path relative to
+    it with `/` between segments, in name order. A symbolic link, or anything
+    but a file or a directory, anywhere under it is refused.
+    """
+    found: list[tuple[str, Path]] = []
+
+    def visit(directory: Path, prefix: str) -> None:
+        try:
+            entries = sorted(os.scandir(directory), key=lambda entry: entry.name)
+        except OSError as exc:
+            raise GradingError(f"{what} cannot be read: {exc.strerror}") from None
+        for entry in entries:
+            mode = entry.stat(follow_symlinks=False).st_mode
+            relative = f"{prefix}{entry.name}"
+            if stat.S_ISLNK(mode):
+                raise GradingError(f"{what} holds a symbolic link, {relative}")
+            if stat.S_ISDIR(mode):
+                visit(Path(entry.path), f"{relative}/")
+            elif stat.S_ISREG(mode):
+                found.append((relative, Path(entry.path)))
+            else:
+                raise GradingError(f"{what} holds {relative}, which is not a file")
+
+    visit(root, "")
+    return tuple(found)
+
+
+def _reached(root: Path, relative: str, what: str, folder: bool) -> Path:
     segments = relative.split("/")
     if relative.startswith("/") or any(s in ("", ".", "..") for s in segments):
         raise GradingError(f"{what} is not a plain relative path")
@@ -36,8 +73,10 @@ def inside(root: Path, relative: str, what: str) -> Path:
         if stat.S_ISLNK(mode):
             raise GradingError(f"{what} goes through a symbolic link")
         last = index == len(segments) - 1
-        if last and not stat.S_ISREG(mode):
+        if last and not folder and not stat.S_ISREG(mode):
             raise GradingError(f"{what} is not a regular file")
+        if last and folder and not stat.S_ISDIR(mode):
+            raise GradingError(f"{what} is not a folder")
         if not last and not stat.S_ISDIR(mode):
             raise GradingError(f"{what} does not exist")
     return current

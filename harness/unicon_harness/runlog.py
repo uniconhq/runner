@@ -1,21 +1,23 @@
-"""The run's two logs: the one the contestant may read, and the one for staff.
+"""The run's two logs: the run log the task's organisers read, and the one for
+staff.
 
-The contestant's log is the one thing the harness writes to object storage,
-uploaded once at the end by the presigned PUT, and the forge shows it to the
-contestant where the stage's `show` is `full`. It says what ran and how it
-went: each step by its id and primitive, its outcome, test by test, and the
-verdict. It never names an image, a volume, a container or a machine, never
-carries what a step printed, and never says more about a system error than
-that there was one.
+The run log is the one thing the harness writes to object storage, uploaded
+once at the end by the presigned PUT, and the forge shows it to the task's
+organisers; it names every test, so no contestant reads it. It says what ran
+and how it went: each step by its id and primitive, its outcome, test by
+test, and the result. It never names an image, a volume, a container or a
+machine, never carries what a step printed, and never says more about a
+system error than that there was one.
 
 Everything else is for staff and goes only to stdout, which is the CI's own
 job log: the envelope's identity, the workspace volume, each step's image,
 container exits, what each step printed (cut to its first and last 8K
 characters when longer than 16K), callback trouble and the harness's own
-faults. Every contestant line goes there too, so
-the CI log reads as the whole story.
+faults. Every line of the run log goes there too, so the CI log reads as the
+whole story.
 
-Neither log ever carries the callback token or a presigned query.
+Neither log ever carries the callback token, a presigned query or a secret's
+value.
 """
 
 from __future__ import annotations
@@ -31,7 +33,7 @@ REDACTED = "<redacted>"
 
 class RunLog:
     """Lines stamped with the seconds since the run began. `tell` is a line for
-    the contestant's log (and the CI log); `event` and `block` are for staff,
+    the run log (and the CI log); `event` and `block` are for staff,
     in the CI log only. With `echo` off, as in tests, nothing is printed and
     the staff lines are kept for `staff_text`.
     """
@@ -51,20 +53,21 @@ class RunLog:
         self._secrets: list[str] = []
 
     def hide(self, secret: str) -> None:
-        """Never write `secret`, from here on: it is replaced wherever it appears."""
+        """Never write `secret`, from here on: it is replaced wherever it appears.
+        The longest is replaced first, so one that holds another goes whole.
+        """
         if secret and secret not in self._secrets:
             self._secrets.append(secret)
+            self._secrets.sort(key=len, reverse=True)
 
     def tell(self, text: str) -> None:
-        """A line the contestant may read."""
+        """A line of the run log."""
         line = self._stamped(text)
         self._told.append(line)
         self._print(line)
 
     def tell_block(self, title: str, text: str) -> None:
-        """Text the contestant may read, such as the summary, indented under a
-        title line.
-        """
+        """Text for the run log, indented under a title line."""
         self.tell(f"{title}:")
         for line in self._redacted(self._cut(text).rstrip("\n")).splitlines():
             indented = f"  | {line}"
@@ -84,7 +87,7 @@ class RunLog:
             self._print(f"  | {line}")
 
     def text(self) -> str:
-        """The contestant's log."""
+        """The run log."""
         return "\n".join(self._told) + "\n"
 
     def staff_text(self) -> str:
@@ -92,7 +95,7 @@ class RunLog:
         return "\n".join(self._staff) + "\n"
 
     def to_bytes(self) -> bytes:
-        """The contestant's log, cut in the middle when it is over the limit, so
+        """The run log, cut in the middle when it is over the limit, so
         the start of the run and its end both survive.
         """
         data = self.text().encode("utf-8", errors="replace")

@@ -7,7 +7,7 @@ This repo produces four images and five contract files.
 
 | Image | What it is |
 |---|---|
-| `ghcr.io/uniconhq/harness` | The program the CI runs once per grading run. It runs the task's plan, one sandboxed container per step, and reports the verdict. `harness/` |
+| `ghcr.io/uniconhq/harness` | The program the CI runs once per grading run. It runs the task's plan, one sandboxed container per step, and reports the result. `harness/` |
 | `ghcr.io/uniconhq/socket-filter` | The policy between the harness and a machine's Docker. It holds the daemon's socket and gives the harness its own. `socket_filter/` |
 | `ghcr.io/uniconhq/clone` | What the CI's two checkout steps run: the CI's clone plugin with big files kept in `/lfs-cache`. `images/clone/` |
 | `ghcr.io/uniconhq/worker` | The supervisor that will set a grading machine up (feature 12). Today a placeholder that names the image and exits 0. |
@@ -15,7 +15,7 @@ This repo produces four images and five contract files.
 The harness, socket filter and worker build from `python:3.14-slim` pinned by
 digest; the clone image builds from `woodpeckerci/plugin-git` pinned by digest.
 The contract files are `plan.schema.json`, `envelope.schema.json`,
-`verdict.schema.json`, `primitive.schema.json` and `submission.schema.json`,
+`result.schema.json`, `primitive.schema.json` and `submission.schema.json`,
 published as assets on every release. The rest of the platform pins one release
 and reads them from it. This repo holds no primitive: each primitive is its own
 repo, `primitive-<name>`, built against the primitive contract published here.
@@ -44,72 +44,98 @@ In order, the harness:
    `unicon-steps/` in that volume, gives it to uid 10001 and becomes uid 10001
    for the rest of the run. The image starts as root only for this, because
    the CI's workspace belongs to root.
-4. Reads `plans/<stage>.json` from the task checkout and `submission.json` and
-   the contestant's files from the submission checkout. Nothing else is
-   downloaded.
+4. Reads `plans/plan.json` from the task checkout and `submission.json` and
+   the contestant's files from the submission checkout, and checks the one
+   against the other. Nothing else is downloaded.
 5. Runs the plan (below), posting progress after each container.
-6. Checks the verdict against `verdict.schema.json`, puts the run log by
-   the presigned `log_put` URL and posts `{"event": "finished", "verdict":
-   ...}`, retrying until the envelope's deadline.
+6. Checks the result against `result.schema.json`, puts the run log by
+   the presigned `log_put` URL and posts `{"event": "finished", "result":
+   ...}`, retrying until the envelope's deadline. Every number in it is
+   written exactly as the primitive wrote it.
 
-It exits 0 once the forge accepted the verdict, 1 when the verdict could not be
+It exits 0 once the forge accepted the result, 1 when the result could not be
 delivered, and 2 when the run never began. Anything unexpected after the
-envelope is accepted is a `system_error` verdict with a summary for staff,
-never a grade.
+envelope is accepted stops the run as a `system_error`, with a sentence for
+staff in `error`, never a grade.
 
 ### Running a plan
 
-- Steps run in plan order, one container each. A step's file inputs are copied
-  into its own directory under `in/`, each distinct file once; nothing a step
-  wrote reaches another step except through the plan's references.
-- A run-once step returning an `outcome` other than `accepted` stops the run:
-  later steps are skipped, tests not yet done are `skipped`, and the run's
-  outcome is that outcome (a failed compile is `compile_error`).
-- A per-test step returning another outcome for a test skips that test's later
-  steps (a batch leaves it out), and that outcome is the test's.
+- A test with no file in a per-test contestant input is `skipped` before any
+  step runs, and left out of every per-test step.
+- Steps run in plan order, one container each, every step that runs once
+  first. A step's inputs are copied into its own directory under `in/`, each
+  distinct one once: a file at `in/<n>/<its name>`, a folder (a task path
+  ending in `/`, a folder contestant input, a folder output of an earlier
+  step) as one directory `in/<n>/<its name>/` with its layout, and a file
+  given to a port the plan's `folders` names as a folder holding that one
+  file, `in/<n>/<port>/<its name>`. Nothing a step wrote reaches another step
+  except through the plan's references. A port wired to an optional output
+  (a `?` in the plan's `outputs`) that its step did not write is left out of
+  `inputs.json`.
+- Values the harness fills in: a contestant input from `submission.json`
+  (inside an entry for one test, a per-test input is that test's file), a
+  secret from the envelope, written into `inputs.json` as text, and a template
+  with the contestant's scalars written in: a number as the shortest decimal
+  with no exponent (`2.50` is `2.5`, `2.0` is `2`), a boolean as `true` or
+  `false`, text and an enum as they are, and `{{` and `}}` as braces.
+- A step that runs once and returns an `outcome` other than `accepted` stops
+  the run: later steps are skipped, every test is `skipped`, the result's
+  `stopped` is that outcome (a failed compile is `compile_error`) and its
+  `stopped_by` the step's id.
+- A per-test step runs only for the tests with no outcome yet. One returning
+  another outcome for a test gives the test that outcome and skips its later
+  steps (a batch leaves it out).
 - What a step wrote is checked before anything reads it: `outputs.json`
-  against the primitive contract, one batch entry per item in order, every file
-  a regular file under `out/` reached without a symbolic link, the total under
-  `out/` within `output_mb` per item, and an `outcome` from the verdict's list.
-- A single-test step killed at its wall clock gives the test `time_limit`, and
-  one that wrote nothing after the kernel killed it at its memory limit
-  `memory_limit`. A run-once or batch step killed that way is a system error.
-  A step that wrote a valid `outputs.json` is taken at its word even when
-  Docker reports an out-of-memory kill inside it, because under `sandbox-run`
-  that kill is the contestant's program.
-- The verdict: each test row's outcome is its first non-accepted outcome,
-  otherwise what `verdict.outcome` gives for that test when it names a
-  per-test output (of any name), otherwise accepted; its
-  `time_ms` and `memory_kb` come from `verdict.tests` (0 when skipped), its
-  metrics from the per-test references in `verdict.metrics`. The run's outcome
-  is the first non-accepted test's in test order, or the run-once output named.
-  Metrics sum over tests. The summary is `verdict.summary` when it is
-  non-empty text, otherwise "7 of 10 tests accepted.".
-- A reference from a run-once step to a per-test step without `test` is the
-  list of that output over every test, in test order. A test the step did not
-  reach has no value in it, except for `outcome`, which gives that test's own
-  outcome so a scorer sees one per test.
+  against the primitive contract, read with every number as the decimal it is
+  written as; one batch entry per item in order, keyed by `test`; the total
+  under `out/` within `output_mb` per item; and per item an `outcome` a step
+  may return, only outputs the plan declares for the step, each of its
+  declared type (a file a regular file under `out/` and a folder a directory
+  there, reached without a symbolic link, a number finite), every output
+  without a `?` present on `accepted`, and every number the report reads
+  within its `at_least` and `at_most`, compared exactly as written
+  (`1.0000000000000000001` is past `at_most: 1`). Any of these failing is a
+  system error.
+- A step's container killed at its time limit, or one that wrote nothing
+  after the kernel killed it at its memory limit, is a system error naming
+  the step, whether it runs once, for one test or as a batch. The primitive
+  keeps a contestant's program within the test's own limits and says how it
+  ended, so a container that outran its own limits is a fault of the
+  platform or of setter code, never the test's `time_limit`. A step that
+  wrote a valid `outputs.json` is taken at its word even when Docker reports
+  an out-of-memory kill inside it, because under `sandbox-run` that kill is
+  the contestant's program.
+- This machine gives a step no network and no GPUs, so a step whose plan entry
+  says `network: true` or `gpus` above 0 is a system error before its
+  container is made.
+- The result: a row per test in plan order. Its outcome is the test's first
+  non-accepted outcome; otherwise `accepted` when the run went to the end, or
+  when a system error struck after every per-test step of the test had run
+  for it; otherwise `skipped`. Its `values` are every per-test name of the
+  report whose step ran for the test and wrote the output, a wrong answer's
+  included; a skipped test has none. The once `values` are every once name
+  whose step wrote the output, kept when a system error struck later. A
+  number is written exactly as the primitive wrote it; a text has every
+  secret's value replaced by `***` and is cut at 10,000 characters.
 
 ### The two logs
 
-The run log, the one object the harness stores, is what the contestant may
-read (the forge shows it where the stage's `show` is `full`). It says what
-ran and how it went, and nothing about the machine:
+The run log, the one object the harness stores, is for the task's
+organisers: it names every test. It says what ran and how it went, and
+nothing about the machine:
 
 ```
-[    0.000s] Grading submission/3, stage default, attempt 1.
+[    0.000s] Grading submission/3, attempt 1.
 [    0.412s] 5 steps to run over 3 tests.
-[    1.803s] compile (compile@v1): accepted
-[    3.120s] run (sandbox-run@v1): 3 tests
-[    3.120s]   test 1: accepted
-[    3.120s]   test 2: time_limit
-[    3.121s]   test 10: accepted
-[    3.566s] check for test 1 (diff-check@v1): accepted
-[    3.566s] check for test 2 (diff-check@v1): skipped, test 2 is already time_limit
-[    4.010s] check for test 10 (diff-check@v1): accepted
-[    4.011s] Verdict: time_limit.
-[    4.011s] Summary:
-  | main.py: compiled
+[    1.803s] compile (unicon/compile@v2): accepted
+[    3.120s] run (unicon/sandbox-run@v2): 3 tests
+[    3.120s]   test main/1: accepted
+[    3.120s]   test main/2: time_limit
+[    3.121s]   test main/10: accepted
+[    3.566s] check for test main/1 (unicon/diff-check@v2): accepted
+[    3.566s] check for test main/2 (unicon/diff-check@v2): skipped, test main/2 is already time_limit
+[    4.010s] check for test main/10 (unicon/diff-check@v2): accepted
+[    4.011s] 2 of 3 tests accepted.
 ```
 
 No image, volume, container, exit code or path, and never what a step printed:
@@ -118,7 +144,9 @@ carry a hidden test's input. A system error says only that there was one.
 Everything else goes to the harness's stdout, the CI's own job log, for
 staff: the envelope's identity, the workspace volume, each step's image and
 exit, what each step printed (cut to 16 KB), callback trouble and tracebacks.
-The contestant's lines are there too, so the CI log reads as the whole story.
+The run log's lines are there too, so the CI log reads as the whole story.
+Neither log carries the callback token, a presigned query or a secret's
+value.
 
 ### Every step container
 
@@ -138,7 +166,7 @@ Created through the filter from the step's image by digest, with:
 | CPU | one CPU (`NanoCpus`), and a `cpu` ulimit of `cpu_ms` rounded up to seconds per process |
 | Processes | `PidsLimit: pids` |
 | Output | an `fsize` ulimit of `output_mb` per file |
-| Wall clock | `time_ms`, after which the harness kills it; the label `unicon.time_ms` carries it for the filter's reaper |
+| Wall clock | `time_ms` and a start allowance of 10 seconds for the container's own start, after which the harness kills it; the label `unicon.time_ms` carries the sum for the filter's reaper |
 | `/work` | the step's own directory, `unicon-steps/<n>-<step>` of the run's workspace volume, as a volume subpath mount with `NoCopy`, read-write |
 | `/tmp` | a tmpfs, at most 256 MB and never more than the memory limit |
 | Labels | `unicon.grading=<grading id>`, `unicon.step=<step id>`, `unicon.time_ms`; the filter adds `unicon.harness` |
@@ -161,6 +189,11 @@ where everything is refused but the step's own `/work`; and with each of
 the eleven protections taken away in turn, each of which lets a named attack
 through. A field added to the body fails a test until it is either given a
 removal and an attack that shows it gone or said not to be a protection.
+The fixtures speak the contract the image speaks: each image is asked in
+contract version 5 first and, when it answers that it speaks another
+version, in version 4, the version of the pinned releases; every output is
+read at the path the primitive reports. They write their own `inputs.json`,
+since they test the container the harness builds, not the files it writes.
 CI runs them in a job of their own, and sandbox-run's CI runs them against
 the image it just built (`SANDBOX_RUN_IMAGE`, `COMPILE_IMAGE`).
 
@@ -169,7 +202,7 @@ the image it just built (`SANDBOX_RUN_IMAGE`, `COMPILE_IMAGE`).
 The daemon resolves a mount's source on the machine, not inside the harness, so
 a directory the harness made at its own `/woodpecker/x` means nothing to it:
 bind-mounting it gives the step an empty directory and a silently wrong
-verdict. The harness therefore finds its own container id in
+result. The harness therefore finds its own container id in
 `/proc/self/mountinfo`, inspects itself through the filter, takes the Docker
 volume mounted over the task checkout, and gives each step a directory of that
 volume as a volume subpath mount. A volume and a subpath are something the
@@ -361,43 +394,65 @@ CI's trusted-clone list beside plugin-git.
 
 ## The contracts
 
-The five share one `schema_version`, 4, the one a runner release publishes them
+The five share one `schema_version`, 5, the one a runner release publishes them
 at. A release that changes the shape of any of them raises it, and the harness
 refuses a file written for another. `scripts/check_contract_files.py` fails CI
 when a file pins another version, when an example under `examples/` does not
 validate, or when a schema field is one no example sets.
 
 **`plan.schema.json`.** Written by the `forge` repo's compiler at every valid
-save as `plans/<stage>.json` in the task repo; read by the harness only. Flat
-and fully resolved: `harness_image` by digest, `stage`, `tests` (the test ids
-in order), `steps`, and `verdict`. A step has `id`, `primitive`, `image` by
-digest and all five `limits`, and is one of three shapes: runs
-once (`inputs`), runs for one test (`inputs` and `test`), or one container for
-many tests (`batch`, a list of `{test, inputs}`). An input value is
-`{"value": ...}`, `{"task": path or [paths]}`, `{"submission": id}` with an
-optional `"field": "language"`, or `{"step": id, "output": name}` with an
-optional `test`. `verdict` names the outputs behind `outcome` (required),
-`metrics`, `tests.time_ms`, `tests.memory_kb` and `summary`. Beyond the schema
-the harness checks that a step id names one step or the runs of one foreach,
-that every test named is in `tests`, and that every reference points at a step
-that runs earlier.
+save as `plans/plan.json` in the task repo, one per task; read by the harness
+only. Flat and fully resolved: `harness_image` by digest, `tests` (every test
+id, `<group>/<test>`, groups in name order and tests in natural order),
+`contestant` (the workflow's contestant inputs, `{type, options, per_test}`),
+`steps`, and `report`. A step has `id`, `primitive` (`owner/name@version`),
+`image` by digest, `network`, all six `limits` (`gpus` among them),
+`outputs` (every declared output port and its type, a `?` after the name of
+one an accepted result may leave out, `outcome` always), `folders` (its
+input ports of type folder), and is one of three shapes: runs once
+(`inputs`), runs for one test (`inputs` and `test`), or one container for
+many tests (`batch`, a list of `{test, inputs}`). An input value is exactly
+one of `{"value": ...}`, `{"task": path}` (a folder when the path ends in
+`/`), `{"submission": id}`, `{"secret": name}`, `{"step": id, "output":
+name}` and `{"template": text, "parts": [{"submission": id}, ...]}`; no value
+names a test, since inside an entry for one test a per-test input or step
+gives that test's value. `report` is the workflow's report, each name a step
+and an output with the `at_least` and `at_most` a number keeps. Beyond the
+schema the harness checks that a step id names one step or the entries of
+one per-test step, that every step that runs once comes before every step
+that runs per test, that every test named is in `tests`, that every
+reference points at an output declared by another step that runs earlier
+and that no step that runs once reads one that runs per test, that every
+contestant input named is declared and of the kind its value needs, that
+every template is well formed, and that the report reads a declared text or
+number output of a step the plan has.
 
 **`envelope.schema.json`.** Served by the `forge` repo at the run's envelope
-URL. `grading_id`, `submission`, `stage`, `attempt`, `checkouts` (`/woodpecker/task`, `/woodpecker/submission`), `callback` (`url`
-and a one-run `token`), `log_put` (a presigned PUT into `unicon-results` at
-`logs/<grading id>/<attempt>.log`), `deadline`, and `limits.wall_seconds`, which
-is always present. The run's wall clock is the smaller of `wall_seconds` and
-the time to the deadline less 30 seconds kept for reporting.
+URL. `grading_id`, `submission`, `attempt`, `checkouts` (`/woodpecker/task`,
+`/woodpecker/submission`), `callback` (`url` and a one-run `token`),
+`log_put` (a presigned PUT into `unicon-results` at
+`logs/<grading id>/<attempt>.log`), `deadline`, `limits.wall_seconds`, which
+is always present, and `secrets`, the value of every secret the plan names,
+by name (`{}` when it names none). The run's wall clock is the smaller of
+`wall_seconds` and the time to the deadline less 30 seconds kept for
+reporting.
 
-**`verdict.schema.json`.** Posted in the final callback; checked by the
-`forge` repo and kept on the grading row. `outcome` from a fixed list
-(`accepted`, `partial`, `wrong_answer`, `time_limit`, `memory_limit`,
-`output_limit`, `runtime_error`, `compile_error`, `skipped`, `system_error`),
-`metrics` as named numbers, `tests` as one row per test with its own outcome,
-time, memory and metrics, `summary`, and `log` (the log's URL without its
-presigned query, or null). The callback URL and its token name the grading,
-so the verdict does not. There is no separate score. `system_error` allows no
-rows and no metrics.
+**`result.schema.json`.** Posted in the final callback; checked by the
+`forge` repo and kept on the grading row. `stopped` (null, the outcome of a
+step that runs once and stopped the run, or `system_error`), `stopped_by`
+(the id of that step when one stopped the run, otherwise null, a
+`system_error` included; the platform holds a stop back until the task's
+reveal only when this step is sealed), `tests` (one row per plan test, in
+plan order, `{test, outcome, values}`), `values` (the once names of the
+report), `run_log` (the log's URL without its presigned query, or null) and
+`error` (a sentence for staff exactly when `stopped` is `system_error`). The
+outcomes are `accepted`, `wrong_answer`, `time_limit`, `memory_limit`,
+`output_limit`, `runtime_error`, `compile_error`, `skipped` and
+`system_error`; a step returns neither of the last two, and a row is
+never `system_error`. A value is a number exactly as the primitive wrote it,
+or a text of at most 10,000 characters. The callback URL and its token name
+the grading, so the result does not. Every other outcome, and every number
+shown, the platform works out from the rows.
 
 **`primitive.schema.json`.** How the harness and a primitive image talk, and
 the `primitive.yaml` declaration the forge compiler reads; a document is
@@ -405,26 +460,41 @@ exactly one of the three.
 
 | File | Shape |
 |---|---|
-| `inputs.json` | `{"schema_version": 4, "inputs": {...}}`, or `"batch": [{"id": test, "inputs": {...}}]` |
-| `outputs.json` | `{"schema_version": 4, "outputs": {...}}`, or `"batch": [{"id": test, "outputs": {...}}]` one per item in the same order, or `{"schema_version": 4, "error": "one sentence"}` when the primitive could not work at all |
-| `primitive.yaml` | `name`, `version`, `image` by digest, `batch`, `limits` (all five), optional `limits_from` (`{input, scale, add}`, scale 1 and add 0 when left out), `inputs` and `outputs` as `{type, values, optional}` |
+| `inputs.json` | `{"schema_version": 5, "inputs": {...}}`, or `"batch": [{"test": id, "inputs": {...}}]` |
+| `outputs.json` | `{"schema_version": 5, "outputs": {...}}`, or `"batch": [{"test": id, "outputs": {...}}]` one per item in the same order, or `{"schema_version": 5, "error": "one sentence"}` when the primitive could not work at all |
+| `primitive.yaml` | `image` by digest, `batch`, `network`, `limits` (all six), optional `limits_from` (`{input, scale, add}`, scale 1 and add 0 when left out), `inputs` and `outputs` as `{type, options, optional, runs, secret}` |
 
 A value is text, a number, a boolean, a file `{"file": "in/..."}` or
-`{"file": "out/..."}`, a list of files, or a list of text, numbers or booleans
-(a per-test output over every test). Paths have no empty, `.` or `..` segment.
-Types are `file`, `file[]` (quote it in YAML flow style: `{type: "file[]"}`),
-`text`, `number`, `boolean`, `enum` with `values`, and `outcome`. The
-container runs the image's own `ENTRYPOINT`, so a primitive's Dockerfile sets
-one in exec form and its declaration names no program. A primitive repo
-validates its `primitive.yaml` against the release's schema with a
-placeholder digest filled in, since bootstrap writes the image (below).
+`{"file": "out/..."}`, or a folder `{"folder": "in/..."}` or `{"folder":
+"out/..."}`, the tree under it with its layout. Paths have no empty, `.` or
+`..` segment. A test id holds a `/`, so a primitive that writes a file per
+test names it some other way, such as by the item's index. Types are `text`,
+`number`, `boolean`, `enum` with `options`, `file`, `folder`, and `outcome`
+for the one output every primitive declares. Every `file` or `folder` input
+says with `runs` whether the primitive runs what arrives there as a program,
+and `secret` marks an input the image keeps from any program it runs. The
+declaration names neither the primitive nor its version: the repo at the
+forge is the name and its tag the version. The container runs the image's
+own `ENTRYPOINT`, so a primitive's Dockerfile sets one in exec form and its
+declaration names no program. A primitive repo validates its
+`primitive.yaml` against the release's schema with a placeholder image
+filled in, since bootstrap writes the image (below).
 
 **`submission.schema.json`.** `submission.json` at the root of a submission
-commit: `{"schema_version": 4, "inputs": {id: entry}}`, where an entry is
-`{"files": ["files/<id>/<name>", ...], "language": ...}` for a `code`, `file` or
-`file[]` input, or `{"value": ...}` for `text`, `number` and `boolean`. A
-`{"submission": id}` plan value gives the one file of an input with one file,
-the list for more, or the value.
+commit: `{"schema_version": 5, "inputs": {id: entry}}`, one entry per
+contestant input the plan declares, where an entry is `{"files":
+["files/<id>/<path>", ...]}` for a `file` input (one file), a `folder` input
+(its files at their paths in the folder) or a per-test input (one file per
+test it answers, `files/<id>/<group>/<test>` or
+`files/<id>/<group>/<test>.<ending>` with an ending that is not empty), or
+`{"value": ...}` for `text`, `number`, `boolean` and `enum`. The harness
+refuses one that leaves out an input, gives one the plan does not declare,
+gives files for a value or a value for files, or gives a per-test file named
+neither way or two files for one test. A per-test file for a test the plan
+does not have, which a rejudge against a plan that dropped or renamed the
+test meets, is noted in the CI log and not read. A `{"submission": id}` plan
+value gives the one file of a file input, the files of a folder input as one
+folder, the test's file of a per-test input, or the value.
 
 ## The primitives' workflows
 
@@ -437,9 +507,9 @@ primitive contract the primitive is built against, and pass that same tag as
 ```yaml
 jobs:
   ci:
-    uses: uniconhq/runner/.github/workflows/primitive-ci.yaml@v0.5.0
+    uses: uniconhq/runner/.github/workflows/primitive-ci.yaml@v0.6.0
     with:
-      runner-ref: v0.5.0
+      runner-ref: v0.6.0
 ```
 
 A called workflow cannot tell which ref of its own repo it was called at, so
@@ -455,13 +525,16 @@ is `ghcr.io/uniconhq/primitive-<name>`.
   image is built and the image tests (`pytest -m image`) run against it.
   For `primitive-sandbox-run`, that job also runs this repo's escape
   fixtures against the image it built.
-- `primitive-release.yaml`, on a tag push: the tag must be on `main`, equal
-  the version in `pyproject.toml`, and be a release of the version
-  `primitive.yaml` declares (`v1.2.3` of `v1`). It runs the same checks as
+- `primitive-release.yaml`, on a tag push: the tag must be on `main`, be
+  `v<major>.<minor>.<patch>` and equal the version in `pyproject.toml`. Its
+  major is the primitive's version at the forge, which names the set of ports
+  it declares: `v2.0.0` and `v2.1.3` are both `v2` there, so a release that
+  changes a port raises the major. It runs the same checks as
   CI, builds the image once and runs the image tests on it, pushes exactly
   that image as `ghcr.io/uniconhq/primitive-<name>:v1.2.3`, and makes a
   GitHub release with `images.json`, naming the image by digest in the same
-  shape as this repo's, and `primitive.yaml`. The caller grants
+  shape as this repo's, and `primitive.yaml`, and the forge version in the
+  notes. The caller grants
   `contents: write` and `packages: write`, and each job takes only its part.
 
 `compile-image: true` is for a primitive that runs what the compile
@@ -469,7 +542,7 @@ primitive builds, sandbox-run: both workflows build `primitive-compile` from
 its `main` branch and hand it to the image tests as `COMPILE_IMAGE`.
 
 `scripts/check_declaration.py SCHEMA REPO` refuses an `image` line in the
-repo's `primitive.yaml`, fills in a placeholder digest and checks the result
+repo's `primitive.yaml`, fills in a placeholder image and checks the result
 against the schema's declaration. Its tests are in
 `scripts/declaration_tests/`.
 
@@ -487,7 +560,7 @@ log or the CI log.
 
 **Every plan and envelope carries `schema_version`, and a mismatch is refused.**
 A compiler that emits a shape the harness reads differently produces a wrong
-verdict, not an error, and a wrong verdict is the one failure nobody notices.
+result, not an error, and a wrong result is the one failure nobody notices.
 
 **No image is ever released as `:latest`.** Plans pin the harness image by
 digest so a task keeps grading the way it was published, and a grading machine

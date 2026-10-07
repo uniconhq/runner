@@ -1,8 +1,22 @@
 {
-  "schema_version": 4,
+  "schema_version": 5,
   "inputs": {
-    "submission": { "files": ["files/submission/main.py"], "language": "python" },
-    "weights": { "files": ["files/weights/model.bin", "files/weights/vocab.txt"] },
-    "alpha": { "value": 0.5 }
+    "submission": {
+      "files": [
+        "files/submission/main.py"
+      ]
+    },
+    "language": {
+      "value": "python"
+    },
+    "seed": {
+      "value": 7
+    },
+    "answers": {
+      "files": [
+        "files/answers/main/1.txt",
+        "files/answers/main/2.txt"
+      ]
+    }
   }
 }
