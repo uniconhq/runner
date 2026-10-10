@@ -90,6 +90,10 @@ def create_body(
             # places a step writes.
             "Init": False,
             "IpcMode": "none",
+            # Its own cgroup as the root of its cgroup namespace, where
+            # sandbox-run measures a run's memory, whatever the daemon's
+            # default.
+            "CgroupnsMode": "private",
             "ReadonlyRootfs": True,
             "CapDrop": ["ALL"],
             "SecurityOpt": list(SECURITY_OPTIONS),

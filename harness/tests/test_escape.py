@@ -226,6 +226,7 @@ COVERED = {
     "HostConfig.NetworkMode",
     "HostConfig.Init",
     "HostConfig.IpcMode",
+    "HostConfig.CgroupnsMode",
     "HostConfig.ReadonlyRootfs",
     "HostConfig.CapDrop",
     "HostConfig.SecurityOpt",
@@ -240,8 +241,9 @@ COVERED = {
 """Every field of the harness's create body this file has accounted for:
 those REMOVALS takes away, and the rest, which are not protections an attack
 can show missing (the image, labels, working directory, environment, the
-CPU share, the mounts and the log's size, and `Init: false`, which only
-differs from leaving it out on a daemon configured to add an init)."""
+CPU share, the mounts and the log's size, `Init: false`, which only
+differs from leaving it out on a daemon configured to add an init, and the
+private cgroup namespace, which is for measuring memory)."""
 
 
 VERSIONS = (5, 4)
@@ -572,6 +574,16 @@ def test_every_field_of_the_create_body_is_accounted_for() -> None:
         f"HostConfig.{k}" for k in body["HostConfig"]
     }
     assert fields == COVERED
+
+
+def test_a_step_has_a_cgroup_namespace_of_its_own_whatever_the_daemon_default() -> None:
+    """sandbox-run measures a run's memory by its container's cgroup, which it
+    finds as the root of a private cgroup namespace.
+    """
+    step = _step("image")
+    workspace = Workspace(volume="v", mount=MOUNT, user="10001:10001")
+    body = create_body(step, workspace, MOUNT / "unicon-steps" / "x", "g")
+    assert body["HostConfig"]["CgroupnsMode"] == "private"
 
 
 def test_the_version_5_documents_keep_the_primitive_contract() -> None:
