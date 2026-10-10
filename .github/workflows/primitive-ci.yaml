@@ -109,7 +109,8 @@ jobs:
           load: true
           tags: primitive-compile:ci
       # Runs the image under the same sandbox flags the harness uses: no
-      # network, read-only root, no capabilities, seccomp, user 65532.
+      # network, read-only root, no capabilities, seccomp, a user other than
+      # root (65532 here; the harness's steps run as 10001).
       - run: uv run pytest -m image
         env:
           PRIMITIVE_IMAGE: ${{ env.NAME }}:ci
