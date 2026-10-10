@@ -9,14 +9,14 @@ import copy
 from typing import Any
 
 import pytest
-import yaml
 
+import core_yaml
 from tests.support import EXAMPLES, example
 from unicon_harness.contracts import violation
 
 
 def _yaml(name: str) -> dict[str, Any]:
-    document: dict[str, Any] = yaml.safe_load((EXAMPLES / name).read_text("utf-8"))
+    document: dict[str, Any] = core_yaml.load((EXAMPLES / name).read_text("utf-8"))
     return document
 
 
@@ -279,7 +279,7 @@ def test_the_compile_declaration_of_the_spec_is_accepted() -> None:
         "  compile_log: {type: text}\n"
         "  outcome: {type: outcome}\n"
     )
-    assert violation(yaml.safe_load(text), "primitive", "declaration") is None
+    assert violation(core_yaml.load(text), "primitive", "declaration") is None
 
 
 def test_the_example_submission_is_accepted() -> None:

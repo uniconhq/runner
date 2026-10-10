@@ -93,7 +93,7 @@ jobs:
       - run: uv run ruff format --check .
       - run: uv run ruff check .
       - run: uv run mypy
-      - run: uv run python ../runner/scripts/check_declaration.py "$PRIMITIVE_SCHEMA" .
+      - run: uv run --with ruamel-yaml==0.19.1 python ../runner/scripts/check_declaration.py "$PRIMITIVE_SCHEMA" .
       - run: uv run pytest -m "not image"
 
       # Built once; the image tests run this image and the next job pushes it.

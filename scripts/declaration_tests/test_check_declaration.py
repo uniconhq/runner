@@ -49,6 +49,26 @@ def test_a_declaration_without_an_image_conforms(
     assert check_declaration.problems(schema, _repo(tmp_path, DECLARATION)) == []
 
 
+def test_an_option_yaml_1_1_would_read_as_false_is_the_text_no(
+    schema: dict[str, Any], tmp_path: Path
+) -> None:
+    """Read as the forge reads it, YAML 1.2, `no` and `on` stay text, so the
+    options are text as the contract asks.
+    """
+    text = DECLARATION.replace("[python, c, cpp, java]", "[yes, no, on, NO]")
+    assert check_declaration.problems(schema, _repo(tmp_path, text)) == []
+    assert check_declaration.load_declaration(tmp_path)["inputs"]["language"][
+        "options"
+    ] == ["yes", "no", "on", "NO"]
+
+
+def test_a_key_given_twice_is_a_problem(schema: dict[str, Any], tmp_path: Path) -> None:
+    text = DECLARATION + "batch: true\n"
+    assert check_declaration.problems(schema, _repo(tmp_path, text)) == [
+        "(top): does not parse as YAML: the key 'batch' is given twice"
+    ]
+
+
 def test_an_image_line_is_refused(schema: dict[str, Any], tmp_path: Path) -> None:
     """The image comes from the release manifest, never from the repo file."""
     text = DECLARATION + "image: ghcr.io/x/y@sha256:" + "1" * 64 + "\n"

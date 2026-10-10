@@ -6,7 +6,8 @@ harness have parted company.
 contract describes three documents, inputs.json, outputs.json and the
 primitive.yaml declaration, so each of its examples is checked against the
 branch it is an instance of, and a branch's fields are exercised by its
-examples together. An example is JSON, or YAML when its name ends in .yaml.
+examples together. An example is JSON, or YAML when its name ends in .yaml,
+read as the forge reads a definition file (core_yaml.py).
 """
 
 from __future__ import annotations
@@ -17,9 +18,9 @@ from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
-import yaml
 from jsonschema import Draft202012Validator, FormatChecker
 
+import core_yaml
 from unicon_harness.contracts import SCHEMA_VERSION
 
 REPO_ROOT = Path(__file__).parents[1]
@@ -176,7 +177,7 @@ def _document_fields(value: Any, prefix: str = "") -> Iterator[str]:
 def _read(path: Path) -> dict[str, Any]:
     text = path.read_text(encoding="utf-8")
     document: dict[str, Any] = (
-        yaml.safe_load(text) if path.suffix == ".yaml" else json.loads(text)
+        core_yaml.load(text) if path.suffix == ".yaml" else json.loads(text)
     )
     return document
 
