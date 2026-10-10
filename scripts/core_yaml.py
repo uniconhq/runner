@@ -81,6 +81,14 @@ class _ExactConstructor(SafeConstructor):
             return Decimal("NaN")
         return Decimal(text)
 
+    def construct_not_core(self, node: Any) -> Any:
+        raise ConstructorError(
+            None,
+            None,
+            f"the tag {node.tag} is not one of YAML 1.2's core schema",
+            node.start_mark,
+        )
+
     def construct_core_int(self, node: ScalarNode) -> int:
         text = str(self.construct_scalar(node))
         if text.startswith(("0o", "0x")):
@@ -92,6 +100,10 @@ _ExactConstructor.add_constructor(
     _TAG + "float", _ExactConstructor.construct_exact_float
 )
 _ExactConstructor.add_constructor(_TAG + "int", _ExactConstructor.construct_core_int)
+for _other in ("timestamp", "binary", "set", "omap", "pairs", "merge", "value"):
+    _ExactConstructor.add_constructor(
+        _TAG + _other, _ExactConstructor.construct_not_core
+    )
 
 
 def load(text: str | bytes) -> Any:
