@@ -6,7 +6,9 @@ double on the way: `loads` reads every number with a fraction or an exponent
 as a Decimal (whole numbers stay ints), and `dumps` writes a Decimal as its
 own text. NaN and Infinity, which JSON does not have but Python's reader
 takes, are read as the Decimal they name, so a check can refuse them by name
-rather than the reader turning them into floats.
+rather than the reader turning them into floats. A whole number of any length
+is read and written by way of a Decimal, which Python's limit on turning text
+of more than 4300 digits into an int, and back, does not cover.
 """
 
 from __future__ import annotations
@@ -18,7 +20,17 @@ from typing import Any
 
 def loads(raw: bytes | str) -> Any:
     """Raises ValueError, json.JSONDecodeError among them, for what is not JSON."""
-    return json.loads(raw, parse_float=Decimal, parse_constant=Decimal)
+    return json.loads(raw, parse_float=Decimal, parse_int=whole, parse_constant=Decimal)
+
+
+def whole(text: str) -> int:
+    """A whole number's text as its int, whatever its length."""
+    return int(Decimal(text))
+
+
+def digits(number: int) -> str:
+    """An int's text, whatever its length."""
+    return str(Decimal(number))
 
 
 def dumps(document: Any, indent: int | None = None) -> str:
@@ -43,7 +55,7 @@ def _encoded(value: Any, indent: int | None, depth: int) -> str:
     if value is None or isinstance(value, bool | str):
         return json.dumps(value)
     if isinstance(value, int):
-        return str(value)
+        return digits(value)
     if isinstance(value, Decimal):
         if not value.is_finite():
             raise ValueError(f"{value} is not a number JSON can carry")
