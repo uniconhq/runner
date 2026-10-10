@@ -59,7 +59,7 @@ jobs:
       - run: uv run mypy
       # The repo's file has no image line; the check fills in a placeholder
       # digest, as bootstrap later fills in the real one.
-      - run: uv run python ../runner/scripts/check_declaration.py "$PRIMITIVE_SCHEMA" .
+      - run: uv run --with ruamel-yaml==0.19.1 python ../runner/scripts/check_declaration.py "$PRIMITIVE_SCHEMA" .
       - run: uv run pytest -m "not image"
 
   image:
