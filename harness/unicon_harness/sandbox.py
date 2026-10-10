@@ -183,11 +183,14 @@ class Sandbox:
             ).get("State")
             or {}
         )
+        cut_short = False
         try:
             printed = self._docker.logs(container, LOG_LIMIT_BYTES)
+            # At the limit, the step printed more than was read.
+            cut_short = len(printed.encode("utf-8", "replace")) >= LOG_LIMIT_BYTES
         except DockerError as exc:
             printed = f"(the log could not be read: {exc.reason})"
-        self._log.block(f"step {step.label} printed", printed or "(nothing)")
+        self._log.block(f"step {step.label} printed", printed or "(nothing)", cut_short)
         self.remove(container)
         return Ended(
             exit_code=exit_code,
