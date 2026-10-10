@@ -579,8 +579,12 @@ its `main` branch and hand it to the image tests as `COMPILE_IMAGE`.
 
 `scripts/check_declaration.py SCHEMA REPO` refuses an `image` line in the
 repo's `primitive.yaml`, fills in a placeholder image and checks the result
-against the schema's declaration. Its tests are in
-`scripts/declaration_tests/`.
+against the schema's declaration. It reads the file as the forge reads a
+definition file, YAML 1.2's core schema with every number that is not whole
+an exact decimal (`scripts/core_yaml.py`), so an option `no` is the text
+`no` here as at the forge; the workflows hand it `ruamel.yaml` with
+`uv run --with`, so a primitive's own dependencies need not name it. Its
+tests are in `scripts/declaration_tests/`.
 
 A change to these workflows reaches a primitive when the primitive moves its
 two `uses:` lines and `runner-ref` to the release that carries it.
