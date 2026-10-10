@@ -232,12 +232,18 @@ rule is the `forge` repo's to keep, and the list here is the rest.
    - `UNICON_ENVELOPE_URL` and `UNICON_GRADING_ID` in its environment;
    - no credential and no other socket.
 4. **Both checkouts are inside one Docker volume, mounted into the harness
-   container.** The task is checked out at its publication's commit with its
-   big files, and the submission at its own commit. The harness finds that
-   volume from its own mounts and gives each step a subpath of it (the
-   host-path trap, above), and the envelope tells it where each checkout
-   is. Today: the CI's workspace volume, at `/woodpecker/task` and
-   `/woodpecker/submission`.
+   container where the socket filter looks for it** (`UNICON_FILTER_WORKSPACE`,
+   `/woodpecker` by default), since that mount is how the filter tells one
+   run from another. The task is checked out at its publication's commit
+   and the submission at its own, each with its big files, since every file
+   a person uploads is one. The harness finds that volume from its own
+   mounts and gives each step a subpath of it (the host-path trap, above),
+   and the envelope tells it where each checkout is. Today: the CI's
+   workspace volume, at `/woodpecker/task` and `/woodpecker/submission`.
+5. **The big files come through a store of the org's own on the machine**
+   (`unicon-lfs-<org>`, mounted at `/lfs-cache` in both checkouts), so no
+   org's checkout is served a file another org's brought to the machine by
+   naming its object id. Today: a volume per org, named in the CI's answer.
 
 ## The socket filter
 
