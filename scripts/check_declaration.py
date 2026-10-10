@@ -9,7 +9,9 @@ bootstrap writes the image by digest from the release manifest into the
 version it creates at the forge. So this check refuses an image line, fills in
 a placeholder image and validates the result against the schema's
 declaration. The declaration names neither the primitive nor its version: the
-repository at the forge is the name and its tag the version. Exits 1 and
+repository at the forge is the name and its tag the version. The file is read
+as the forge reads it, YAML 1.2's core schema with exact numbers
+(core_yaml.py), so an option `no` is the text `no` here as there. Exits 1 and
 lists every problem when there is one.
 """
 
@@ -18,9 +20,10 @@ import sys
 from pathlib import Path
 from typing import Any
 
-import yaml
 from jsonschema import Draft202012Validator
 from referencing import Registry, Resource
+
+import core_yaml
 
 PLACEHOLDER_IMAGE = "ghcr.io/uniconhq/primitive@sha256:" + "0" * 64
 DECLARATION = "primitive.yaml"
@@ -28,7 +31,7 @@ DECLARATION = "primitive.yaml"
 
 def load_declaration(root: Path) -> dict[str, Any]:
     """Read primitive.yaml as it is in the repository at `root`."""
-    document = yaml.safe_load((root / DECLARATION).read_text(encoding="utf-8"))
+    document = core_yaml.load((root / DECLARATION).read_text(encoding="utf-8"))
     if not isinstance(document, dict):
         raise ValueError(f"{DECLARATION} is not a mapping")
     return document
@@ -43,7 +46,11 @@ def problems(schema: dict[str, Any], root: Path) -> list[str]:
     """Everything wrong with the declaration of the repository at `root`, one
     line each.
     """
-    declaration = load_declaration(root)
+    try:
+        declaration = load_declaration(root)
+    except core_yaml.YAMLError as refused:
+        problem = getattr(refused, "problem", None) or "it is not valid YAML"
+        return [f"(top): does not parse as YAML: {problem}"]
     found = []
     if "image" in declaration:
         found.append(
