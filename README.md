@@ -209,6 +209,42 @@ volume as a volume subpath mount. A volume and a subpath are something the
 filter can check against the caller's own mounts. Subpath mounts need Docker 26
 or later (Engine API 1.45).
 
+## The machine contract
+
+Whatever starts a grading run, today Woodpecker, owes the machine and the
+harness the following, and a CI put behind the `forge` repo's grading port
+in its place is checked against this list. What runs is decided by the
+platform from its own records, never by the request or the repository; that
+rule is the `forge` repo's to keep, and the list here is the rest.
+
+1. **The org's clone credential reaches only the checkout steps**, and it
+   reads only that org's repositories. The harness step gets no credential
+   of any kind. Today: the clone image is on the CI's trusted-clone list,
+   which lends the activating account's credential to clone steps alone,
+   and that account is a member of its own org and nothing else.
+2. **A run goes only to a machine carrying the run's label**
+   (`pool:platform` until orgs bring their own machines). Today: the run's
+   `labels`, matched against the agent's.
+3. **The harness container is fixed:**
+   - the harness image by the digest in the plan;
+   - the socket filter's folder mounted read-only at `/run/unicon`, and
+     `DOCKER_HOST=unix:///run/unicon/docker.sock`;
+   - `UNICON_ENVELOPE_URL` and `UNICON_GRADING_ID` in its environment;
+   - no credential and no other socket.
+4. **Both checkouts are inside one Docker volume, mounted into the harness
+   container where the socket filter looks for it** (`UNICON_FILTER_WORKSPACE`,
+   `/woodpecker` by default), since that mount is how the filter tells one
+   run from another. The task is checked out at its publication's commit
+   and the submission at its own, each with its big files, since every file
+   a person uploads is one. The harness finds that volume from its own
+   mounts and gives each step a subpath of it (the host-path trap, above),
+   and the envelope tells it where each checkout is. Today: the CI's
+   workspace volume, at `/woodpecker/task` and `/woodpecker/submission`.
+5. **The big files come through a store of the org's own on the machine**
+   (`unicon-lfs-<org>`, mounted at `/lfs-cache` in both checkouts), so no
+   org's checkout is served a file another org's brought to the machine by
+   naming its object id. Today: a volume per org, named in the CI's answer.
+
 ## The socket filter
 
 `python -m unicon_filter`, standard library only. It listens on
