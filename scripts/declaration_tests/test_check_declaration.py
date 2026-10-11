@@ -88,6 +88,42 @@ def test_the_declaration_names_neither_the_primitive_nor_its_version(
     assert line.split(":")[0] in found[0]
 
 
+def test_a_primitive_and_its_ports_may_say_what_they_are_for(
+    schema: dict[str, Any], tmp_path: Path
+) -> None:
+    """A title and descriptions are for the workflow editor; each is one line."""
+    text = (
+        "title: Compile\n"
+        "description: Compiles the contestant's source into a program.\n"
+        + DECLARATION.replace(
+            "{type: folder, runs: true}",
+            "{type: folder, runs: true, description: The source files.}",
+        )
+        .replace("{type: file}", "{type: file, description: The program built.}")
+        .replace(
+            "{type: outcome}", "{type: outcome, description: Whether it compiled.}"
+        )
+    )
+    assert check_declaration.problems(schema, _repo(tmp_path, text)) == []
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        'title: ""\n',
+        "title: '   '\n",
+        'description: "Two\\nlines."\n',
+        "description: 3\n",
+    ],
+)
+def test_a_title_or_description_that_is_not_one_line_of_text_is_refused(
+    schema: dict[str, Any], tmp_path: Path, line: str
+) -> None:
+    found = check_declaration.problems(schema, _repo(tmp_path, line + DECLARATION))
+    assert len(found) == 1
+    assert line.split(":")[0] in found[0]
+
+
 def test_a_file_input_without_its_runs_mark_is_refused(
     schema: dict[str, Any], tmp_path: Path
 ) -> None:
