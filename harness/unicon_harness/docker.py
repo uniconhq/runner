@@ -55,6 +55,12 @@ class Docker(Protocol):
 
     def logs(self, container_id: str, limit: int) -> str: ...
 
+    def logs_read(self, container_id: str, limit: int) -> tuple[str, bool]:
+        """What the container printed, as `logs` reads it, and whether it
+        printed more than was read.
+        """
+        ...
+
     def remove(self, container_id: str) -> None: ...
 
 
@@ -142,7 +148,16 @@ class DockerClient:
         """What the container printed, stdout and stderr in order, at most `limit`
         bytes of it.
         """
+        return self.logs_read(container_id, limit)[0]
+
+    def logs_read(self, container_id: str, limit: int) -> tuple[str, bool]:
+        """What the container printed, as `logs` reads it, and whether it
+        printed more than was read: the stream did not end before the read
+        stopped, or held more than `limit` bytes of text once its frames'
+        headers were taken off.
+        """
         data = bytearray()
+        more = False
         with self._client.stream(
             "GET",
             f"/containers/{container_id}/logs",
@@ -154,10 +169,12 @@ class DockerClient:
             for chunk in response.iter_bytes():
                 data.extend(chunk)
                 if len(data) >= limit + 8:
+                    more = True
                     break
         multiplexed = "multiplexed" in response.headers.get("content-type", "")
         text = _demultiplexed(bytes(data)) if multiplexed else bytes(data)
-        return text[:limit].decode("utf-8", errors="replace")
+        more = more or len(text) > limit
+        return text[:limit].decode("utf-8", errors="replace"), more
 
     def remove(self, container_id: str) -> None:
         """Force-remove. A container already gone is not an error."""

@@ -143,6 +143,36 @@ def test_create_start_wait_logs_and_remove(daemon: tuple[str, _Daemon]) -> None:
 
 
 @needs_unix
+def test_a_log_read_to_its_limit_says_it_was_cut_however_short_its_lines(
+    daemon: tuple[str, _Daemon],
+) -> None:
+    """Every line of a log is a frame with an eight-byte header, so a log of
+    short lines reaches the read's limit in raw bytes long before its text
+    does; it is cut all the same."""
+    path, server = daemon
+    cid = "b" * 64
+    frame = b"\x01\x00\x00\x00\x00\x00\x00\x02x\n"
+    logs = f"/v1.45/containers/{cid}/logs"
+    client = DockerClient(path)
+    try:
+        server.answers = {
+            ("GET", logs): (
+                200,
+                frame * 100,
+                "application/vnd.docker.multiplexed-stream",
+            )
+        }
+        text, more = client.logs_read(cid, 400)
+        assert len(text) < 400 and more
+        server.answers = {
+            ("GET", logs): (200, frame * 3, "application/vnd.docker.multiplexed-stream")
+        }
+        assert client.logs_read(cid, 400) == ("x\nx\nx\n", False)
+    finally:
+        client.close()
+
+
+@needs_unix
 def test_a_refusal_carries_the_filter_reason(daemon: tuple[str, _Daemon]) -> None:
     path, server = daemon
     server.answers = {
