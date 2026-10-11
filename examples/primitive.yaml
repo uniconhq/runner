@@ -1,4 +1,6 @@
 image: ghcr.io/uniconhq/primitive-sandbox-run@sha256:2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a
+title: Run program
+description: Runs a program on an input and records its output, time and memory.
 batch: true
 network: false
 limits: {time_ms: 5000, cpu_ms: 5000, memory_mb: 256, pids: 128, output_mb: 64, gpus: 0}
@@ -10,7 +12,7 @@ limits_from:
   output_mb: {input: output_limit, scale: 1, add: 0}
   gpus: {input: gpus, scale: 1, add: 0}
 inputs:
-  binary: {type: file, runs: true}
+  binary: {type: file, runs: true, description: The program to run.}
   input: {type: file, runs: false}
   data: {type: folder, runs: false, optional: true}
   time_limit: {type: number}
@@ -25,6 +27,6 @@ outputs:
   output: {type: file}
   trace: {type: folder, optional: true}
   verdict: {type: enum, options: [ok, bad], optional: true}
-  time_ms: {type: number}
+  time_ms: {type: number, description: The CPU time the program used in milliseconds.}
   memory_kb: {type: number}
-  outcome: {type: outcome}
+  outcome: {type: outcome, description: Whether the program ran within its limits.}
