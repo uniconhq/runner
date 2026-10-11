@@ -21,6 +21,26 @@ def test_a_hidden_secret_never_reaches_either_log() -> None:
     assert log.staff_text().count(REDACTED) == 5
 
 
+def test_a_secret_across_the_middle_cut_is_hidden_whole() -> None:
+    log = RunLog(echo=False)
+    log.hide("s3cr3t-value")
+    start = "a" * (BLOCK_LIMIT_CHARS // 2 - 4)
+    log.block("step printed", start + "s3cr3t-value" + "b" * BLOCK_LIMIT_CHARS * 2)
+
+    assert "s3cr" not in log.staff_text()
+    assert "a<red" in log.staff_text()
+
+
+def test_a_log_cut_short_inside_a_secret_shows_none_of_it() -> None:
+    log = RunLog(echo=False)
+    log.hide("s3cr3t-value")
+    log.block("step printed", "printed s3cr3t", cut_short=True)
+
+    staff = log.staff_text()
+    assert "s3cr" not in staff
+    assert "printed" in staff and "the rest left out" in staff
+
+
 def test_staff_lines_stay_out_of_the_contestants_log() -> None:
     log = RunLog(echo=False)
     log.tell("compile (compile@v1): accepted")
