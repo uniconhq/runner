@@ -33,6 +33,15 @@ def test_nan_and_infinity_are_read_as_decimals_to_be_refused_by_name() -> None:
     assert exact.finite({"a": [Decimal("1E+400"), 3, "NaN"]})
 
 
+def test_a_whole_number_of_any_length_is_read_and_written_to_the_digit() -> None:
+    digits = "9" * 5000
+    document = exact.loads(f'{{"a": {digits}, "b": -{digits}}}')
+
+    assert document == {"a": 10**5000 - 1, "b": 1 - 10**5000}
+    assert exact.dumps(document) == f'{{"a": {digits}, "b": -{digits}}}'
+    assert spelled(document["a"]) == digits
+
+
 def test_a_decimal_is_written_as_its_own_text() -> None:
     text = exact.dumps(
         {"a": Decimal("0.1"), "b": Decimal("1.50"), "c": Decimal("1E+3"), "d": 7}

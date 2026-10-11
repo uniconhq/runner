@@ -168,6 +168,10 @@ class FakeDocker:
     def logs(self, container_id: str, limit: int) -> str:
         return self._get(container_id).does.printed[:limit]
 
+    def logs_read(self, container_id: str, limit: int) -> tuple[str, bool]:
+        printed = self._get(container_id).does.printed
+        return printed[:limit], len(printed) > limit
+
     def remove(self, container_id: str) -> None:
         self.calls.append(f"remove {container_id[-3:]}")
         self._get(container_id).removed = True

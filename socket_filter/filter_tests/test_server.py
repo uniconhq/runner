@@ -143,6 +143,24 @@ async def answers(
     return found
 
 
+async def answered(
+    path: str, data: bytes, status: int, seconds: float = 5.0
+) -> list[tuple[int, dict[str, str], bytes]]:
+    """Send `data` on a fresh connection each time until the answer is
+    `status` or `seconds` pass, and return the last answer: the filter counts
+    a connection once it has taken it and lets it go once it has seen it
+    closed, each in its own time.
+    """
+    deadline = asyncio.get_running_loop().time() + seconds
+    while True:
+        found = await answers(path, data, 1)
+        if found and found[0][0] == status:
+            return found
+        if asyncio.get_running_loop().time() > deadline:
+            return found
+        await asyncio.sleep(0.01)
+
+
 def request(method: str, path: str, document: Any = None) -> bytes:
     data = b"" if document is None else json.dumps(document).encode()
     head = f"{method} {path} HTTP/1.1\r\nHost: docker\r\n"
@@ -391,13 +409,10 @@ def test_a_caller_cannot_hold_more_connections_than_the_ceiling(
 
     async def scenario(path: str, stand_in: StandIn, registry: Registry) -> None:
         held = [await asyncio.open_unix_connection(path) for _ in range(2)]
-        await asyncio.sleep(0.2)
-        found = await answers(path, request("GET", "/_ping"), 1)
-        seen.extend(found)
+        seen.extend(await answered(path, request("GET", "/_ping"), 403))
         for _, writer in held:
             writer.close()
-        await asyncio.sleep(0.2)
-        seen.extend(await answers(path, request("GET", "/_ping"), 1))
+        seen.extend(await answered(path, request("GET", "/_ping"), 200))
 
     run(tmp_path, scenario, config=replace(CONFIG, max_connections=2))
 

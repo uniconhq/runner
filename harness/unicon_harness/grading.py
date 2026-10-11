@@ -527,7 +527,7 @@ def spelled(value: Scalar) -> str:
     if isinstance(value, bool):
         return "true" if value else "false"
     if isinstance(value, int):
-        return str(value)
+        return exact.digits(value)
     if isinstance(value, Decimal):
         text = format(value, "f")
         if "." in text:

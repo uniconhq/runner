@@ -69,7 +69,7 @@ class RunLog:
     def tell_block(self, title: str, text: str) -> None:
         """Text for the run log, indented under a title line."""
         self.tell(f"{title}:")
-        for line in self._redacted(self._cut(text).rstrip("\n")).splitlines():
+        for line in self._cut(self._redacted(text)).rstrip("\n").splitlines():
             indented = f"  | {line}"
             self._told.append(indented)
             self._print(indented)
@@ -78,12 +78,18 @@ class RunLog:
         """A line for staff only."""
         self._print(self._stamped(text))
 
-    def block(self, title: str, text: str) -> None:
+    def block(self, title: str, text: str, cut_short: bool = False) -> None:
         """Text for staff only, such as what a step printed, cut in the middle
-        when it is long.
+        when it is long. Secrets are hidden before any cut, so none is left in
+        part. `cut_short` says the text was already cut at its end, where the
+        start of a secret may be all that is left of it; that start is left
+        out too.
         """
         self._print(self._stamped(f"{title}:"))
-        for line in self._redacted(self._cut(text).rstrip("\n")).splitlines():
+        text = self._redacted(text)
+        if cut_short:
+            text = self._without_secret_start(text) + "\n... the rest left out ..."
+        for line in self._cut(text).rstrip("\n").splitlines():
             self._print(f"  | {line}")
 
     def text(self) -> str:
@@ -118,6 +124,19 @@ class RunLog:
         for secret in self._secrets:
             text = text.replace(secret, REDACTED)
         return text
+
+    def _without_secret_start(self, text: str) -> str:
+        """`text` without whatever at its end begins a secret."""
+        ending = max(
+            (
+                size
+                for secret in self._secrets
+                for size in range(1, len(secret))
+                if text.endswith(secret[:size])
+            ),
+            default=0,
+        )
+        return text[: len(text) - ending]
 
     @staticmethod
     def _cut(text: str) -> str:
