@@ -90,6 +90,10 @@ def create_body(
             # places a step writes.
             "Init": False,
             "IpcMode": "none",
+            # Its own cgroup as the root of its cgroup namespace, where
+            # sandbox-run measures a run's memory, whatever the daemon's
+            # default.
+            "CgroupnsMode": "private",
             "ReadonlyRootfs": True,
             "CapDrop": ["ALL"],
             "SecurityOpt": list(SECURITY_OPTIONS),
@@ -183,11 +187,12 @@ class Sandbox:
             ).get("State")
             or {}
         )
+        cut_short = False
         try:
-            printed = self._docker.logs(container, LOG_LIMIT_BYTES)
+            printed, cut_short = self._docker.logs_read(container, LOG_LIMIT_BYTES)
         except DockerError as exc:
             printed = f"(the log could not be read: {exc.reason})"
-        self._log.block(f"step {step.label} printed", printed or "(nothing)")
+        self._log.block(f"step {step.label} printed", printed or "(nothing)", cut_short)
         self.remove(container)
         return Ended(
             exit_code=exit_code,

@@ -158,6 +158,7 @@ Created through the filter from the step's image by digest, with:
 | Network | `NetworkMode: none` |
 | First process | `Init: false`, so the step's own program is the container's first process whatever the daemon's default |
 | Shared memory | `IpcMode: none`: no `/dev/shm`, so `/work` and `/tmp` are the only places a step writes |
+| Cgroup namespace | `CgroupnsMode: private`, so the step's own cgroup, where sandbox-run measures memory, is the root it sees whatever the daemon's default |
 | Root filesystem | read-only |
 | Capabilities | all dropped |
 | Security options | `no-new-privileges` and `seccomp=builtin`, named explicitly because a daemon's default can be unconfined |
