@@ -499,7 +499,7 @@ exactly one of the three.
 |---|---|
 | `inputs.json` | `{"schema_version": 5, "inputs": {...}}`, or `"batch": [{"test": id, "inputs": {...}}]` |
 | `outputs.json` | `{"schema_version": 5, "outputs": {...}}`, or `"batch": [{"test": id, "outputs": {...}}]` one per item in the same order, or `{"schema_version": 5, "error": "one sentence"}` when the primitive could not work at all |
-| `primitive.yaml` | `image` by digest, `batch`, `network`, `limits` (all six), optional `limits_from` (`{input, scale, add}`, scale 1 and add 0 when left out), `inputs` and `outputs` as `{type, options, optional, runs, secret}` |
+| `primitive.yaml` | optional `title` and `description` for the workflow editor, `image` by digest, `batch`, `network`, `limits` (all six), optional `limits_from` (`{input, scale, add}`, scale 1 and add 0 when left out), `inputs` and `outputs` as `{type, options, optional, runs, secret, description}` |
 
 A value is text, a number, a boolean, a file `{"file": "in/..."}` or
 `{"file": "out/..."}`, or a folder `{"folder": "in/..."}` or `{"folder":
