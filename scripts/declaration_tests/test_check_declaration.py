@@ -124,6 +124,55 @@ def test_a_title_or_description_that_is_not_one_line_of_text_is_refused(
     assert line.split(":")[0] in found[0]
 
 
+def test_the_outcome_port_may_say_what_each_outcome_it_reports_means(
+    schema: dict[str, Any], tmp_path: Path
+) -> None:
+    """Each outcome the step can report, with when, for the workflow editor."""
+    text = DECLARATION.replace(
+        "outcome: {type: outcome}",
+        "outcome:\n"
+        "    type: outcome\n"
+        "    outcomes:\n"
+        "      accepted: the source compiles\n"
+        "      compile_error: it does not compile\n",
+    )
+    assert check_declaration.problems(schema, _repo(tmp_path, text)) == []
+
+
+@pytest.mark.parametrize(
+    "outcomes",
+    [
+        "{skipped: it did not run}",
+        "{system_error: it broke}",
+        "{finished: it finished}",
+        "{accepted: ''}",
+        '{accepted: "two\\nlines"}',
+        "{}",
+    ],
+)
+def test_outcomes_name_only_what_a_step_may_report_each_in_one_line(
+    schema: dict[str, Any], tmp_path: Path, outcomes: str
+) -> None:
+    text = DECLARATION.replace(
+        "outcome: {type: outcome}", f"outcome: {{type: outcome, outcomes: {outcomes}}}"
+    )
+    found = check_declaration.problems(schema, _repo(tmp_path, text))
+    assert len(found) == 1
+    assert "outcome" in found[0]
+
+
+def test_outcomes_are_only_on_the_outcome_port(
+    schema: dict[str, Any], tmp_path: Path
+) -> None:
+    text = DECLARATION.replace(
+        "compile_log: {type: text}",
+        "compile_log: {type: text, outcomes: {accepted: it compiled}}",
+    )
+    found = check_declaration.problems(schema, _repo(tmp_path, text))
+    assert len(found) == 1
+    assert "compile_log" in found[0]
+
+
 def test_a_file_input_without_its_runs_mark_is_refused(
     schema: dict[str, Any], tmp_path: Path
 ) -> None:
