@@ -29,4 +29,12 @@ outputs:
   verdict: {type: enum, options: [ok, bad], optional: true}
   time_ms: {type: number, description: The CPU time the program used in milliseconds.}
   memory_kb: {type: number}
-  outcome: {type: outcome, description: Whether the program ran within its limits.}
+  outcome:
+    type: outcome
+    description: Whether the program ran within its limits.
+    outcomes:
+      accepted: the program ran within its limits
+      time_limit: it ran out of time
+      memory_limit: it used more memory than allowed
+      output_limit: it printed more than allowed
+      runtime_error: it crashed
