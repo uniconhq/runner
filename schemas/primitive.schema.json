@@ -149,7 +149,16 @@
               "additionalProperties": false,
               "properties": {
                 "type": { "const": "outcome" },
-                "description": { "$ref": "#/$defs/line" }
+                "description": { "$ref": "#/$defs/line" },
+                "outcomes": {
+                  "description": "Each outcome the step can report, with one line saying when, for the workflow editor, such as accepted: the source compiles. It changes nothing that grades.",
+                  "type": "object",
+                  "minProperties": 1,
+                  "propertyNames": {
+                    "enum": ["accepted", "wrong_answer", "time_limit", "memory_limit", "output_limit", "runtime_error", "compile_error"]
+                  },
+                  "additionalProperties": { "$ref": "#/$defs/line" }
+                }
               }
             }
           },
