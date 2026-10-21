@@ -197,6 +197,7 @@ jobs:
       # The digest is what bootstrap writes into the forge's primitive.yaml as
       # the image line, and what deploy/images.json pins.
       - uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
+        # zizmor: ignore[superfluous-actions] one step writes the body and uploads the files
         with:
           body: |
             | Image | Digest |
