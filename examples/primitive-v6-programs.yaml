@@ -4,6 +4,7 @@ description: Runs programs side by side, linked by pipes, and records how each o
 schema_version: 6
 batch: true
 network: false
+cache: true
 limits: {time_ms: 4000, cpu_ms: 4000, memory_mb: 512, pids: 1056, output_mb: 64, gpus: 0}
 limits_from:
   time_ms: {max: programs.time_limit, scale: 4000, add: 6000}

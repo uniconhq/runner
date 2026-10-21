@@ -130,7 +130,7 @@
           "$ref": "#/$defs/line"
         },
         "schema_version": {
-          "description": "The contract version the primitive speaks: the schema_version of every inputs.json it is given and outputs.json it writes. 5 when left out. Only version 6 has named_files, programs and links inputs, better and bounds on a number output, outputs_from, and a limit from sum or max.",
+          "description": "The contract version the primitive speaks: the schema_version of every inputs.json it is given and outputs.json it writes. 5 when left out. Only version 6 has named_files, programs and links inputs, better and bounds on a number output, outputs_from, a limit from sum or max, and cache.",
           "type": "integer",
           "enum": [5, 6]
         },
@@ -145,6 +145,10 @@
         },
         "network": {
           "description": "true when the container may reach the network, through the compute's proxy. false when left out: every other container has none.",
+          "type": "boolean"
+        },
+        "cache": {
+          "description": "Version 6: true when the primitive reads the task's files through the machine's cache, so its step is given the cache. false when left out: the step's files are copied in.",
           "type": "boolean"
         },
         "limits": {
@@ -240,7 +244,7 @@
         {
           "if": { "required": ["schema_version"], "properties": { "schema_version": { "const": 6 } } },
           "else": {
-            "not": { "required": ["outputs_from"] },
+            "not": { "anyOf": [{ "required": ["outputs_from"] }, { "required": ["cache"] }] },
             "properties": {
               "limits_from": { "patternProperties": { "": { "not": { "anyOf": [{ "required": ["sum"] }, { "required": ["max"] }] } } } },
               "inputs": { "additionalProperties": { "properties": { "type": { "not": { "enum": ["named_files", "programs", "links"] } } } } },
@@ -304,7 +308,7 @@
       "items": { "type": "string", "minLength": 1 }
     },
     "input_port": {
-      "description": "One declared input. options on an enum and nowhere else. runs on every file, folder or named_files port and nowhere else: whether the primitive runs what arrives there as a program. names on a named_files port and nowhere else: the names its files must have, when the primitive fixes them. inputs and outputs on a programs port and nowhere else. secret: the image keeps what arrives there from any program it runs from another port. optional: the port may be left without a value. description: what the port takes, for the workflow editor. A programs port, version 6, takes programs the step names, at most 8, each with the inputs the port declares, which the primitive runs side by side; a links port takes the links between them. check_declaration.py allows one programs port, and a links port only beside it.",
+      "description": "One declared input. options on an enum and nowhere else. runs on every file, folder or named_files port and nowhere else: whether the primitive runs what arrives there as a program. names on a named_files port and nowhere else: the names its files must have, when the primitive fixes them. inputs and outputs on a programs port and nowhere else. secret: the image keeps what arrives there from any program it runs from another port. optional: the port may be left without a value. description: what the port takes, for the workflow editor. A programs port, version 6, takes programs the step names, at most 8, each with the inputs the port declares, program among them, the file it runs with runs: true, which the primitive runs side by side; a links port takes the links between them. check_declaration.py allows one programs port, and a links port only beside it.",
       "type": "object",
       "required": ["type"],
       "additionalProperties": false,
@@ -363,7 +367,15 @@
         },
         {
           "if": { "properties": { "type": { "const": "programs" } } },
-          "then": { "required": ["inputs", "outputs"] },
+          "then": {
+            "required": ["inputs", "outputs"],
+            "properties": {
+              "inputs": {
+                "required": ["program"],
+                "properties": { "program": { "properties": { "type": { "const": "file" }, "runs": { "const": true } } } }
+              }
+            }
+          },
           "else": { "not": { "anyOf": [{ "required": ["inputs"] }, { "required": ["outputs"] }] } }
         }
       ]

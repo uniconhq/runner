@@ -537,7 +537,8 @@ out), changes these things, and only it allows them:
 - **A `programs` input,** named `programs`, takes programs the step names,
   one to eight, which the primitive runs side by side, as `interact` does.
   The port declares `inputs`, what each program takes, as the primitive's
-  own inputs are declared, and `outputs`, what it gives of each. The value
+  own inputs are declared, `program` among them, a `file` with `runs:
+  true`, and `outputs`, what it gives of each. The value
   is `{"programs": {"<name>": {<that program's inputs>}}}`; a name is a port
   name of at most 64 characters, never `wall_clock`. A declaration has at
   most one programs port, named `programs`, and needs `outputs_from:
@@ -555,6 +556,10 @@ out), changes these things, and only it allows them:
   that the names are a programs port and a number input it declares, that a
   links port has a programs port beside it, and that a programs port is
   named `programs` and comes with `outputs_from: programs`.
+- **`cache: true`** says the primitive reads the task's files through the
+  machine's cache, so its step is given the cache; `false` when left out,
+  and the step's files are copied in. `exec` and `interact` say it;
+  `compile` doesn't.
 
 **`submission.schema.json`.** `submission.json` at the root of a submission
 commit: `{"schema_version": 5, "inputs": {id: entry}}`, one entry per

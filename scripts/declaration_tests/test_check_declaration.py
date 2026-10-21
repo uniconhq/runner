@@ -192,6 +192,7 @@ def test_a_field_the_contract_does_not_know_is_refused(
 DECLARATION_V6 = """\
 schema_version: 6
 batch: true
+cache: true
 limits:
   {time_ms: 5000, cpu_ms: 5000, memory_mb: 256, pids: 128, output_mb: 64, gpus: 0}
 outputs_from: manifest
@@ -219,6 +220,7 @@ def test_a_version_6_declaration_with_each_new_key_conforms(
         ("at_least: 0, at_most: 1", "at_least: 2, at_most: 1"),
         ("names: [output, answer]", "names: [../x]"),
         ("schema_version: 6", "schema_version: 5"),
+        ("cache: true", "cache: sometimes"),
     ],
 )
 def test_a_version_6_declaration_that_breaks_a_rule_is_refused(
@@ -306,6 +308,11 @@ def test_a_declaration_with_programs_conforms(
         ),
         ("  facts: {type: file}", "  facts: {type: file, inputs: {}}"),
         ("      manifest: {type: file, runs: false, optional: true}\n", ""),
+        ("      program: {type: file, runs: true}\n", ""),
+        (
+            "      program: {type: file, runs: true}",
+            "      program: {type: file, runs: false}",
+        ),
     ],
 )
 def test_a_declaration_with_programs_that_breaks_a_rule_is_refused(
@@ -353,7 +360,7 @@ def test_two_programs_ports_are_named(schema: dict[str, Any], tmp_path: Path) ->
     text = DECLARATION_PROGRAMS.replace(
         "  links: {type: links, optional: true}",
         "  links: {type: links, optional: true}\n  more: {type: programs, "
-        "inputs: {}, outputs: {}}",
+        "inputs: {program: {type: file, runs: true}}, outputs: {}}",
     )
     found = check_declaration.problems(schema, _repo(tmp_path, text))
     assert "inputs: programs, more are each a programs port" in found

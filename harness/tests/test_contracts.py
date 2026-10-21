@@ -308,11 +308,16 @@ def test_a_declaration_speaks_version_5_or_6(declaration: dict[str, Any]) -> Non
         lambda d: d["outputs"]["time_ms"].update(at_most=10),
         lambda d: d.update(outputs_from="manifest"),
         lambda d: d["inputs"].update(
-            group={"type": "programs", "inputs": {}, "outputs": {}}
+            group={
+                "type": "programs",
+                "inputs": {"program": {"type": "file", "runs": True}},
+                "outputs": {},
+            }
         ),
         lambda d: d["inputs"].update(links={"type": "links"}),
         lambda d: d["limits_from"].update(gpus={"sum": "group.gpus"}),
         lambda d: d["limits_from"].update(gpus={"max": "group.gpus"}),
+        lambda d: d.update(cache=True),
     ],
     ids=[
         "named_files",
@@ -324,6 +329,7 @@ def test_a_declaration_speaks_version_5_or_6(declaration: dict[str, Any]) -> Non
         "links",
         "sum",
         "max",
+        "cache",
     ],
 )
 def test_what_version_6_adds_is_refused_in_version_5(
@@ -538,6 +544,27 @@ def test_a_limit_follows_one_of_input_sum_and_max() -> None:
     assert violation(declaration, "primitive", "declaration") is not None
     del limit["max"], limit["sum"]
     assert violation(declaration, "primitive", "declaration") is not None
+
+
+@pytest.mark.parametrize(
+    "program",
+    [None, {"type": "folder", "runs": True}, {"type": "file", "runs": False}],
+)
+def test_a_programs_port_takes_a_program_it_runs(program: Any) -> None:
+    declaration = _yaml("primitive-v6-programs.yaml")
+    inputs = declaration["inputs"]["programs"]["inputs"]
+    if program is None:
+        del inputs["program"]
+    else:
+        inputs["program"] = program
+    assert violation(declaration, "primitive", "declaration") is not None
+
+
+def test_cache_is_true_or_false(declaration_v6: dict[str, Any]) -> None:
+    declaration_v6["cache"] = False
+    assert violation(declaration_v6, "primitive", "declaration") is None
+    declaration_v6["cache"] = "yes"
+    assert violation(declaration_v6, "primitive", "declaration") is not None
 
 
 def test_outputs_from_programs_needs_a_programs_port_with_a_manifest_file() -> None:
