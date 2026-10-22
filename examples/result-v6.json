@@ -1,0 +1,37 @@
+{
+  "schema_version": 6,
+  "runs": [
+    {
+      "id": "r1",
+      "key": { "input": "samples/1.in", "answer": "samples/1.ans" },
+      "verdict": "accepted",
+      "passed": 1,
+      "reports": { "memory_kb": 1520, "score": 1, "time_ms": 120 },
+      "texts": {},
+      "label": { "output": "0199a2c1-6b7e-7c3a-9f10-5d2e4b8a6c32", "name": "label" },
+      "message": { "output": "0199a2c1-6b7e-7c3a-9f10-5d2e4b8a6c32", "name": "message" }
+    },
+    {
+      "id": "r2",
+      "key": { "input": "samples/2.in", "answer": "samples/2.ans" },
+      "verdict": "system_error",
+      "passed": 0,
+      "reports": { "memory_kb": 1490, "time_ms": 15 },
+      "texts": {}
+    }
+  ],
+  "once": {
+    "reports": {},
+    "texts": { "log": { "output": "0199a2c1-6b7e-7c3a-9f10-5d2e4b8a6c31", "name": "log" } }
+  },
+  "staff": [
+    {
+      "step": "compare",
+      "run": "r1",
+      "staff_message": { "output": "0199a2c1-6b7e-7c3a-9f10-5d2e4b8a6c32", "name": "staff_message" },
+      "extras": { "output": "0199a2c1-6b7e-7c3a-9f10-5d2e4b8a6c32", "name": "extras" }
+    }
+  ],
+  "error": "The step compare.r2 faulted: outputs.json is not JSON.",
+  "run_log": null
+}
