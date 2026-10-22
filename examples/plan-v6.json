@@ -133,6 +133,30 @@
         },
         "name": "build-mean",
         "step": "build-mean"
+      },
+      {
+        "depends_on": [
+          "build-mean",
+          "scene"
+        ],
+        "limits": {
+          "cpu_ms": 738000,
+          "gpus": 0,
+          "memory_mb": 1280,
+          "output_mb": 64,
+          "pids": 160,
+          "time_ms": 738000
+        },
+        "name": "c1-episode",
+        "runs": [
+          "r1",
+          "r2",
+          "r3",
+          "r4",
+          "r5",
+          "r6"
+        ],
+        "step": "c1-episode"
       }
     ]
   },
@@ -286,6 +310,266 @@
       "value": {
         "name": "mean"
       }
+    },
+    "c1-episode": {
+      "boxes": 1,
+      "cache": true,
+      "check": {
+        "index": 1,
+        "of": "episode"
+      },
+      "class": "save_per_run",
+      "image": "ghcr.io/uniconhq/primitive-exec@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+      "items": {
+        "r1": {
+          "inputs": {
+            "args": {
+              "value": "--env cartpole --seed 1 --episodes 100"
+            },
+            "loads": {
+              "files": {
+                "scene": {
+                  "output": "output",
+                  "step": "scene"
+                },
+                "weights": {
+                  "task": "checks/good.pt"
+                }
+              }
+            },
+            "manifest": {
+              "workflow": "runner/program.yaml"
+            },
+            "memory_limit": {
+              "value": 1024
+            },
+            "program": {
+              "output": "program",
+              "step": "runner"
+            },
+            "self_reported": {
+              "value": true
+            },
+            "time_limit": {
+              "value": 60
+            }
+          },
+          "tainted": {
+            "beside": {
+              "workflow": "runner/"
+            }
+          }
+        },
+        "r2": {
+          "inputs": {
+            "args": {
+              "value": "--env cartpole --seed 2 --episodes 100"
+            },
+            "loads": {
+              "files": {
+                "scene": {
+                  "output": "output",
+                  "step": "scene"
+                },
+                "weights": {
+                  "task": "checks/good.pt"
+                }
+              }
+            },
+            "manifest": {
+              "workflow": "runner/program.yaml"
+            },
+            "memory_limit": {
+              "value": 1024
+            },
+            "program": {
+              "output": "program",
+              "step": "runner"
+            },
+            "self_reported": {
+              "value": true
+            },
+            "time_limit": {
+              "value": 60
+            }
+          },
+          "tainted": {
+            "beside": {
+              "workflow": "runner/"
+            }
+          }
+        },
+        "r3": {
+          "inputs": {
+            "args": {
+              "value": "--env cartpole --seed 3 --episodes 100"
+            },
+            "loads": {
+              "files": {
+                "scene": {
+                  "output": "output",
+                  "step": "scene"
+                },
+                "weights": {
+                  "task": "checks/good.pt"
+                }
+              }
+            },
+            "manifest": {
+              "workflow": "runner/program.yaml"
+            },
+            "memory_limit": {
+              "value": 1024
+            },
+            "program": {
+              "output": "program",
+              "step": "runner"
+            },
+            "self_reported": {
+              "value": true
+            },
+            "time_limit": {
+              "value": 60
+            }
+          },
+          "tainted": {
+            "beside": {
+              "workflow": "runner/"
+            }
+          }
+        },
+        "r4": {
+          "inputs": {
+            "args": {
+              "value": "--env cartpole-wind --seed 1 --episodes 100"
+            },
+            "loads": {
+              "files": {
+                "scene": {
+                  "output": "output",
+                  "step": "scene"
+                },
+                "weights": {
+                  "task": "checks/good.pt"
+                }
+              }
+            },
+            "manifest": {
+              "workflow": "runner/program.yaml"
+            },
+            "memory_limit": {
+              "value": 1024
+            },
+            "program": {
+              "output": "program",
+              "step": "runner"
+            },
+            "self_reported": {
+              "value": true
+            },
+            "time_limit": {
+              "value": 60
+            }
+          },
+          "tainted": {
+            "beside": {
+              "workflow": "runner/"
+            }
+          }
+        },
+        "r5": {
+          "inputs": {
+            "args": {
+              "value": "--env cartpole-wind --seed 2 --episodes 100"
+            },
+            "loads": {
+              "files": {
+                "scene": {
+                  "output": "output",
+                  "step": "scene"
+                },
+                "weights": {
+                  "task": "checks/good.pt"
+                }
+              }
+            },
+            "manifest": {
+              "workflow": "runner/program.yaml"
+            },
+            "memory_limit": {
+              "value": 1024
+            },
+            "program": {
+              "output": "program",
+              "step": "runner"
+            },
+            "self_reported": {
+              "value": true
+            },
+            "time_limit": {
+              "value": 60
+            }
+          },
+          "tainted": {
+            "beside": {
+              "workflow": "runner/"
+            }
+          }
+        },
+        "r6": {
+          "inputs": {
+            "args": {
+              "value": "--env cartpole-wind --seed 3 --episodes 100"
+            },
+            "loads": {
+              "files": {
+                "scene": {
+                  "output": "output",
+                  "step": "scene"
+                },
+                "weights": {
+                  "task": "checks/good.pt"
+                }
+              }
+            },
+            "manifest": {
+              "workflow": "runner/program.yaml"
+            },
+            "memory_limit": {
+              "value": 1024
+            },
+            "program": {
+              "output": "program",
+              "step": "runner"
+            },
+            "self_reported": {
+              "value": true
+            },
+            "time_limit": {
+              "value": 60
+            }
+          },
+          "tainted": {
+            "beside": {
+              "workflow": "runner/"
+            }
+          }
+        }
+      },
+      "network": false,
+      "outputs": {
+        "extras?": "folder",
+        "label?": "text",
+        "memory_kb": "number",
+        "message?": "text",
+        "outcome": "outcome",
+        "output": "file",
+        "reward": "number",
+        "staff_message?": "text",
+        "time_ms": "number"
+      },
+      "primitive": "unicon/exec@v1",
+      "self_reported": true
     },
     "episode": {
       "boxes": 1,
@@ -741,6 +1025,10 @@
     }
   },
   "task_files": {
+    "checks/good.pt": {
+      "sha256": "5555555555555555555555555555555555555555555555555555555555555555",
+      "size": 2048
+    },
     "mean/mean.py": {
       "sha256": "3333333333333333333333333333333333333333333333333333333333333333",
       "size": 120

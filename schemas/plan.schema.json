@@ -433,7 +433,7 @@
           "additionalProperties": { "$ref": "#/$defs/run_step" }
         },
         "pipelines": {
-          "description": "The Woodpecker steps of each pipeline: save, the steps done when the task is saved; early, the steps done once per grading that an early run reads and every early run; late, every other step and run, started only once the early pipeline has finished. A pipeline with no step is left out.",
+          "description": "The Woodpecker steps of each pipeline: save, the steps done when the task is saved, each check's copies of the steps graded per submission among them, after the rest; early, the steps done once per grading that an early run reads and every early run; late, every other step and run, started only once the early pipeline has finished. A pipeline with no step is left out.",
           "type": "object",
           "minProperties": 1,
           "additionalProperties": false,
@@ -606,6 +606,16 @@
           "properties": {
             "name": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$" },
             "report": { "type": "string", "pattern": "^[a-z][a-z0-9_]{0,63}$" }
+          }
+        },
+        "check": {
+          "description": "A copy of a step graded per submission, made for one of the task's checks: the check's place in its checks, from 1, and the step it copies, whose result it stands for. It is done at the save, in the save's pipeline, with the check's made-up submission in place of the entrant's inputs, for every run, and only that check's runs go through it.",
+          "type": "object",
+          "required": ["index", "of"],
+          "additionalProperties": false,
+          "properties": {
+            "index": { "type": "integer", "minimum": 1 },
+            "of": { "$ref": "#/$defs/step_id" }
           }
         },
         "inputs": { "$ref": "#/$defs/run_inputs" },

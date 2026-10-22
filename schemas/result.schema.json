@@ -175,43 +175,12 @@
           "type": "array",
           "items": { "$ref": "#/$defs/run_result" }
         },
-        "once": {
-          "description": "The reports of the steps done once that this grading's pipeline ran, and the outcome each of those steps returned, by its id, which the compiled fact reads; a step that faulted or gave nothing has none.",
-          "type": "object",
-          "required": ["reports", "texts", "outcomes"],
-          "additionalProperties": false,
-          "properties": {
-            "reports": { "$ref": "#/$defs/report_numbers" },
-            "texts": { "$ref": "#/$defs/report_texts" },
-            "outcomes": {
-              "type": "object",
-              "propertyNames": { "$ref": "#/$defs/step_id" },
-              "additionalProperties": { "$ref": "#/$defs/outcome" }
-            }
-          }
-        },
+        "once": { "$ref": "#/$defs/once_result" },
         "values": {
           "description": "The number each value's exec block came to, by the value's name: the one number report its program wrote, read through its program.yaml. A value whose program faulted or gave nothing has none, and the error names it.",
           "$ref": "#/$defs/value_numbers"
         },
-        "staff": {
-          "description": "What a step wrote for staff alone, once per item this grading's pipeline did: its staff_message and its extras folder. Never shown to an entrant.",
-          "type": "array",
-          "items": {
-            "type": "object",
-            "required": ["step", "run"],
-            "additionalProperties": false,
-            "properties": {
-              "step": { "$ref": "#/$defs/step_id" },
-              "run": {
-                "description": "The run the item was done for, null for a step done once.",
-                "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/run_id" }]
-              },
-              "staff_message": { "$ref": "#/$defs/text_ref" },
-              "extras": { "$ref": "#/$defs/text_ref" }
-            }
-          }
-        },
+        "staff": { "$ref": "#/$defs/staff_items" },
         "error": {
           "description": "One sentence for staff naming the first step that faulted or gave nothing for a run, or a value's program that faulted or gave nothing, when one did, otherwise null. Never shown to an entrant.",
           "oneOf": [{ "type": "null" }, { "type": "string", "minLength": 1 }]
@@ -220,6 +189,63 @@
           "description": "Where the run's log went, or null. A run task's steps' logs stay with the CI, so the forge writes null.",
           "type": ["string", "null"],
           "format": "uri"
+        },
+        "checks": {
+          "description": "A save's pipeline's checks, one per check of the task in its order, each graded as an entrant's submission through the copies of the steps graded per submission, and left out when the task has none.",
+          "type": "array",
+          "items": { "$ref": "#/$defs/check_result" }
+        }
+      }
+    },
+    "once_result": {
+      "description": "The reports of the steps done once that this grading's pipeline ran, and the outcome each of those steps returned, by its id, which the compiled fact reads; a step that faulted or gave nothing has none.",
+      "type": "object",
+      "required": ["reports", "texts", "outcomes"],
+      "additionalProperties": false,
+      "properties": {
+        "reports": { "$ref": "#/$defs/report_numbers" },
+        "texts": { "$ref": "#/$defs/report_texts" },
+        "outcomes": {
+          "type": "object",
+          "propertyNames": { "$ref": "#/$defs/step_id" },
+          "additionalProperties": { "$ref": "#/$defs/outcome" }
+        }
+      }
+    },
+    "staff_items": {
+      "description": "What a step wrote for staff alone, once per item this grading's pipeline did: its staff_message and its extras folder. Never shown to an entrant.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["step", "run"],
+        "additionalProperties": false,
+        "properties": {
+          "step": { "$ref": "#/$defs/step_id" },
+          "run": {
+            "description": "The run the item was done for, null for a step done once.",
+            "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/run_id" }]
+          },
+          "staff_message": { "$ref": "#/$defs/text_ref" },
+          "extras": { "$ref": "#/$defs/text_ref" }
+        }
+      }
+    },
+    "check_result": {
+      "description": "One check graded at the save: every run, its verdict and reports, the steps done once and each value's program's number, with each step named as the workflow names it, not by its copy; what its steps wrote for staff, by the copies' names; an error exactly when a step of the check faulted or gave nothing; whether it got what it expects; and a sentence for each thing it did not get.",
+      "type": "object",
+      "required": ["runs", "once", "staff", "error", "passed", "failing"],
+      "additionalProperties": false,
+      "properties": {
+        "runs": { "type": "array", "items": { "$ref": "#/$defs/run_result" } },
+        "once": { "$ref": "#/$defs/once_result" },
+        "values": { "$ref": "#/$defs/value_numbers" },
+        "staff": { "$ref": "#/$defs/staff_items" },
+        "error": { "oneOf": [{ "type": "null" }, { "type": "string", "minLength": 1 }] },
+        "passed": { "type": "boolean" },
+        "failing": {
+          "description": "Why the check did not get what it expects, one sentence each, for the organiser; empty when it did.",
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
         }
       }
     },
