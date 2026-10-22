@@ -229,6 +229,7 @@ def test_the_link_the_token_and_secrets_are_gone_from_the_primitives_environment
         inputs=inputs,
         secrets=["model_key"],
         box_users={"first": 20480, "last": 20487},
+        step_memory_mb=400,
     )
 
     assert code == 0
@@ -236,6 +237,7 @@ def test_the_link_the_token_and_secrets_are_gone_from_the_primitives_environment
     assert not [name for name in seen if name.startswith("PLUGIN_")]
     assert seen["KEPT"] == "yes"
     assert seen["UNICON_BOX_USERS"] == "20480-20487"
+    assert seen["UNICON_STEP_MEMORY_MB"] == "400"
     assert TOKEN not in server.put["out/env.json"].decode()
     assert server.put["out/key"] == SECRET.encode()
 

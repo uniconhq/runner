@@ -17,9 +17,10 @@ header and only to the door and the links under it. In order, the wrapper:
    linked into an item folder of this running step's own, and makes each
    empty folder the job names;
 4. writes /work/inputs.json with each secret's value filled in, and runs
-   the primitive with no PLUGIN_ variable in its environment and its box
-   users in UNICON_BOX_USERS, killing it at the job's time limit, and, as
-   the container's first process, everything else left once it ends;
+   the primitive with no PLUGIN_ variable in its environment, its box
+   users in UNICON_BOX_USERS and its memory in UNICON_STEP_MEMORY_MB,
+   killing it at the job's time limit, and, as the container's first
+   process, everything else left once it ends;
 5. masks every secret, the link and the token in what the primitive wrote
    and printed, uploads /work/outputs.json and /work/out, each PUT sending
    the file's SHA-256 its link is signed for, and tells the door the step
@@ -775,6 +776,7 @@ def run(door: Door, command: list[str], job: dict[str, Any]) -> str:
     if "box_users" in job:
         users = job["box_users"]
         environment["UNICON_BOX_USERS"] = f"{users['first']}-{users['last']}"
+        environment["UNICON_STEP_MEMORY_MB"] = str(job["step_memory_mb"])
     process = subprocess.Popen(
         command,
         cwd=WORK,

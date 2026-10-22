@@ -318,6 +318,7 @@ def test_exec_on_the_base_image_runs_a_batch_through_the_wrapper(
         exec_flags(),
         EXEC,
         box_users=BOX_USERS,
+        step_memory_mb=320,
         fail_on_non_accepted=False,
     )
     assert done.returncode == 0, done.stdout + done.stderr
@@ -362,6 +363,7 @@ def test_exec_through_the_wrapper_binds_a_cached_file_into_its_box(
             [*exec_flags(), "--volume", f"{volume}:/cache"],
             EXEC,
             box_users=BOX_USERS,
+            step_memory_mb=320,
         )
         assert done.returncode == 0, done.stdout + done.stderr
         result = json.loads(server.put["outputs.json"])

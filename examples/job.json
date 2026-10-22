@@ -74,5 +74,6 @@
     "first": 20480,
     "last": 20487
   },
+  "step_memory_mb": 400,
   "fail_on_non_accepted": false
 }

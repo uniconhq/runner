@@ -388,8 +388,9 @@ def as_exec_runs(
     """The harness's body changed to the shape an exec or interact step runs
     in, which the harness does not make yet: privileged, as root, its root
     writable, given its box users, and its memory `memory_mb`, as the step
-    would be given for its largest item. A privileged container has no seccomp
-    profile, and the daemon refuses to start one named `seccomp=builtin`. On
+    would be given for its largest item, both the container's and the
+    step's. A privileged container has no seccomp profile, and the daemon
+    refuses to start one named `seccomp=builtin`. On
     root Docker, where a privileged container's root is the machine's and
     the primitive refuses to start, its `program` is started in a user
     namespace of its own by primitive-exec's `tests/userns.py`.
@@ -401,7 +402,11 @@ def as_exec_runs(
     del host["ReadonlyRootfs"]
     del host["CapDrop"]
     host["SecurityOpt"].remove("seccomp=builtin")
-    body["Env"] = [*body["Env"], f"UNICON_BOX_USERS={EXEC_BOX_USERS}"]
+    body["Env"] = [
+        *body["Env"],
+        f"UNICON_BOX_USERS={EXEC_BOX_USERS}",
+        f"UNICON_STEP_MEMORY_MB={memory_mb}",
+    ]
     if "rootless" not in docker("info", "--format", "{{json .SecurityOptions}}"):
         userns = EXEC_SOURCE / "tests" / "userns.py"
         if not userns.is_file():

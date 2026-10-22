@@ -473,10 +473,10 @@ cannot read its `/proc/1/environ`, then:
    shorter than 8 characters, too short to mask, and each number exactly as
    the job wrote it;
 4. runs the command in `/work` with every `PLUGIN_` variable taken out of its
-   environment and `UNICON_BOX_USERS` set from the job, prints what it prints
-   with each secret, the link and the token as `***`, a mask split across
-   two reads of a long line included, and kills it and all it started at the
-   job's time limit; once it ends, as the container's first process, it
+   environment and `UNICON_BOX_USERS` and `UNICON_STEP_MEMORY_MB` set from
+   the job, prints what it prints with each secret, the link and the token
+   as `***`, a mask split across two reads of a long line included, and
+   kills it and all it started at the job's time limit; once it ends, as the container's first process, it
    kills every process left, so nothing changes `out/` while it is uploaded;
 5. masks `outputs.json` the same way, numbers kept exactly as written but
    one holding a secret, which becomes the text `***`, and an `outcome`
@@ -678,9 +678,10 @@ download (`url`, `sha256`, `size`, and `cached` for a task file read
 through the machine's cache), a copy of a `workspace` path, or an empty
 `folder`; `uploads` and
 `done`, the door's links for the upload links and the end; `time_limit` in
-seconds; `box_users` for an exec or interact step; `fail_on_non_accepted`;
-and `secrets`, the settings that carry the step's secrets. A 204 to the
-job's GET is nothing to do.
+seconds; `box_users` and `step_memory_mb`, the memory the planner gave the
+step, which the primitive caps itself at, for an exec or interact step;
+`fail_on_non_accepted`; and `secrets`, the settings that carry the step's
+secrets. A 204 to the job's GET is nothing to do.
 
 ## The primitives' workflows
 

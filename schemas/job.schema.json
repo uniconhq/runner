@@ -14,6 +14,10 @@
     "fail_on_non_accepted"
   ],
   "additionalProperties": false,
+  "dependentRequired": {
+    "box_users": ["step_memory_mb"],
+    "step_memory_mb": ["box_users"]
+  },
   "properties": {
     "schema_version": {
       "description": "The job shape this answer is written against. The wrapper refuses another, exit 2, before it does anything.",
@@ -60,6 +64,11 @@
         "first": { "type": "integer", "minimum": 10000, "maximum": 65000 },
         "last": { "type": "integer", "minimum": 10000, "maximum": 65000 }
       }
+    },
+    "step_memory_mb": {
+      "description": "For an exec or interact step, given with box_users: the memory the forge's planner gave the step, its largest item's boxes' memory limits, the files it copies in beside them and the room its declaration adds, which the wrapper hands the primitive as UNICON_STEP_MEMORY_MB. The primitive caps its own processes and its boxes together at it, so steps side by side in one slot of a machine stay within what each was planned, and refuses an item that does not fit it. The container's own limit is the slot's, never less.",
+      "type": "integer",
+      "minimum": 1
     },
     "fail_on_non_accepted": {
       "description": "True for every step not done once per run: an outcome other than accepted, such as a compile error, or none at all, makes the wrapper exit 1 after the uploads, so Woodpecker starts no later step, and the forge reads that outcome from outputs.json. A step whose outputs.json holds an error exits 1 either way.",
