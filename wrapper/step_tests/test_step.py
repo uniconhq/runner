@@ -7,6 +7,7 @@ it and exec on isolate, is in test_image.py.
 
 from __future__ import annotations
 
+import base64
 import fcntl
 import hashlib
 import json
@@ -357,6 +358,62 @@ def test_a_job_the_door_refuses_ends_the_step_without_a_report(
 
     assert step() == 2
     assert server.put == {}
+
+
+def test_a_step_with_nothing_left_to_do_exits_zero_having_done_nothing(
+    step: Step, server: StandIn, work: Path
+) -> None:
+    server.job_code = 204
+
+    assert step() == 0
+    assert not (work / "outputs.json").exists()
+    assert [(s.method, s.path) for s in server.seen] == [("GET", "/door")]
+
+
+@pytest.mark.parametrize("code", [401, 410])
+def test_a_job_refused_for_a_finished_grading_or_an_ended_token_fails_the_step(
+    step: Step, server: StandIn, code: int
+) -> None:
+    server.job_code = code
+
+    assert step() == 2
+    assert [(s.method, s.path) for s in server.seen] == [("GET", "/door")]
+
+
+def test_an_empty_folder_the_job_names_is_made(
+    step: Step, server: StandIn, work: Path
+) -> None:
+    source = (
+        "import json, os\n"
+        "inputs = json.load(open('inputs.json'))\n"
+        "assert os.listdir(inputs['inputs']['source']['folder']) == []\n"
+    ) + WRITES_ACCEPTED
+    inputs = {"schema_version": 6, "inputs": {"source": {"folder": "in/Ef1"}}}
+    files = [{"path": "in/Ef1", "folder": True}]
+
+    assert step(source, files=files, inputs=inputs) == 0
+    assert (work / "in" / "Ef1").is_dir()
+    for wrong in (
+        {"path": "cache/a/b", "folder": True, "cached": True},
+        {"path": "in/Ef1", "folder": True, "workspace": "files"},
+        {"path": "in/..", "folder": True},
+    ):
+        assert step(files=[wrong]) == 1, wrong
+        assert "places a file at" in server.outputs()["error"]
+
+
+def test_each_upload_sends_the_checksum_its_link_is_signed_for(
+    step: Step, server: StandIn
+) -> None:
+    writes = "\nimport os; os.makedirs('out'); open('out/x', 'w').write('x')"
+    assert step(WRITES_ACCEPTED + writes) == 0
+
+    puts = {s.path.split("?")[0]: s.checksum for s in server.seen if s.method == "PUT"}
+    assert puts == {
+        f"/put/{path}": base64.b64encode(hashlib.sha256(body).digest()).decode()
+        for path, body in server.put.items()
+    }
+    assert set(puts) == {"/put/outputs.json", "/put/out/x"}
 
 
 def test_a_job_of_another_version_is_refused(step: Step, server: StandIn) -> None:

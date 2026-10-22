@@ -4,7 +4,7 @@ links, keeps what is put to them, and records every request, so a test can
 see what the wrapper asked, with which headers, and that the token went
 only where it should. Standard library only.
 
-    /door                GET: the job, with the token
+    /door                GET: the job, with the token; 204 for nothing to do
     /door/files/<name>   GET: a file the forge serves itself, with the token
     /door/uploads        POST: {"files": [...]} -> {"files": {path: link}}
     /door/done           POST: the step is done
@@ -13,7 +13,9 @@ only where it should. Standard library only.
     /put/<path>          PUT: an upload by presigned link, no token
 
 A POST to the door must be sent as application/json and a PUT as
-application/octet-stream, or it is answered 415. `cuts` cuts a file's
+application/octet-stream, or it is answered 415; a PUT without the
+x-amz-checksum-sha256 its link is signed for, the body's SHA-256 in
+base64, is answered 400, as the store answers it. `cuts` cuts a file's
 answers off midway, `moved` answers a path with a redirect, and
 `done_after` holds the answer to /door/done back. As the door does, done
 and ended end the token, once taken, though their answer is cut off.
@@ -21,6 +23,8 @@ and ended end the token, once taken, though their answer is cut off.
 
 from __future__ import annotations
 
+import base64
+import hashlib
 import json
 import socket
 import struct
@@ -41,6 +45,7 @@ class Seen:
     path: str
     authorization: str | None
     kind: str | None = None
+    checksum: str | None = None
 
 
 @dataclass
@@ -63,6 +68,9 @@ class StandIn:
     ended: bool = False
     """Whether done or ended was taken, which ends the token."""
     done_code: int = 204
+    job_code: int = 200
+    """What the door answers the job's GET: 204 for nothing to do, or a
+    refusal."""
 
     @property
     def door(self) -> str:
@@ -121,7 +129,10 @@ class Handler(BaseHTTPRequestHandler):
         """Record the request; False when it was answered already."""
         authorization = self.headers.get("Authorization")
         kind = self.headers.get("Content-Type")
-        self.state.seen.append(Seen(self.command, self.path, authorization, kind))
+        checksum = self.headers.get("x-amz-checksum-sha256")
+        self.state.seen.append(
+            Seen(self.command, self.path, authorization, kind, checksum)
+        )
         if self.path in self.state.moved:
             self.send_response(302)
             self.send_header("Location", self.state.moved[self.path])
@@ -169,7 +180,12 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         if not self._start():
             return
-        if self.path == "/door":
+        if self.path == "/door" and self.state.job_code == 204:
+            self.send_response(204)
+            self.end_headers()
+        elif self.path == "/door" and self.state.job_code != 200:
+            self._send(self.state.job_code, {})
+        elif self.path == "/door":
             job = json.dumps(self.state.job).encode()
             if not self._cut(job):
                 self._send(200, raw=job)
@@ -211,7 +227,10 @@ class Handler(BaseHTTPRequestHandler):
         body = self._body()
         if not self._start():
             return
-        if self.path.startswith("/put/"):
+        digest = base64.b64encode(hashlib.sha256(body).digest()).decode()
+        if self.headers.get("x-amz-checksum-sha256") != digest:
+            self._send(400, {})
+        elif self.path.startswith("/put/"):
             self.state.put[self.path.removeprefix("/put/").split("?")[0]] = body
             self._send(200, raw=b"")
         else:

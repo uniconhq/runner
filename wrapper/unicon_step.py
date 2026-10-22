@@ -9,17 +9,21 @@ header and only to the door and the links under it. In order, the wrapper:
 
 1. makes itself non-dumpable, so no process of its user reads its
    environment through /proc/1/environ, nor its memory;
-2. fetches the step's job (schemas/job.schema.json);
+2. fetches the step's job (schemas/job.schema.json), or, answered 204,
+   exits 0 having done nothing: nothing is left for the step to do, and
+   the later steps still run;
 3. places the job's files, each checked against its length and SHA-256:
    into /work/in, or a cached one through the machine's cache at /cache,
-   linked into an item folder of this running step's own;
+   linked into an item folder of this running step's own, and makes each
+   empty folder the job names;
 4. writes /work/inputs.json with each secret's value filled in, and runs
    the primitive with no PLUGIN_ variable in its environment and its box
    users in UNICON_BOX_USERS, killing it at the job's time limit, and, as
    the container's first process, everything else left once it ends;
 5. masks every secret, the link and the token in what the primitive wrote
-   and printed, uploads /work/outputs.json and /work/out, and tells the
-   door the step is done;
+   and printed, uploads /work/outputs.json and /work/out, each PUT sending
+   the file's SHA-256 its link is signed for, and tells the door the step
+   is done;
 6. exits 1 when the step did not do its work, or when the job says a
    non-accepted outcome fails the step and one is not accepted.
 
@@ -35,6 +39,7 @@ It follows no redirect and uses no proxy: every link it is given is the
 forge's or the store's, reached directly.
 """
 
+import base64
 import codecs
 import concurrent.futures
 import contextlib
@@ -141,6 +146,9 @@ def main(argv: list[str]) -> int:
             say(door, "unicon-step: told the forge the pipeline ended")
             return 0
         job = door.call("GET", url)
+        if job is None:
+            say(door, "unicon-step: the forge has nothing left for this step to do")
+            return 0
         if not isinstance(job, dict) or job.get("schema_version") != JOB_VERSION:
             raise StepError(f"the job is not written against version {JOB_VERSION}")
         return grade(door, job, argv[1:])
@@ -322,10 +330,14 @@ class Door:
         url: str,
         data: bytes | Body | None = None,
         kind: str | None = None,
+        checksum: str | None = None,
     ) -> Any:
         """One try at `url`, with the token only when it is the door or a
-        link under it; a `RetryError` for what may pass when tried again."""
+        link under it, and the SHA-256 `checksum` a PUT link is signed for;
+        a `RetryError` for what may pass when tried again."""
         headers = {}
+        if checksum is not None:
+            headers["x-amz-checksum-sha256"] = checksum
         if under(self.url, url):
             headers["Authorization"] = f"Bearer {self.token}"
         if kind is not None:
@@ -349,14 +361,15 @@ class Door:
     def call(
         self, method: str, url: str, document: Any = None, ends_token: bool = False
     ) -> Any:
-        """Ask the door, sending `document` as JSON, and read its answer. A
-        request that `ends_token`, done or the end of the pipeline, may have
-        been taken by the door though its answer was cut off: tried again,
-        a 401 or 403, the token ended, is that request done."""
+        """Ask the door, sending `document` as JSON, and read its answer:
+        none for a 204, which has no body. A request that `ends_token`,
+        done or the end of the pipeline, may have been taken by the door
+        though its answer was cut off: tried again, a 401 or 403, the token
+        ended, is that request done."""
         data = None if document is None else json.dumps(document).encode()
         tries = 0
 
-        def once() -> bytes:
+        def once() -> bytes | None:
             nonlocal tries
             tries += 1
             kind = None if data is None else JSON
@@ -364,7 +377,7 @@ class Door:
                 answer = self.attempt(method, url, data, kind)
             except RefusedError as error:
                 if ends_token and tries > 1 and error.code in (401, 403):
-                    return b""
+                    return None
                 raise
             with answer:
                 try:
@@ -373,14 +386,17 @@ class Door:
                     raise RetryError(
                         f"{method}'s answer was cut off: {error}"
                     ) from None
-            return text
+            return None if answer.status == 204 else text
 
         text = retried(once)
-        return json.loads(text) if text.strip() else None
+        return None if text is None else json.loads(text)
 
-    def put(self, url: str, descriptor: int, size: int, path: str) -> None:
+    def put(self, url: str, descriptor: int, size: int, path: str, sha256: str) -> None:
+        checksum = base64.b64encode(bytes.fromhex(sha256)).decode()
+
         def once() -> None:
-            with self.attempt("PUT", url, Body(descriptor, size), BYTES) as answer:
+            body = Body(descriptor, size)
+            with self.attempt("PUT", url, body, BYTES, checksum) as answer:
                 try:
                     answer.read()
                 except (OSError, http.client.HTTPException) as error:
@@ -586,9 +602,12 @@ def place(door: Door, files: list[dict[str, Any]], cache: Cache | None) -> None:
             or not all(NAME.fullmatch(part) for part in parts)
             or parts[0] != ("cache" if cached else "in")
             or (cached and (len(parts) != 3 or "workspace" in entry))
+            or (entry.get("folder") and (cached or set(entry) != {"path", "folder"}))
         ):
             raise StepError(f"the job places a file at {entry['path']!r}")
-        if "workspace" in entry:
+        if entry.get("folder"):
+            WORK.joinpath(*parts).mkdir(parents=True)
+        elif "workspace" in entry:
             from_workspace(entry["workspace"], WORK.joinpath(*parts))
         elif cache is not None and cached:
             target = cache.folder.joinpath(*parts[1:])
@@ -869,15 +888,18 @@ def upload(door: Door, job: dict[str, Any]) -> None:
                 os.close(descriptor)
                 continue
             opened.append((str(path.relative_to(WORK)), descriptor, found.st_size))
+        digests = [digest_of(descriptor, size) for _, descriptor, size in opened]
         listing = [
-            {"path": name, "sha256": digest_of(descriptor, size), "size": size}
-            for name, descriptor, size in opened
+            {"path": name, "sha256": digest, "size": size}
+            for (name, _, size), digest in zip(opened, digests, strict=True)
         ]
         links = door.call("POST", job["uploads"], {"files": listing})["files"]
         with concurrent.futures.ThreadPoolExecutor(PARALLEL) as pool:
             puts = [
-                pool.submit(door.put, links[name], descriptor, size, name)
-                for name, descriptor, size in opened
+                pool.submit(door.put, links[name], descriptor, size, name, digest)
+                for (name, descriptor, size), digest in zip(
+                    opened, digests, strict=True
+                )
             ]
             for put in puts:
                 put.result()

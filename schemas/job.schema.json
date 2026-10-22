@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://raw.githubusercontent.com/uniconhq/runner/main/schemas/job.schema.json",
   "title": "Unicon step job",
-  "description": "What a grading step's door at the forge answers when the step's wrapper asks for its work. The forge writes each Woodpecker step a plugin step whose settings are data_url, the door, GET <machine URL>/api/v1/gradings/<row>/steps/<step>, and data_token, which the wrapper (ghcr.io/uniconhq/primitive-base, wrapper/) sends only as `Authorization: Bearer <token>`, and only to the door and to links under it, never in a URL or a log; presigned links get no header. The job is minted when the step asks, so its links have not expired in the queue, and the token works from then until the wrapper posts to done, or the pipeline ends. The wrapper places the files, writes inputs, runs the image's own command, which the image names, uploads what it wrote and posts to done. The pipeline's last step, from the base image with the setting mode: report, only posts {} to its own data_url, whose token the forge gives it alike. Every POST to the door is sent as Content-Type: application/json. The wrapper follows no redirect, a 3xx failing the request, and uses no proxy.",
+  "description": "What a grading step's door at the forge answers when the step's wrapper asks for its work. The forge writes each Woodpecker step a plugin step whose settings are data_url, the door, GET <machine URL>/api/v1/gradings/<row>/steps/<step>, and data_token, which the wrapper (ghcr.io/uniconhq/primitive-base, wrapper/) sends only as `Authorization: Bearer <token>`, and only to the door and to links under it, never in a URL or a log; presigned links get no header. The job is minted when the step asks, so its links have not expired in the queue, and the token works from then until the wrapper posts to done, or the pipeline ends. The wrapper places the files, writes inputs, runs the image's own command, which the image names, uploads what it wrote and posts to done. The pipeline's last step, from the base image with the setting mode: report, only posts {} to its own data_url, whose token the forge gives it alike. Every POST to the door is sent as Content-Type: application/json. The wrapper follows no redirect, a 3xx failing the request, and uses no proxy. When nothing is left for the step to do, every run of it left out, as when another grading stored the same work first or an earlier step stopped every run, the door answers the GET 204 with no body, and the wrapper exits 0 without placing, running, uploading or posting to done, so Woodpecker still starts the later steps. A grading that has finished answers 410 and a token that no longer works 401, and either fails the step, exit 2.",
   "type": "object",
   "required": [
     "schema_version",
@@ -29,11 +29,15 @@
       "description": "Every file and folder the inputs name, each placed at its path before the primitive starts. A download is checked against its size and SHA-256 and refused otherwise, which fails the step. Several are fetched side by side.",
       "type": "array",
       "items": {
-        "oneOf": [{ "$ref": "#/$defs/download" }, { "$ref": "#/$defs/from_workspace" }]
+        "oneOf": [
+          { "$ref": "#/$defs/download" },
+          { "$ref": "#/$defs/from_workspace" },
+          { "$ref": "#/$defs/empty_folder" }
+        ]
       }
     },
     "uploads": {
-      "description": "The door's link for the step's upload links, under data_url. Once the primitive has ended, the wrapper posts, as application/json, {\"files\": [{\"path\": <relative to /work>, \"sha256\": <hex>, \"size\": <bytes>}]} for outputs.json and every plain file under out/, and the door answers {\"files\": {<path>: <presigned PUT into unicon-results, under results/<row>/steps/<step>/>}}, one per path, which the wrapper puts each file to as application/octet-stream, with no Authorization header unless the link is under data_url. outputs.json is always there: when the step could not do its work, the wrapper writes it itself, holding only error, a sentence for staff, as a primitive does. The list is what the forge reads the files by, each with its hash for a later step's download.",
+      "description": "The door's link for the step's upload links, under data_url. Once the primitive has ended, the wrapper posts, as application/json, {\"files\": [{\"path\": <relative to /work>, \"sha256\": <hex>, \"size\": <bytes>}]} for outputs.json and every plain file under out/, and the door answers {\"files\": {<path>: <presigned PUT into unicon-results, under results/<row>/steps/<step>/>}}, one per path, which the wrapper puts each file to as application/octet-stream, with the header x-amz-checksum-sha256 holding the file's SHA-256 in base64, and no Authorization header unless the link is under data_url. Each link is signed for the SHA-256 listed, so the store refuses a PUT without the header or with a body not of it: a link writes the listed bytes or nothing, however often it is used. outputs.json is always there: when the step could not do its work, the wrapper writes it itself, holding only error, a sentence for staff, as a primitive does. The list is what the forge reads the files by, each with its hash for a later step's download.",
       "type": "string",
       "format": "uri"
     },
@@ -92,6 +96,20 @@
           "description": "True for a task file of a step whose primitive declares cache: true and is given the org's cache volume at /cache. The file is fetched once per machine into /cache/objects/<sha256> and hard-linked as <name> into this running step's item folder <item>, which the wrapper makes under /cache/items/ and reaches as /work/cache; its path is cache/<item>/<name>. An item holds the cached files of one box and nothing else: for exec, every cached file of one run; for interact, every cached file of one program of a run, so a file two programs of a run read is placed in each one's item. The primitive binds that folder whole into the box read-only, so the file is never copied, and refuses an item folder holding any file the run or program is not given. <item> is random and <name> is the run's name for the file, or random where it has none.",
           "type": "boolean"
         }
+      }
+    },
+    "empty_folder": {
+      "description": "A folder the inputs name that holds no file, such as an entrant's folder given empty or an earlier step's folder output with nothing in it, which the wrapper makes empty at path.",
+      "type": "object",
+      "required": ["path", "folder"],
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "description": "Under in/, as from_workspace's.",
+          "type": "string",
+          "pattern": "^in(/[A-Za-z0-9_][A-Za-z0-9_.-]*)+$"
+        },
+        "folder": { "type": "boolean", "const": true }
       }
     },
     "from_workspace": {

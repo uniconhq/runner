@@ -7,7 +7,9 @@
       "verdict": "accepted",
       "passed": 1,
       "reports": { "memory_kb": 1520, "score": 1, "time_ms": 120 },
-      "texts": {},
+      "texts": {
+        "feedback": { "output": "0199a2c1-6b7e-7c3a-9f10-5d2e4b8a6c33", "name": "judge.feedback" }
+      },
       "label": { "output": "0199a2c1-6b7e-7c3a-9f10-5d2e4b8a6c32", "name": "label" },
       "message": { "output": "0199a2c1-6b7e-7c3a-9f10-5d2e4b8a6c32", "name": "message" }
     },

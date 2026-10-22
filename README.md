@@ -448,9 +448,13 @@ Given `data_url` and `data_token`, as `PLUGIN_DATA_URL` and
 cannot read its `/proc/1/environ`, then:
 
 1. asks the door for the step's job (`job.schema.json`), refusing another
-   version with exit 2;
+   version with exit 2; a 204 says nothing is left for the step to do, as
+   when another grading stored the same work first, and it exits 0 having
+   done nothing, so Woodpecker still starts the later steps, while a 410,
+   the grading finished, or a 401, the token ended, is exit 2;
 2. fetches every file side by side, checking each against its size and
-   SHA-256, or copies it from the workspace the clone step checked out;
+   SHA-256, or copies it from the workspace the clone step checked out,
+   and makes each empty folder the job names;
 3. writes `inputs.json` with each `{"secret": <setting>}` filled from the
    step's settings, refusing a setting of the wrapper's own and a value
    shorter than 8 characters, too short to mask;
@@ -467,7 +471,9 @@ cannot read its `/proc/1/environ`, then:
 6. asks the door for an upload link per file, `outputs.json` and every file
    under `out/`, with its SHA-256 and size, puts each, and posts to done.
    Each file is opened once, without following a link, and hashed, measured
-   and put from that one descriptor.
+   and put from that one descriptor, its SHA-256 sent in base64 as
+   `x-amz-checksum-sha256`, which its link is signed for, so the store
+   takes those bytes or nothing.
 
 It exits 0, or 1 on an error or, when the job says `fail_on_non_accepted`, an
 outcome other than accepted or none at all, so Woodpecker starts no later
@@ -652,10 +658,12 @@ folder, the test's file of a per-test input, or the value.
 wrapper: `inputs`, the `inputs.json` to write, with only the runs still to
 do in a batch; `files`, each placed at its path under `/work`, either a
 download (`url`, `sha256`, `size`, and `cached` for a task file read
-through the machine's cache) or a copy of a `workspace` path; `uploads` and
+through the machine's cache), a copy of a `workspace` path, or an empty
+`folder`; `uploads` and
 `done`, the door's links for the upload links and the end; `time_limit` in
 seconds; `box_users` for an exec or interact step; `fail_on_non_accepted`;
-and `secrets`, the settings that carry the step's secrets.
+and `secrets`, the settings that carry the step's secrets. A 204 to the
+job's GET is nothing to do.
 
 ## The primitives' workflows
 
