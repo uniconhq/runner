@@ -443,6 +443,27 @@
             "late": { "$ref": "#/$defs/pipeline" }
           }
         },
+        "released": {
+          "description": "The split a grading takes when it is made while the task's results are released, where it differs from the split above: the ids of the runs early then, and the early and late pipelines then, laid out as above. Such a grading reads these in place of each run's early and the early and late pipelines above; the save pipeline is the same for both. Left out when a release moves nothing.",
+          "type": "object",
+          "required": ["early", "pipelines"],
+          "additionalProperties": false,
+          "properties": {
+            "early": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": { "$ref": "#/$defs/run_id" }
+            },
+            "pipelines": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "early": { "$ref": "#/$defs/pipeline" },
+                "late": { "$ref": "#/$defs/pipeline" }
+              }
+            }
+          }
+        },
         "reports": {
           "description": "The workflow's reports: each name a step and an output, with which way is better and the bounds of a number where known, so a missing report's worst bound is read from the plan.",
           "type": "object",
