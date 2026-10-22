@@ -171,13 +171,18 @@
           "items": { "$ref": "#/$defs/run_result" }
         },
         "once": {
-          "description": "The reports of the steps done once that this grading's pipeline ran.",
+          "description": "The reports of the steps done once that this grading's pipeline ran, and the outcome each of those steps returned, by its id, which the compiled fact reads; a step that faulted or gave nothing has none.",
           "type": "object",
-          "required": ["reports", "texts"],
+          "required": ["reports", "texts", "outcomes"],
           "additionalProperties": false,
           "properties": {
             "reports": { "$ref": "#/$defs/report_numbers" },
-            "texts": { "$ref": "#/$defs/report_texts" }
+            "texts": { "$ref": "#/$defs/report_texts" },
+            "outcomes": {
+              "type": "object",
+              "propertyNames": { "$ref": "#/$defs/step_id" },
+              "additionalProperties": { "$ref": "#/$defs/outcome" }
+            }
           }
         },
         "staff": {
