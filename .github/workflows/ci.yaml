@@ -26,7 +26,8 @@ jobs:
       - run: uv run pytest
       # A schema change that forgets the examples is caught here, not at a grading.
       - run: uv run python scripts/check_contract_files.py
-      # The harness, worker and socket-filter images share one base by digest.
+      # The harness, worker, socket-filter and primitive-base images share one
+      # base by digest.
       - name: The python base is one digest
         run: |
           found="$(grep -h '^FROM python' images/*/Dockerfile | cut -d' ' -f2 | sort -u)"
@@ -77,7 +78,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        name: [harness, worker, clone, socket-filter]
+        name: [harness, worker, clone, socket-filter, primitive-base]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -146,6 +147,15 @@ jobs:
             "unicon-worker: placeholder"*) ;;
             *) echo "expected the placeholder line"; exit 1 ;;
           esac
+
+      # With no data link the wrapper runs the image's command in its own
+      # place, so a primitive started directly behaves as before it.
+      - name: The wrapper runs its command without a data link
+        if: matrix.name == 'primitive-base'
+        run: |
+          output="$(docker run --rm unicon-primitive-base:ci echo passed through)"
+          echo "$output"
+          test "$output" = "passed through"
 
   workflows:
     runs-on: ubuntu-latest

@@ -27,9 +27,14 @@ REPO_ROOT = Path(__file__).parents[1]
 SCHEMAS = REPO_ROOT / "schemas"
 EXAMPLES = REPO_ROOT / "examples"
 
+# The job is spoken by the step wrapper (wrapper/unicon_step.py), not the
+# harness, and has a version of its own.
+OWN_VERSIONS = {"job": 1}
+
 CONTRACTS: dict[str, list[tuple[str, str | None]]] = {
     "plan": [("plan.json", None)],
     "envelope": [("envelope.json", None)],
+    "job": [("job.json", None), ("job-once.json", None)],
     "result": [("result.json", None)],
     "submission": [("submission.json", None), ("submission-v6.json", None)],
     "primitive": [
@@ -109,16 +114,18 @@ def _branch_mismatch(
 
 
 def _version_pinned(name: str, schema: Any) -> list[str]:
-    """Every contract file accepts the schema_version the harness speaks. The
+    """Every contract file accepts the schema_version its reader speaks, the
+    harness's but for the job, which the step wrapper reads. The
     primitive contract accepts the versions primitives speak, the harness's
     among them, since a primitive keeps its version until it moves to a new one.
     """
     declared = _schema_versions(schema, schema)
-    if declared is None or SCHEMA_VERSION not in declared:
+    speaks = OWN_VERSIONS.get(name, SCHEMA_VERSION)
+    if declared is None or speaks not in declared:
         return [
             f"schemas/{name}.schema.json accepts schema_version "
             f"{sorted(declared) if declared else None}, "
-            f"but the harness speaks {SCHEMA_VERSION}"
+            f"but its reader speaks {speaks}"
         ]
     return []
 

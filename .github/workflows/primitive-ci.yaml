@@ -84,13 +84,14 @@ jobs:
           enable-cache: true
           cache-dependency-glob: primitive/uv.lock
       - run: uv sync --locked
-      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
-      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
-        with:
-          context: primitive
-          push: false
-          load: true
-          tags: ${{ env.NAME }}:ci
+      # The primitives build on primitive-base, built here from the runner
+      # checkout so a change to the wrapper is tested with them before the
+      # runner release that pushes it. Plain docker builds, which see the
+      # images the daemon holds, where a buildx builder of its own would not.
+      - name: Build primitive-base and the image on it
+        run: |
+          docker build -q -f ../runner/images/primitive-base/Dockerfile -t primitive-base:ci ../runner
+          docker build -q --build-arg BASE_IMAGE=primitive-base:ci -t "$NAME:ci" .
       # Native and Java test binaries come from the compile primitive itself,
       # so these tests are also the check that the two agree on the binary
       # format. Its main branch is the version that will ship next to this one.
@@ -102,12 +103,7 @@ jobs:
           path: primitive-compile
           persist-credentials: false
       - if: inputs.compile-image
-        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
-        with:
-          context: primitive-compile
-          push: false
-          load: true
-          tags: primitive-compile:ci
+        run: docker build -q --build-arg BASE_IMAGE=primitive-base:ci -t primitive-compile:ci ../primitive-compile
       # Runs the image under the same sandbox flags the harness uses: no
       # network, read-only root, no capabilities, seccomp, a user other than
       # root (65532 here; the harness's steps run as 10001).
@@ -115,6 +111,7 @@ jobs:
         env:
           PRIMITIVE_IMAGE: ${{ env.NAME }}:ci
           COMPILE_IMAGE: ${{ inputs.compile-image && 'primitive-compile:ci' || '' }}
+          BASE_IMAGE: primitive-base:ci
       # sandbox-run is what holds a contestant's program, so a change to it
       # runs the runner's escape fixtures against the image just built, with
       # the compile primitive from its main branch building the fixture.

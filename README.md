@@ -3,7 +3,7 @@
 The part of Unicon that runs contestant code, and the contract files that
 describe what it accepts and what it returns.
 
-This repo produces four images and five contract files.
+This repo produces five images and six contract files.
 
 | Image | What it is |
 |---|---|
@@ -11,14 +11,17 @@ This repo produces four images and five contract files.
 | `ghcr.io/uniconhq/socket-filter` | The policy between the harness and a machine's Docker. It holds the daemon's socket and gives the harness its own. `socket_filter/` |
 | `ghcr.io/uniconhq/clone` | What the CI's two checkout steps run: the CI's clone plugin with big files kept in `/lfs-cache`. `images/clone/` |
 | `ghcr.io/uniconhq/worker` | The supervisor that will set a grading machine up (feature 12). Today a placeholder that names the image and exits 0. |
+| `ghcr.io/uniconhq/primitive-base` | The base the primitives of the simpler core build on: Python and the step wrapper, which runs a primitive as one Woodpecker step. `wrapper/`, `images/primitive-base/` |
 
-The harness, socket filter and worker build from `python:3.14-slim` pinned by
-digest; the clone image builds from `woodpeckerci/plugin-git` pinned by digest.
+The harness, socket filter, worker and primitive-base build from
+`python:3.14-slim` pinned by digest; the clone image builds from
+`woodpeckerci/plugin-git` pinned by digest.
 The contract files are `plan.schema.json`, `envelope.schema.json`,
-`result.schema.json`, `primitive.schema.json` and `submission.schema.json`,
-published as assets on every release. The rest of the platform pins one release
-and reads them from it. This repo holds no primitive: each primitive is its own
-repo, `primitive-<name>`, built against the primitive contract published here.
+`result.schema.json`, `primitive.schema.json`, `submission.schema.json` and
+`job.schema.json`, published as assets on every release. The rest of the
+platform pins one release and reads them from it. This repo holds no
+primitive: each primitive is its own repo, `primitive-<name>`, built against
+the primitive contract published here.
 
 ## How a grading run works
 
@@ -429,13 +432,59 @@ because a clone step given an `environment` block stops counting as a plugin
 and is no longer lent the credential it clones with. The image goes on the
 CI's trusted-clone list beside plugin-git.
 
+## The step wrapper
+
+`wrapper/unicon_step.py`, standard library only, is `/usr/local/bin/unicon-step`
+and the entrypoint of `primitive-base`. A primitive builds on that image and
+names its own program as the image's command, `CMD ["/usr/local/bin/exec"]`,
+so in a Woodpecker step the wrapper runs first and the primitive under it.
+With no `data_url` setting it runs the command in its own place, so an image
+started directly, as the harness and the primitives' own image tests start
+one, behaves as before.
+
+Given `data_url` and `data_token`, as `PLUGIN_DATA_URL` and
+`PLUGIN_DATA_TOKEN`, it makes itself non-dumpable, so a process of its user
+cannot read its `/proc/1/environ`, then:
+
+1. asks the door for the step's job (`job.schema.json`), refusing another
+   version with exit 2;
+2. fetches every file side by side, checking each against its size and
+   SHA-256, or copies it from the workspace the clone step checked out;
+3. writes `inputs.json` with each `{"secret": <setting>}` filled from the
+   step's settings;
+4. runs the command in `/work` with every `PLUGIN_` variable taken out of its
+   environment and `UNICON_BOX_USERS` set from the job, prints what it prints
+   with each secret, the link and the token as `***`, and kills it and all it
+   started at the job's time limit;
+5. masks `outputs.json` the same way, numbers kept exactly as written, or
+   writes it itself, holding only `error`, when the step could not do its
+   work;
+6. asks the door for an upload link per file, `outputs.json` and every file
+   under `out/`, with its SHA-256 and size, puts each, and posts to done.
+
+It exits 0, or 1 on an error or, when the job says `fail_on_non_accepted`, an
+outcome other than accepted, so Woodpecker starts no later step. The token
+goes only to the door and links under it, never to a presigned link. The
+pipeline's last step runs `primitive-base` with `mode: report` and only
+posts `{}` to its own door, telling the forge the pipeline ended.
+
+A step given the org's cache volume at `/cache` fetches a task file marked
+`cached` once per machine into `/cache/objects/<sha256>`, under a lock per
+name, and hard-links it into a folder of its own under `/cache/items/`,
+reached as `/work/cache`, held by a lock for the step's life and removed at
+its end; a folder whose lock no one holds is swept. Past the cap, 10 GiB or
+the number of bytes in `/etc/unicon/cache-cap`, the least recently used
+objects no running step links go. Its tests are in `wrapper/step_tests/`,
+against a stand-in for the forge's door.
+
 ## The contracts
 
 The five share one `schema_version`, 5, the one a runner release publishes them
 at. A release that changes the shape of any of them raises it, and the harness
 refuses a file written for another. The primitive contract also has version 6,
 for the primitives the simpler core runs on; a primitive says which it speaks,
-so today's stay on 5. `scripts/check_contract_files.py` fails CI when a file
+so today's stay on 5. `job.schema.json` is the wrapper's and has a version
+of its own, 1. `scripts/check_contract_files.py` fails CI when a file
 does not accept the harness's version, when an example under `examples/` does not
 validate, or when a schema field is one no example sets.
 
@@ -577,6 +626,15 @@ test meets, is noted in the CI log and not read. A `{"submission": id}` plan
 value gives the one file of a file input, the files of a folder input as one
 folder, the test's file of a per-test input, or the value.
 
+**`job.schema.json`.** What a grading step's door at the forge answers the
+wrapper: `inputs`, the `inputs.json` to write, with only the runs still to
+do in a batch; `files`, each placed at its path under `/work`, either a
+download (`url`, `sha256`, `size`, and `cached` for a task file read
+through the machine's cache) or a copy of a `workspace` path; `uploads` and
+`done`, the door's links for the upload links and the end; `time_limit` in
+seconds; `box_users` for an exec or interact step; `fail_on_non_accepted`;
+and `secrets`, the settings that carry the step's secrets.
+
 ## The primitives' workflows
 
 Every primitive repo, `primitive-<name>`, runs the same CI and the same
@@ -622,6 +680,12 @@ is `ghcr.io/uniconhq/primitive-<name>`.
 primitive builds, sandbox-run: both workflows build `primitive-compile` from
 its `main` branch and hand it to the image tests as `COMPILE_IMAGE`.
 
+A primitive of the simpler core builds on `primitive-base`, named in its
+Dockerfile as `ARG BASE_IMAGE`. CI builds that image from the `runner/`
+checkout and passes it, also to the image tests as `BASE_IMAGE`; the release
+builds on `ghcr.io/uniconhq/primitive-base:<runner-ref>`, which that runner
+release pushed.
+
 `scripts/check_declaration.py SCHEMA REPO` refuses an `image` line in the
 repo's `primitive.yaml`, fills in a placeholder image and checks the result
 against the schema's declaration. It reads the file as the forge reads a
@@ -660,10 +724,12 @@ harness/tests/                   its tests; primitives/ holds the fixture image,
                                  escape/ the escape fixtures' C program
 socket_filter/unicon_filter/     the socket filter
 socket_filter/filter_tests/      its tests, and the Docker lab the integration tests use
-images/<name>/Dockerfile         the four images
+images/<name>/Dockerfile         the five images
 images/clone_tests/              the clone image's Docker test and its small git-lfs server
 images/placeholder.py            what the worker image runs
-schemas/                         the five contract schemas, published on each release
+wrapper/unicon_step.py           the step wrapper, primitive-base's entrypoint
+wrapper/step_tests/              its tests and the stand-in for the forge's door
+schemas/                         the six contract schemas, published on each release
 examples/                        valid documents for every schema, checked in CI
 scripts/                         the check that keeps the examples and schemas in step,
                                  and the declaration check every primitive runs
@@ -694,7 +760,13 @@ the reaper, the filter noticing its socket replaced, and checkouts with the
 clone image against a small git-lfs server: a second checkout sharing the
 first's cache must download nothing, one with a cache of its own must
 download the file again, and four started together on an empty cache must
-download it once between them. Everything it makes is named `unicon-lab-*`
+download it once between them, and the step wrapper in `primitive-base`
+against its stand-in door: a primitive and a compile reading the wrapper's
+environment get nothing, the org's cache volume serves a step that is not
+root, and exec built on the base image from a `primitive-exec` checkout
+beside this one runs a batch on isolate through the wrapper (the compile and
+exec cases are skipped without `primitive-compile` and `primitive-exec`
+checkouts there). Everything it makes is named `unicon-lab-*`
 and removed at the end (the filter's socket directories are under
 `/run/unicon-lab` on the daemon's machine), except the registry container,
 `unicon-lab-registry`, which later runs reuse. It also runs the escape fixtures, which pull the released compile

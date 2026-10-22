@@ -97,7 +97,10 @@ jobs:
       - run: uv run pytest -m "not image"
 
       # Built once; the image tests run this image and the next job pushes it.
-      - run: docker build -t "$NAME:release" .
+      # It builds on the primitive-base the runner release at runner-ref pushed.
+      - run: docker build --build-arg "BASE_IMAGE=$BASE_IMAGE" -t "$NAME:release" .
+        env:
+          BASE_IMAGE: ghcr.io/uniconhq/primitive-base:${{ inputs.runner-ref }}
 
       # Native and Java test binaries come from the compile primitive itself,
       # so these tests are also the check that the two agree on the binary
@@ -111,7 +114,9 @@ jobs:
           path: primitive-compile
           persist-credentials: false
       - if: inputs.compile-image
-        run: docker build -t primitive-compile:release ../primitive-compile
+        run: docker build --build-arg "BASE_IMAGE=$BASE_IMAGE" -t primitive-compile:release ../primitive-compile
+        env:
+          BASE_IMAGE: ghcr.io/uniconhq/primitive-base:${{ inputs.runner-ref }}
 
       - run: uv run pytest -m image
         env:

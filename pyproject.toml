@@ -41,7 +41,7 @@ packages = ["harness/unicon_harness"]
 
 [tool.ruff]
 line-length = 88
-src = ["harness", "socket_filter", "scripts", "images"]
+src = ["harness", "socket_filter", "scripts", "images", "wrapper"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "UP", "B", "A", "C4", "PTH", "RUF"]
@@ -52,8 +52,8 @@ select = ["E", "F", "I", "N", "UP", "B", "A", "C4", "PTH", "RUF"]
 [tool.mypy]
 python_version = "3.14"
 strict = true
-files = ["harness", "socket_filter", "scripts", "images"]
-mypy_path = ["harness", "socket_filter", "scripts"]
+files = ["harness", "socket_filter", "scripts", "images", "wrapper"]
+mypy_path = ["harness", "socket_filter", "scripts", "wrapper"]
 platform = "linux"
 
 [tool.pytest.ini_options]
@@ -62,7 +62,8 @@ testpaths = [
     "socket_filter/filter_tests",
     "images/clone_tests",
     "scripts/declaration_tests",
+    "wrapper/step_tests",
 ]
-pythonpath = ["harness", "socket_filter", "images", "scripts"]
+pythonpath = ["harness", "socket_filter", "images", "scripts", "wrapper"]
 addopts = "-q -m 'not docker'"
 markers = ["docker: runs against a real Docker daemon; `pytest -m docker`"]
