@@ -35,7 +35,7 @@ repeat:
       - [attacks/spin.in, 64]
 scoring:
   values:
-    refused: {block: sum_runs, over: {runs: all}, of: {run: [all, passed]}}
+    refused: {block: sum, over: {runs: all}, of: {run: [all, passed]}}
   show:
     now: [refused, all, attacks/]
 submissions: {max: 50, rate: {count: 1, per: 5}}

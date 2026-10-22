@@ -111,6 +111,7 @@
   "reports": {
     "reward": {
       "at_least": 0,
+      "better": "higher",
       "output": "reward",
       "step": "episode"
     }

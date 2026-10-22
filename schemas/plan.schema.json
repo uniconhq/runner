@@ -444,7 +444,7 @@
           }
         },
         "reports": {
-          "description": "The workflow's reports: each name a step and an output, with the bounds of a number where known.",
+          "description": "The workflow's reports: each name a step and an output, with which way is better and the bounds of a number where known, so a missing report's worst bound is read from the plan.",
           "type": "object",
           "propertyNames": { "$ref": "#/$defs/name" },
           "additionalProperties": { "$ref": "#/$defs/run_report" }
@@ -791,6 +791,7 @@
       "properties": {
         "step": { "$ref": "#/$defs/step_id" },
         "output": { "type": "string", "pattern": "^[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)?$" },
+        "better": { "enum": ["higher", "lower"] },
         "at_least": { "$ref": "#/$defs/number" },
         "at_most": { "$ref": "#/$defs/number" }
       }
