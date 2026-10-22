@@ -31,7 +31,7 @@ CONTRACTS: dict[str, list[tuple[str, str | None]]] = {
     "plan": [("plan.json", None)],
     "envelope": [("envelope.json", None)],
     "result": [("result.json", None)],
-    "submission": [("submission.json", None)],
+    "submission": [("submission.json", None), ("submission-v6.json", None)],
     "primitive": [
         ("primitive-inputs.json", "inputs_file"),
         ("primitive-inputs-batch.json", "inputs_file"),

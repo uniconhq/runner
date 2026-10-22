@@ -2,21 +2,31 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://raw.githubusercontent.com/uniconhq/runner/main/schemas/submission.schema.json",
   "title": "Unicon submission",
-  "description": "submission.json at the root of a submission commit. A submit writes one commit to the contestant's submission repo, as the contestant: the files of every file and folder input under files/<input id>/, and this file naming them. The harness resolves a plan's {\"submission\": ...} values through it: a file input gives its one file, a folder input its files with their layout, a per_test input the one file of the test being run, and a text, number, boolean or enum input its value. Everything before the commit checks this against the plan's contestant inputs and the task's form details, and the harness checks it against the plan again before any step runs.",
+  "description": "submission.json at the root of a submission commit. A submit writes one commit to the contestant's submission repo, as the contestant: the files of every file and folder input under files/<input id>/, and this file naming them. Version 5 is a task with a test block: the harness resolves a plan's {\"submission\": ...} values through it: a file input gives its one file, a folder input its files with their layout, a per_test input the one file of the test being run, and a text, number, boolean or enum input its value. Everything before the commit checks this against the plan's contestant inputs and the task's form details, and the harness checks it against the plan again before any step runs. Version 6 is a task on a run workflow: an entrant input given once is as in version 5, and one inside the task's repeat is given per part, the position of its tuple from 1, its files under files/<input id>/<part>/; a run whose part is not given is skipped.",
   "type": "object",
   "required": ["schema_version", "inputs"],
   "additionalProperties": false,
   "properties": {
     "schema_version": {
-      "description": "The submission shape this file is written against.",
+      "description": "The submission shape this file is written against: 5 for a task with a test block, 6 for a task on a run workflow.",
       "type": "integer",
-      "const": 5
+      "enum": [5, 6]
     },
     "inputs": {
       "description": "One entry per contestant input the plan declares, keyed by the input id.",
       "type": "object",
-      "propertyNames": { "pattern": "^[a-z0-9][a-z0-9_-]*$" },
-      "additionalProperties": { "$ref": "#/$defs/input" }
+      "propertyNames": { "pattern": "^[a-z0-9][a-z0-9_-]*$" }
+    }
+  },
+  "if": { "properties": { "schema_version": { "const": 6 } } },
+  "then": {
+    "properties": {
+      "inputs": { "additionalProperties": { "$ref": "#/$defs/run_input" } }
+    }
+  },
+  "else": {
+    "properties": {
+      "inputs": { "additionalProperties": { "$ref": "#/$defs/input" } }
     }
   },
   "$defs": {
@@ -26,8 +36,30 @@
         { "$ref": "#/$defs/value" }
       ]
     },
+    "run_input": {
+      "description": "Version 6: an entrant input given once, as in version 5, or one inside the task's repeat, given per part.",
+      "oneOf": [
+        { "$ref": "#/$defs/files" },
+        { "$ref": "#/$defs/value" },
+        { "$ref": "#/$defs/parts" }
+      ]
+    },
+    "parts": {
+      "description": "An entrant input inside the task's repeat: one entry per part given, keyed by the position of its tuple from 1, so a label never shows a file's name. A part left out is not given, and every run made from its tuple is skipped.",
+      "type": "object",
+      "required": ["parts"],
+      "additionalProperties": false,
+      "properties": {
+        "parts": {
+          "type": "object",
+          "minProperties": 1,
+          "propertyNames": { "pattern": "^[1-9][0-9]*$" },
+          "additionalProperties": { "$ref": "#/$defs/input" }
+        }
+      }
+    },
     "files": {
-      "description": "A file or folder input: its files in the commit. A file input carries exactly one; a folder input one or more, at their paths in the folder; a per_test input one per test it answers, at files/<input id>/<group>/<test> or files/<input id>/<group>/<test>.<ending>.",
+      "description": "A file or folder input: its files in the commit. A file input carries exactly one; a folder input one or more, at their paths in the folder; a per_test input one per test it answers, at files/<input id>/<group>/<test> or files/<input id>/<group>/<test>.<ending>; a part of version 6 its files at files/<input id>/<part>/<relative path>.",
       "type": "object",
       "required": ["files"],
       "additionalProperties": false,

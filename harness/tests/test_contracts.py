@@ -619,3 +619,38 @@ def test_a_folder_input_may_hold_nested_paths() -> None:
     entry = {"files": ["files/submission/main.py", "files/submission/lib/a.py"]}
     document = {"schema_version": 5, "inputs": {"submission": entry}}
     assert violation(document, "submission") is None
+
+
+def test_the_example_v6_submission_is_accepted() -> None:
+    assert violation(example("submission-v6.json"), "submission") is None
+
+
+def test_parts_belong_to_version_6_only() -> None:
+    entry = {"parts": {"1": {"value": 3}}}
+    assert violation({"schema_version": 5, "inputs": {"guess": entry}}, "submission")
+    assert not violation(
+        {"schema_version": 6, "inputs": {"guess": entry}}, "submission"
+    )
+
+
+@pytest.mark.parametrize(
+    "entry",
+    [
+        {"parts": {}},
+        {"parts": {"0": {"value": 1}}},
+        {"parts": {"01": {"value": 1}}},
+        {"parts": {"one": {"value": 1}}},
+        {"parts": {"1": {"parts": {"1": {"value": 1}}}}},
+        {"parts": {"1": {"value": 1}}, "value": 1},
+        {"files": []},
+        {"value": None},
+    ],
+)
+def test_a_v6_entry_is_files_a_value_or_parts(entry: dict[str, Any]) -> None:
+    document = {"schema_version": 6, "inputs": {"route": entry}}
+    assert violation(document, "submission") is not None
+
+
+def test_no_other_version_is_accepted() -> None:
+    document = {"schema_version": 7, "inputs": {"code": {"value": 1}}}
+    assert violation(document, "submission") is not None

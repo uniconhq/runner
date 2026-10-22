@@ -1,0 +1,34 @@
+{
+  "schema_version": 6,
+  "inputs": {
+    "code": {
+      "files": [
+        "files/code/main.py"
+      ]
+    },
+    "language": {
+      "value": "python"
+    },
+    "route": {
+      "parts": {
+        "1": {
+          "files": [
+            "files/route/1/route.txt"
+          ]
+        },
+        "3": {
+          "files": [
+            "files/route/3/route.txt"
+          ]
+        }
+      }
+    },
+    "guess": {
+      "parts": {
+        "2": {
+          "value": 7
+        }
+      }
+    }
+  }
+}
