@@ -438,11 +438,16 @@ of a text found there exactly once."""
 
 SHARE_NET = (
     (
+        "        f\"--dir=tmp={box / 'tmp'}:rw\",\n"
         '        f"--dir=dev={BOX_DEV}:dev",\n',
-        '        "--share-net",\n        f"--dir=dev={BOX_DEV}:dev",\n',
+        "        f\"--dir=tmp={box / 'tmp'}:rw\",\n"
+        '        "--share-net",\n'
+        '        f"--dir=dev={BOX_DEV}:dev",\n',
     ),
 )
-"""A box that shares the container's network namespace."""
+"""A box that shares the container's network namespace: `--share-net` in the
+command a test is run under, found by the line before it, as the launcher's
+self-test names the same device folder."""
 NO_PROCESS_LIMIT = (('f"--processes={PROCESS_LIMIT}",', '"--processes",'),)
 """A box with no process limit: `--processes` with no number."""
 KEPT_BOX = (
