@@ -598,6 +598,16 @@
           "const": true
         },
         "tainted": { "$ref": "#/$defs/taint" },
+        "value": {
+          "description": "The task's value whose exec block this step serves, never a workflow step's: its program's compile, done at the save, or its program's run, done once per grading after the runs it reads, which reports the value's number under report. No run's verdict reads either.",
+          "type": "object",
+          "required": ["name"],
+          "additionalProperties": false,
+          "properties": {
+            "name": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$" },
+            "report": { "type": "string", "pattern": "^[a-z][a-z0-9_]{0,63}$" }
+          }
+        },
         "inputs": { "$ref": "#/$defs/run_inputs" },
         "items": {
           "type": "object",
@@ -651,7 +661,7 @@
       "additionalProperties": { "$ref": "#/$defs/run_value" }
     },
     "run_value": {
-      "description": "Exactly one of: a literal, with the task's scalars written in; a file or folder of the task, or of the workflow at its commit; an entrant input, or one part of it; a secret by name; an output of an earlier step; text with the entrant's scalars written in; named files; a step's programs, each with its own inputs; the links between them.",
+      "description": "Exactly one of: a literal, with the task's scalars written in; a file or folder of the task, or of the workflow at its commit; an entrant input, or one part of it; a secret by name; an output of an earlier step; text with the entrant's scalars written in; named files, one of them a file of runs the forge builds; a step's programs, each with its own inputs; the links between them.",
       "oneOf": [
         {
           "type": "object",
@@ -700,7 +710,8 @@
                   { "$ref": "#/$defs/task_value" },
                   { "$ref": "#/$defs/workflow_value" },
                   { "$ref": "#/$defs/entrant_value" },
-                  { "$ref": "#/$defs/output_value" }
+                  { "$ref": "#/$defs/output_value" },
+                  { "$ref": "#/$defs/runs_value" }
                 ]
               }
             }
@@ -755,6 +766,20 @@
       "properties": {
         "entrant": { "$ref": "#/$defs/name" },
         "part": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "runs_value": {
+      "description": "A file the forge builds from the grading's stored outputs for a value's exec block: the runs named, in this order, each with its id, key, verdict, passed and number reports, as JSON, and nothing else.",
+      "type": "object",
+      "required": ["runs"],
+      "additionalProperties": false,
+      "properties": {
+        "runs": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/run_id" }
+        }
       }
     },
     "output_value": {

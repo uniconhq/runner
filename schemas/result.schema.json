@@ -154,8 +154,13 @@
         "oneOf": [{ "type": "number" }, { "type": "string", "maxLength": 10000 }]
       }
     },
+    "value_numbers": {
+      "type": "object",
+      "propertyNames": { "pattern": "^[a-z][a-z0-9_]*$" },
+      "additionalProperties": { "type": "number" }
+    },
     "result_v6": {
-      "description": "A run task's result, which the forge builds itself once a grading's pipeline has ended, from what each step's outputs.json held, its own and the ones the store held for an item it would have done again. Every run the pipeline grades, with its verdict and the reports its steps wrote; the reports of steps done once; what staff alone see; and an error exactly when a run's verdict is system_error.",
+      "description": "A run task's result, which the forge builds itself once a grading's pipeline has ended, from what each step's outputs.json held, its own and the ones the store held for an item it would have done again. Every run the pipeline grades, with its verdict and the reports its steps wrote; the reports of steps done once; what staff alone see; the number each value's program reported; and an error exactly when a run's verdict is system_error or a value's program faulted.",
       "type": "object",
       "required": ["schema_version", "runs", "once", "staff", "error", "run_log"],
       "additionalProperties": false,
@@ -185,6 +190,10 @@
             }
           }
         },
+        "values": {
+          "description": "The number each value's exec block came to, by the value's name: the one number report its program wrote, read through its program.yaml. A value whose program faulted or gave nothing has none, and the error names it.",
+          "$ref": "#/$defs/value_numbers"
+        },
         "staff": {
           "description": "What a step wrote for staff alone, once per item this grading's pipeline did: its staff_message and its extras folder. Never shown to an entrant.",
           "type": "array",
@@ -204,7 +213,7 @@
           }
         },
         "error": {
-          "description": "One sentence for staff naming the first step that faulted or gave nothing for a run, when one did, otherwise null. Never shown to an entrant.",
+          "description": "One sentence for staff naming the first step that faulted or gave nothing for a run, or a value's program that faulted or gave nothing, when one did, otherwise null. Never shown to an entrant.",
           "oneOf": [{ "type": "null" }, { "type": "string", "minLength": 1 }]
         },
         "run_log": {

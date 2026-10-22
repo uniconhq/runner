@@ -27,6 +27,7 @@
     "texts": { "log": { "output": "0199a2c1-6b7e-7c3a-9f10-5d2e4b8a6c31", "name": "log" } },
     "outcomes": { "compile": "accepted" }
   },
+  "values": { "mean": 0.5 },
   "staff": [
     {
       "step": "compare",

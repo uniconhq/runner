@@ -67,6 +67,21 @@
           "r3"
         ],
         "step": "episode"
+      },
+      {
+        "depends_on": [
+          "episode"
+        ],
+        "limits": {
+          "cpu_ms": 2000,
+          "gpus": 0,
+          "memory_mb": 256,
+          "output_mb": 64,
+          "pids": 32,
+          "time_ms": 2000
+        },
+        "name": "exec-mean",
+        "step": "exec-mean"
       }
     ],
     "save": [
@@ -105,6 +120,19 @@
           "r6"
         ],
         "step": "scene"
+      },
+      {
+        "depends_on": [],
+        "limits": {
+          "cpu_ms": 60000,
+          "gpus": 0,
+          "memory_mb": 1024,
+          "output_mb": 64,
+          "pids": 128,
+          "time_ms": 60000
+        },
+        "name": "build-mean",
+        "step": "build-mean"
       }
     ]
   },
@@ -154,6 +182,21 @@
             "r3"
           ],
           "step": "episode"
+        },
+        {
+          "depends_on": [
+            "episode"
+          ],
+          "limits": {
+            "cpu_ms": 2000,
+            "gpus": 0,
+            "memory_mb": 256,
+            "output_mb": 64,
+            "pids": 32,
+            "time_ms": 2000
+          },
+          "name": "exec-mean",
+          "step": "exec-mean"
         }
       ]
     }
@@ -218,6 +261,32 @@
   ],
   "schema_version": 6,
   "steps": {
+    "build-mean": {
+      "cache": false,
+      "class": "save_once",
+      "folders": [
+        "source"
+      ],
+      "image": "ghcr.io/uniconhq/primitive-compile@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+      "inputs": {
+        "language": {
+          "value": "python"
+        },
+        "source": {
+          "task": "mean/"
+        }
+      },
+      "network": false,
+      "outputs": {
+        "log": "text",
+        "outcome": "outcome",
+        "program": "file"
+      },
+      "primitive": "unicon/compile@v3",
+      "value": {
+        "name": "mean"
+      }
+    },
     "episode": {
       "boxes": 1,
       "cache": true,
@@ -474,6 +543,57 @@
       "primitive": "unicon/exec@v1",
       "self_reported": true
     },
+    "exec-mean": {
+      "boxes": 1,
+      "cache": false,
+      "class": "grading_once",
+      "image": "ghcr.io/uniconhq/primitive-exec@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+      "inputs": {
+        "files": {
+          "files": {
+            "runs.json": {
+              "runs": [
+                "r1",
+                "r2",
+                "r3",
+                "r4",
+                "r5",
+                "r6"
+              ]
+            }
+          }
+        },
+        "manifest": {
+          "task": "mean/program.yaml"
+        },
+        "memory_limit": {
+          "value": 256
+        },
+        "program": {
+          "output": "program",
+          "step": "build-mean"
+        },
+        "time_limit": {
+          "value": 2
+        }
+      },
+      "network": false,
+      "outputs": {
+        "extras?": "folder",
+        "label?": "text",
+        "mean": "number",
+        "memory_kb": "number",
+        "message?": "text",
+        "outcome": "outcome",
+        "staff_message?": "text",
+        "time_ms": "number"
+      },
+      "primitive": "unicon/exec@v1",
+      "value": {
+        "name": "mean",
+        "report": "mean"
+      }
+    },
     "runner": {
       "cache": false,
       "class": "save_once",
@@ -620,7 +740,16 @@
       "primitive": "unicon/exec@v1"
     }
   },
-  "task_files": {},
+  "task_files": {
+    "mean/mean.py": {
+      "sha256": "3333333333333333333333333333333333333333333333333333333333333333",
+      "size": 120
+    },
+    "mean/program.yaml": {
+      "sha256": "4444444444444444444444444444444444444444444444444444444444444444",
+      "size": 64
+    }
+  },
   "workflow": {
     "commit": "cccccccccccccccccccccccccccccccccccccccc",
     "files": {
