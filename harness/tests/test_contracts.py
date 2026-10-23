@@ -309,6 +309,13 @@ def test_every_primitive_example_is_accepted() -> None:
         assert violation(example(name), "primitive") is None, name
     assert violation(_yaml("primitive.yaml"), "primitive") is None
     assert violation(_yaml("primitive-v6.yaml"), "primitive") is None
+    assert violation(_yaml("primitive-v6-forms.yaml"), "primitive") is None
+
+
+def test_forms_need_schema_version_6() -> None:
+    formed = _yaml("primitive-v6-forms.yaml")
+    formed["schema_version"] = 5
+    assert violation(formed, "primitive", "declaration") is not None
 
 
 def test_a_primitive_that_writes_no_outputs_fails_the_check() -> None:

@@ -412,3 +412,86 @@ def test_the_command_line_names_the_schema_and_the_repo(
     assert check_declaration.main(["", str(schema_file), str(repo)]) == 1
     assert "primitive.yaml: batch:" in capsys.readouterr().err
     assert check_declaration.main(["", str(schema_file)]) == 2
+
+
+FORMS = """\
+schema_version: 6
+batch: true
+forms:
+  one:
+    description: Runs one program.
+    outputs_from: manifest
+    limits: {time_ms: 1, cpu_ms: 1, memory_mb: 1, pids: 1, output_mb: 1, gpus: 0}
+    limits_from:
+      time_ms: {input: time_limit, scale: 2000, add: 3000}
+    inputs:
+      program: {type: file, runs: true}
+      manifest: {type: file, runs: false}
+      time_limit: {type: number}
+    outputs:
+      outcome: {type: outcome}
+  programs:
+    description: Runs several programs.
+    outputs_from: programs
+    limits: {time_ms: 1, cpu_ms: 1, memory_mb: 1, pids: 1, output_mb: 1, gpus: 0}
+    limits_from:
+      time_ms: {max: programs.time_limit, scale: 4000, add: 6000}
+    inputs:
+      programs:
+        type: programs
+        inputs:
+          program: {type: file, runs: true}
+          time_limit: {type: number}
+          manifest: {type: file, runs: false}
+        outputs:
+          time_ms: {type: number, better: lower, at_least: 0}
+    outputs:
+      outcome: {type: outcome}
+"""
+
+
+def test_a_two_form_declaration_conforms(
+    schema: dict[str, Any], tmp_path: Path
+) -> None:
+    assert check_declaration.problems(schema, _repo(tmp_path, FORMS)) == []
+
+
+def test_a_form_key_at_the_top_beside_forms_is_refused(
+    schema: dict[str, Any], tmp_path: Path
+) -> None:
+    text = FORMS.replace("batch: true\n", "batch: true\nlimits: {time_ms: 1}\n")
+    found = check_declaration.problems(schema, _repo(tmp_path, text))
+    assert any("limits" in problem for problem in found)
+
+
+def test_a_form_whose_required_inputs_another_form_declares_is_refused(
+    schema: dict[str, Any], tmp_path: Path
+) -> None:
+    text = """\
+schema_version: 6
+forms:
+  one:
+    outputs_from: manifest
+    limits: {time_ms: 1, cpu_ms: 1, memory_mb: 1, pids: 1, output_mb: 1, gpus: 0}
+    inputs:
+      shared: {type: text}
+      manifest: {type: file, runs: false, optional: true}
+    outputs:
+      outcome: {type: outcome}
+  programs:
+    outputs_from: programs
+    limits: {time_ms: 1, cpu_ms: 1, memory_mb: 1, pids: 1, output_mb: 1, gpus: 0}
+    inputs:
+      shared: {type: text, optional: true}
+      programs:
+        type: programs
+        inputs:
+          program: {type: file, runs: true}
+          manifest: {type: file, runs: false}
+        outputs:
+          time_ms: {type: number, better: lower, at_least: 0}
+    outputs:
+      outcome: {type: outcome}
+"""
+    found = check_declaration.problems(schema, _repo(tmp_path, text))
+    assert found == ["forms/one: a form needs a required input no other form declares"]

@@ -118,7 +118,7 @@
     "declaration": {
       "description": "primitive.yaml, what the forge compiler reads for one version of a primitive. The repo at the forge is the name and its tag the version, so the file names neither. In the primitive's own GitHub repo the file has no image line; bootstrap writes the image by digest from the release manifest into the version it creates at the forge, so a repo's CI validates its file with a placeholder digest filled in.",
       "type": "object",
-      "required": ["image", "limits", "outputs"],
+      "required": ["image"],
       "additionalProperties": false,
       "properties": {
         "title": {
@@ -150,6 +150,14 @@
         "cache": {
           "description": "Version 6: true when the primitive reads the task's files through the machine's cache, so its step is given the cache. false when left out: the step's files are copied in.",
           "type": "boolean"
+        },
+        "forms": {
+          "description": "One to four ways to use the primitive, each named in lower case. A workflow step names none: the save picks the one form whose inputs the step gives. With forms, the ports and limits live on each form and schema_version is 6.",
+          "type": "object",
+          "minProperties": 1,
+          "maxProperties": 4,
+          "propertyNames": { "pattern": "^[a-z][a-z0-9_]*$" },
+          "additionalProperties": { "$ref": "#/$defs/form" }
         },
         "limits": {
           "description": "The container's limits for one run, or for one item of a batch. A batch step's time_ms and cpu_ms are summed over its items; the others hold for each item.",
@@ -251,7 +259,45 @@
               "outputs": { "additionalProperties": { "not": { "$ref": "#/$defs/number_meaning" } } }
             }
           }
+        },
+        {
+          "if": { "required": ["forms"] },
+          "then": {
+            "required": ["schema_version"],
+            "properties": { "schema_version": { "const": 6 } },
+            "not": {
+              "anyOf": [
+                { "required": ["outputs_from"] },
+                { "required": ["limits"] },
+                { "required": ["limits_from"] },
+                { "required": ["inputs"] },
+                { "required": ["outputs"] }
+              ]
+            }
+          },
+          "else": { "required": ["limits", "outputs"] }
         }
+      ]
+    },
+    "form": {
+      "description": "One way to use a primitive that declares forms: its own ports and limits. The declaration's title, image and the other shared keys stay at the top.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["limits", "outputs"],
+      "properties": {
+        "description": {
+          "description": "One sentence for the workflow editor saying what this form does. It changes nothing that grades.",
+          "$ref": "#/$defs/line"
+        },
+        "outputs_from": { "$ref": "#/$defs/declaration/properties/outputs_from" },
+        "limits": { "$ref": "#/$defs/limits" },
+        "limits_from": { "$ref": "#/$defs/declaration/properties/limits_from" },
+        "inputs": { "$ref": "#/$defs/declaration/properties/inputs" },
+        "outputs": { "$ref": "#/$defs/declaration/properties/outputs" }
+      },
+      "allOf": [
+        { "$ref": "#/$defs/declaration/allOf/0" },
+        { "$ref": "#/$defs/declaration/allOf/1" }
       ]
     },
     "limits": {

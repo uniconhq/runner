@@ -54,6 +54,7 @@ CONTRACTS: dict[str, list[tuple[str, str | None]]] = {
         ("primitive-v6.yaml", "declaration"),
         ("primitive-v6-programs.yaml", "declaration"),
         ("primitive-v6-programs-limits.yaml", "declaration"),
+        ("primitive-v6-forms.yaml", "declaration"),
     ],
 }
 
