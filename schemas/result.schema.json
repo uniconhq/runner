@@ -20,7 +20,7 @@
   },
   "$defs": {
     "result_v5": {
-      "description": "A grading run's result, a task with tests, which the harness posts back through the callback at the end of its run as result.json. The callback it is posted to, and that callback's token, say which grading it is for. Nothing in it knows about test groups, points or boards: it is an outcome per test and the values the workflow's report names, per test or once. The platform works out every other outcome, and every number shown, from the rows.",
+      "description": "A grading run's result, a task with tests, which the harness posts back through the callback at the end of its run as result.json. The callback it is posted to, and that callback's token, say which grading it is for. Nothing in it knows about test groups, points or leaderboards: it is an outcome per test and the values the workflow's report names, per test or once. The platform works out every other outcome, and every number shown, from the rows.",
       "type": "object",
       "required": [
         "schema_version",
