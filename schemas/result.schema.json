@@ -231,20 +231,26 @@
       }
     },
     "check_result": {
-      "description": "One check graded at the save: every run, its verdict and reports, the steps done once and each value's program's number, with each step named as the workflow names it, not by its copy; what its steps wrote for staff, by the copies' names; an error exactly when a step of the check faulted or gave nothing; whether it got what it expects; and a sentence for each thing it did not get.",
+      "description": "One check graded at the save: the runs worth reading, each with its verdict and reports, the steps done once and each value's program's number, with each step named as the workflow names it, not by its copy; what its steps wrote for staff, done once or for a run kept, by the copies' names; an error exactly when a step of the check faulted or gave nothing; whether it got what it expects; and a sentence for each thing it did not get.",
       "type": "object",
       "required": ["runs", "once", "staff", "error", "passed", "failing"],
       "additionalProperties": false,
       "properties": {
-        "runs": { "type": "array", "items": { "$ref": "#/$defs/run_result" } },
+        "runs": {
+          "description": "The runs worth reading: none once the check passed, else at most 20, those that did not get what it expects first, in the task's order.",
+          "type": "array",
+          "maxItems": 20,
+          "items": { "$ref": "#/$defs/run_result" }
+        },
         "once": { "$ref": "#/$defs/once_result" },
         "values": { "$ref": "#/$defs/value_numbers" },
         "staff": { "$ref": "#/$defs/staff_items" },
         "error": { "oneOf": [{ "type": "null" }, { "type": "string", "minLength": 1 }] },
         "passed": { "type": "boolean" },
         "failing": {
-          "description": "Why the check did not get what it expects, one sentence each, for the organiser; empty when it did.",
+          "description": "Why the check did not get what it expects, one sentence each, at most 20, the last saying how many more when there are; empty when it did.",
           "type": "array",
+          "maxItems": 20,
           "items": { "type": "string", "minLength": 1 }
         }
       }
