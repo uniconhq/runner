@@ -1,6 +1,6 @@
 # Each limit from the other of sum and max than in primitive-v6-programs.yaml,
 # so that between them the two exercise every field of limits_from.
-image: ghcr.io/uniconhq/primitive-interact@sha256:4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c
+image: ghcr.io/uniconhq/primitive-exec@sha256:4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c
 schema_version: 6
 limits: {time_ms: 4000, cpu_ms: 4000, memory_mb: 512, pids: 1056, output_mb: 64, gpus: 0}
 limits_from:

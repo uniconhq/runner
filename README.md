@@ -506,7 +506,7 @@ pipeline's last step runs `primitive-base` with `mode: report` and only
 posts `{}` to its own door, telling the forge the pipeline ended.
 
 A step given the org's cache volume at `/cache`, a root step, as only exec
-and interact use it, fetches a task file marked `cached` once per machine
+uses it, fetches a task file marked `cached` once per machine
 into `/cache/objects/<sha256>`, under a lock per name, downloading into its
 own folder on the volume, hashes an object already there again under its
 lock, removing and fetching it anew unless it is still the length and
@@ -629,7 +629,7 @@ out), changes these things, and only it allows them:
 - **`outputs_from: manifest`** says the primitive also gives back the reports
   of the `program.yaml` on its `manifest` input, a file input it must declare.
 - **A `programs` input,** named `programs`, takes programs the step names,
-  one to eight, which the primitive runs side by side, as `interact` does.
+  one to eight, which exec's programs form runs side by side.
   The port declares `inputs`, what each program takes, as the primitive's
   own inputs are declared, `program` among them, a `file` with `runs:
   true`, and `outputs`, what it gives of each. The value
@@ -652,7 +652,7 @@ out), changes these things, and only it allows them:
   named `programs` and comes with `outputs_from: programs`.
 - **`cache: true`** says the primitive reads the task's files through the
   machine's cache, so its step is given the cache; `false` when left out,
-  and the step's files are copied in. `exec` and `interact` say it;
+  and the step's files are copied in. `exec` says it;
   `compile` doesn't.
 
 **`submission.schema.json`.** `submission.json` at the root of a submission
@@ -679,7 +679,7 @@ through the machine's cache), a copy of a `workspace` path, or an empty
 `folder`; `uploads` and
 `done`, the door's links for the upload links and the end; `time_limit` in
 seconds; `box_users` and `step_memory_mb`, the memory the planner gave the
-step, which the primitive caps itself at, for an exec or interact step;
+step, which the primitive caps itself at, for an exec step;
 `fail_on_non_accepted`; and `secrets`, the settings that carry the step's
 secrets. A 204 to the job's GET is nothing to do.
 

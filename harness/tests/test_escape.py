@@ -25,11 +25,12 @@ each time in a container made from exactly the body the harness sends
    exec's own protections, isolate's settings for its boxes, are taken
    away in an image made from exec's with that one setting changed: the
    box's network namespace, its process limit and a fresh box per item.
-4. through interact, when INTERACT_IMAGE names one, in the same shape as
-   exec, as the entrant of a partner given a hidden file: the entrant
-   reaches none of it, nor sees the partner's process. Its inputs.json is
-   checked against interact's own `read_inputs`, from INTERACT_SOURCE or a
-   primitive-interact checkout beside this repo, as well as the schema.
+4. through exec's programs form, when EXEC_IMAGE names one, in the same
+   shape as its one form, as the entrant of a partner given a hidden file:
+   the entrant reaches none of it, nor sees the partner's process. Its
+   inputs.json is checked against exec's own `read_inputs`, from
+   EXEC_SOURCE or a primitive-exec checkout beside this repo, as well as
+   the schema.
 
 The primitives are the released images by digest, the ones the platform's
 image manifest pins; COMPILE_IMAGE and EXEC_IMAGE (or SANDBOX_RUN_IMAGE)
@@ -91,23 +92,16 @@ RUN_IMAGE = (
 """The run primitive: primitive-sandbox-run v1.3.0, unless exec is named."""
 RUN_IS_EXEC = bool(os.environ.get("EXEC_IMAGE"))
 """Whether the run primitive is exec, whose container is made privileged."""
-INTERACT_IMAGE = os.environ.get("INTERACT_IMAGE", "")
-"""interact, which has no release to pin yet; its test is skipped without."""
 EXEC_SOURCE = Path(
     os.environ.get("EXEC_SOURCE")
     or Path(__file__).resolve().parents[3] / "primitive-exec"
 )
 """A primitive-exec checkout, whose `tests/userns.py` starts exec on root
-Docker."""
-INTERACT_SOURCE = Path(
-    os.environ.get("INTERACT_SOURCE")
-    or Path(__file__).resolve().parents[3] / "primitive-interact"
-)
-"""A primitive-interact checkout, whose `read_inputs` the interact document
-is checked against."""
+Docker, and whose `read_inputs` the programs-form document is checked
+against."""
 EXEC_BOX_USERS = "60000-60009"
-"""The box users an exec or interact step is given, as whoever starts the
-step gives them."""
+"""The box users an exec step is given, as whoever starts the step gives
+them."""
 
 SOURCE = (Path(__file__).parents[2] / "escape" / "escape.c").read_text(encoding="utf-8")
 MOUNT = Path("/w")
@@ -139,9 +133,10 @@ STEP_MEMORY_MB = 256
 """What an exec step's container is given above its largest item's memory
 limit, as its `limits_from` declares. exec refuses a batch with an item
 that, with the files copied in beside it, does not fit."""
-INTERACT_MEMORY_MB = 128 + 512
-"""What interact's step is given: its item's memory limits together, the
-entrant's and the partner's 64 MB, and the 512 MB its `limits_from` adds."""
+PROGRAMS_MEMORY_MB = 128 + 512
+"""What the programs form's step is given: its item's memory limits
+together, the entrant's and the partner's 64 MB, and the 512 MB its
+`limits_from` adds."""
 
 
 def step_memory_mb(attacks: Iterable[str]) -> int:
@@ -199,7 +194,7 @@ PARTNER_CHECKS = {
     "partner-folder",
     "partner-tmp",
 }
-"""What interact's entrant tries on its partner, each of which must be
+"""What the programs form's entrant tries on its partner, each of which must be
 refused: seeing the partner's process at all, the hidden file by the path
 the partner tells it, that path's folder listing the file, and a file the
 partner left in its `/tmp`. Each program has an isolate box of its own,
@@ -385,7 +380,7 @@ def without_pids_or_network(body: dict[str, Any]) -> None:
 def as_exec_runs(
     body: dict[str, Any], memory_mb: int, program: str = "/usr/local/bin/exec"
 ) -> None:
-    """The harness's body changed to the shape an exec or interact step runs
+    """The harness's body changed to the shape an exec step runs
     in, which the harness does not make yet: privileged, as root, its root
     writable, given its box users, and its memory `memory_mb`, as the step
     would be given for its largest item, both the container's and the
@@ -547,8 +542,8 @@ def batch_inputs(version: int, only: tuple[str, ...] = ()) -> dict[str, Any]:
     }
 
 
-def interact_inputs() -> dict[str, Any]:
-    """interact's inputs.json: the fixture as two programs linked both ways,
+def programs_inputs() -> dict[str, Any]:
+    """The programs form's inputs.json: the fixture as two programs linked both ways,
     the entrant and its partner, the partner given `secret` as a named file
     and a manifest, as `unicon/interactive@v1` gives its judge the hidden
     input, and a longer time limit, so the entrant ends first."""
@@ -640,9 +635,9 @@ class Fixtures:
         files: dict[str, bytes | str] = {
             f"unicon-steps/compile/{SOURCE_FOLDER}/escape.c": SOURCE,
             "unicon-steps/direct/in/1.ans": "the answer\n",
-            "unicon-steps/interact/inputs-6.json": json.dumps(interact_inputs()),
-            "unicon-steps/interact/in/secret": "the hidden input\n",
-            "unicon-steps/interact/in/manifest.json": json.dumps({"reports": {}}),
+            "unicon-steps/programs/inputs-6.json": json.dumps(programs_inputs()),
+            "unicon-steps/programs/in/secret": "the hidden input\n",
+            "unicon-steps/programs/in/manifest.json": json.dumps({"reports": {}}),
         }
         for version in VERSIONS:
             files[f"unicon-steps/compile/inputs-{version}.json"] = json.dumps(
@@ -674,7 +669,7 @@ class Fixtures:
         made = outputs["outputs"]
         binary = (made["program"] if "program" in made else made["binary"])["file"]
         copies = [f"{step_directory(name)}/in/binary" for name in BATCHES]
-        copies += ["interact/in/binary", "direct/escape"]
+        copies += ["programs/in/binary", "direct/escape"]
         self._in_volume(
             "cd /v/unicon-steps"
             + "".join(f" && cp compile/{binary} {copy}" for copy in copies)
@@ -717,20 +712,20 @@ class Fixtures:
         )
         return found, texts
 
-    def through_interact(self) -> tuple[dict[str, Any], dict[str, Any]]:
-        """interact's outputs for its one item, run in the shape its step
-        runs in, as exec's is, and the facts of each program."""
+    def through_programs(self) -> tuple[dict[str, Any], dict[str, Any]]:
+        """The programs form's outputs for its one item, run in the shape
+        its step runs in, and the facts of each program."""
         code, printed, outputs = self._speaking(
-            INTERACT_IMAGE,
-            "interact",
+            os.environ["EXEC_IMAGE"],
+            "programs",
             lambda body: as_exec_runs(
-                body, INTERACT_MEMORY_MB, "/usr/local/bin/interact"
+                body, PROGRAMS_MEMORY_MB, "/usr/local/bin/exec"
             ),
             versions=(6,),
         )
         assert code == 0 and "batch" in outputs, (printed, outputs)
         found: dict[str, Any] = outputs["batch"][0]["outputs"]
-        return found, self.read_json(f"interact/{found['facts']['file']}")
+        return found, self.read_json(f"programs/{found['facts']['file']}")
 
     def without(self, removed: str) -> str:
         """exec's image with the protection `removed` left out, built once."""
@@ -1009,17 +1004,17 @@ def test_taking_away_one_of_execs_protections_lets_an_attack_through(
 
 @pytest.mark.docker
 @pytest.mark.skipif(not docker_ready(), reason="needs a Docker daemon")
-def test_through_interact_the_entrant_reaches_none_of_its_partner(
+def test_through_the_programs_form_the_entrant_reaches_none_of_its_partner(
     fixtures: Fixtures,
 ) -> None:
     """The partner holds a hidden file open in its own directory, leaves a
     file in its `/tmp` and tells the entrant where it is; the entrant
     reaches none of it and sees no process of the partner's, and the
     partner reports what it tried as its message."""
-    if not INTERACT_IMAGE:
-        pytest.skip("no interact image; set INTERACT_IMAGE")
-    _have(INTERACT_IMAGE)
-    outputs, facts = fixtures.through_interact()
+    if not os.environ.get("EXEC_IMAGE"):
+        pytest.skip("no exec image; set EXEC_IMAGE")
+    _have(os.environ["EXEC_IMAGE"])
+    outputs, facts = fixtures.through_programs()
     assert outputs["outcome"] == "accepted", outputs
     assert facts["entrant"]["ended"] == "finished", facts
     assert facts["partner"]["verdict"] == "0", facts
@@ -1056,7 +1051,7 @@ def test_a_step_has_a_cgroup_namespace_of_its_own_whatever_the_daemon_default() 
 def test_the_version_6_documents_keep_the_primitive_contract() -> None:
     assert violation(compile_inputs(6), "primitive", "inputs_file") is None
     assert violation(batch_inputs(6), "primitive", "inputs_file") is None
-    assert violation(interact_inputs(), "primitive", "inputs_file") is None
+    assert violation(programs_inputs(), "primitive", "inputs_file") is None
     items = batch_inputs(6)["batch"]
     assert [item["run"] for item in items] == list(ATTACKS | EXEC_ATTACKS)
     assert set(items[0]["inputs"]) == {"program", "stdin", "time_limit", "memory_limit"}
@@ -1066,30 +1061,30 @@ def test_the_version_6_documents_keep_the_primitive_contract() -> None:
         )
 
 
-def test_interact_reads_the_interact_document(tmp_path: Path) -> None:
-    """The document is one interact itself takes, read by its own
-    `read_inputs` from a primitive-interact checkout, which checks more than
+def test_exec_reads_the_programs_document(tmp_path: Path) -> None:
+    """The document is one exec's programs form takes, read by its own
+    `read_inputs` from a primitive-exec checkout, which checks more than
     the schema: the programs' inputs and the links between them."""
-    source = INTERACT_SOURCE / "src" / "interact.py"
+    source = EXEC_SOURCE / "src" / "exec.py"
     if not source.is_file():
-        pytest.skip(f"no primitive-interact checkout at {INTERACT_SOURCE}")
-    spec = importlib.util.spec_from_file_location("interact", source)
+        pytest.skip(f"no primitive-exec checkout at {EXEC_SOURCE}")
+    spec = importlib.util.spec_from_file_location("exec", source)
     assert spec is not None and spec.loader is not None
-    interact = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(interact)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
     (tmp_path / "in").mkdir()
     (tmp_path / "in" / "binary").write_bytes(b"")
     (tmp_path / "in" / "secret").write_text("the hidden input\n")
     (tmp_path / "in" / "manifest.json").write_text(json.dumps({"reports": {}}))
-    (tmp_path / "inputs.json").write_text(json.dumps(interact_inputs()))
-    [item] = interact.read_inputs(tmp_path)
+    (tmp_path / "inputs.json").write_text(json.dumps(programs_inputs()))
+    [item] = module.read_inputs(tmp_path)
     entrant, partner = item.programs
     assert (entrant.name, partner.name) == ("entrant", "partner")
     assert partner.args == ("partner",)
     assert set(partner.files) == {"secret"}
     assert partner.manifest == {}
     assert partner.time_limit > entrant.time_limit
-    assert interact.pipe_names(item) == {"entrant": [], "partner": []}
+    assert module.pipe_names(item) == {"entrant": [], "partner": []}
 
 
 def test_exec_s_attacks_leave_before_the_next_item_finds() -> None:

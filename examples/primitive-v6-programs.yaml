@@ -1,4 +1,4 @@
-image: ghcr.io/uniconhq/primitive-interact@sha256:4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c
+image: ghcr.io/uniconhq/primitive-exec@sha256:4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c
 title: Run programs together
 description: Runs programs side by side, linked by pipes, and records how each one ended.
 schema_version: 6

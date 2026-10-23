@@ -4,7 +4,7 @@
 // "<check> REFUSED|ESCAPED|INFO <detail>". harness/tests/test_escape.py runs
 // it through sandbox-run or exec, as the container's own process under the
 // harness's flags, and with each of those flags taken away in turn. As
-// `partner` it is interact's partner, and its entrant's attack is on it.
+// `partner` it is the programs form's partner, and its entrant's attack is on it.
 // The task beside it (task/, on workflow.yaml) runs it as an entrant's
 // program through a pipeline the forge builds, one attack a run; `container`
 // is the attack on the step container an exec box runs in.
@@ -111,8 +111,8 @@ static void try_list(const char *check, const char *path) {
 
 static void *spin(void *a) { pause(); return a; }
 
-/* The process of interact's partner: the one whose first argument is
-   `partner`, or 0. Under interact each program has a box and a PID
+/* The process of the programs form's partner: the one whose first argument is
+   `partner`, or 0. Under that form each program has a box and a PID
    namespace of its own, so the entrant should find none. */
 static pid_t find_partner(void) {
     DIR *d = opendir("/proc"); struct dirent *e; pid_t found = 0;
@@ -432,7 +432,7 @@ int main(int argc, char **argv) {
         return 0;
     }
 
-    // -- interact: the partner holds the hidden input; the entrant reaches for it
+    // -- programs: the partner holds the hidden input; the entrant reaches for it
     if (!strcmp(mode, "partner")) {
         int held = open("secret", O_RDONLY); if (held < 0) return 3;
         int left = open("/tmp/partner-left", O_WRONLY | O_CREAT, 0644); if (left < 0) return 3;

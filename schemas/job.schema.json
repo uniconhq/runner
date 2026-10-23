@@ -56,7 +56,7 @@
       "exclusiveMinimum": 0
     },
     "box_users": {
-      "description": "For an exec or interact step: the step's box users, both included, which the wrapper hands the primitive as UNICON_BOX_USERS=<first>-<last>. No other step that can run at the same time holds any of them, nor is any a container's user. Left out for a step whose primitive runs no boxes.",
+      "description": "For an exec step: the step's box users, both included, which the wrapper hands the primitive as UNICON_BOX_USERS=<first>-<last>. No other step that can run at the same time holds any of them, nor is any a container's user. Left out for a step whose primitive runs no boxes.",
       "type": "object",
       "required": ["first", "last"],
       "additionalProperties": false,
@@ -66,7 +66,7 @@
       }
     },
     "step_memory_mb": {
-      "description": "For an exec or interact step, given with box_users: the memory the forge's planner gave the step, its largest item's boxes' memory limits, the files it copies in beside them and the room its declaration adds, which the wrapper hands the primitive as UNICON_STEP_MEMORY_MB. The primitive caps its own processes and its boxes together at it, so steps side by side in one slot of a machine stay within what each was planned, and refuses an item that does not fit it. The container's own limit is the slot's, never less.",
+      "description": "For an exec step, given with box_users: the memory the forge's planner gave the step, its largest item's boxes' memory limits, the files it copies in beside them and the room its declaration adds, which the wrapper hands the primitive as UNICON_STEP_MEMORY_MB. The primitive caps its own processes and its boxes together at it, so steps side by side in one slot of a machine stay within what each was planned, and refuses an item that does not fit it. The container's own limit is the slot's, never less.",
       "type": "integer",
       "minimum": 1
     },
@@ -102,7 +102,7 @@
         "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
         "size": { "type": "integer", "minimum": 0 },
         "cached": {
-          "description": "True for a task file of a step whose primitive declares cache: true and is given the org's cache volume at /cache. The file is fetched once per machine into /cache/objects/<sha256> and hard-linked as <name> into this running step's item folder <item>, which the wrapper makes under /cache/items/ and reaches as /work/cache; its path is cache/<item>/<name>. An item holds the cached files of one box and nothing else: for exec, every cached file of one run; for interact, every cached file of one program of a run, so a file two programs of a run read is placed in each one's item. The primitive binds that folder whole into the box read-only, so the file is never copied, and refuses an item folder holding any file the run or program is not given. <item> is random and <name> is the run's name for the file, or random where it has none.",
+          "description": "True for a task file of a step whose primitive declares cache: true and is given the org's cache volume at /cache. The file is fetched once per machine into /cache/objects/<sha256> and hard-linked as <name> into this running step's item folder <item>, which the wrapper makes under /cache/items/ and reaches as /work/cache; its path is cache/<item>/<name>. An item holds the cached files of one box and nothing else: for exec's one form, every cached file of one run; for its programs form, every cached file of one program of a run, so a file two programs of a run read is placed in each one's item. The primitive binds that folder whole into the box read-only, so the file is never copied, and refuses an item folder holding any file the run or program is not given. <item> is random and <name> is the run's name for the file, or random where it has none.",
           "type": "boolean"
         }
       }

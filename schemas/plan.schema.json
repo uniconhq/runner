@@ -571,7 +571,7 @@
           "type": "boolean"
         },
         "boxes": {
-          "description": "The isolate boxes one item uses at once, for a primitive that runs its programs in boxes: one for exec, one per program for interact.",
+          "description": "The isolate boxes one item uses at once, for a primitive that runs its programs in boxes: one for exec's one form, one per program for its programs form.",
           "type": "integer",
           "minimum": 1
         },

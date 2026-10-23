@@ -312,7 +312,7 @@
           "format": "uuid"
         },
         "name": {
-          "description": "The output's name in that row: an output of the step, or for interact one of a program's, <program>.<output>.",
+          "description": "The output's name in that row: an output of the step, or for exec's programs form one of a program's, <program>.<output>.",
           "type": "string",
           "pattern": "^[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)?$"
         }
