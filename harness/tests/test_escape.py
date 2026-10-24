@@ -718,9 +718,7 @@ class Fixtures:
         code, printed, outputs = self._speaking(
             os.environ["EXEC_IMAGE"],
             "programs",
-            lambda body: as_exec_runs(
-                body, PROGRAMS_MEMORY_MB, "/usr/local/bin/exec"
-            ),
+            lambda body: as_exec_runs(body, PROGRAMS_MEMORY_MB, "/usr/local/bin/exec"),
             versions=(6,),
         )
         assert code == 0 and "batch" in outputs, (printed, outputs)
