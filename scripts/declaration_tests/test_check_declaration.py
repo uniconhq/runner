@@ -15,6 +15,7 @@ import check_declaration
 REPO_ROOT = Path(__file__).parents[2]
 
 DECLARATION = """\
+schema_version: 6
 batch: false
 limits:
   {time_ms: 60000, cpu_ms: 60000, memory_mb: 1024, pids: 128, output_mb: 64, gpus: 0}
@@ -220,6 +221,7 @@ def test_a_version_6_declaration_with_each_new_key_conforms(
         ("at_least: 0, at_most: 1", "at_least: 2, at_most: 1"),
         ("names: [output, answer]", "names: [../x]"),
         ("schema_version: 6", "schema_version: 5"),
+        ("schema_version: 6\n", ""),
         ("cache: true", "cache: sometimes"),
     ],
 )

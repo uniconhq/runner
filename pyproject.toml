@@ -1,18 +1,14 @@
 [project]
-name = "unicon-harness"
+name = "unicon-runner"
 version = "0.9.0"
-description = "The program inside the Unicon harness image, and the plan, envelope, result, primitive and submission contracts it speaks."
+description = "The step wrapper of Unicon's primitive images, and the plan, result, primitive, submission and job contracts."
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
 requires-python = ">=3.14"
 dependencies = [
-    "httpx==0.28.1",
     "jsonschema[format-nongpl]==4.26.0",
 ]
-
-[project.scripts]
-unicon-harness = "unicon_harness.main:run"
 
 [project.urls]
 Source = "https://github.com/uniconhq/runner"
@@ -26,45 +22,26 @@ dev = [
     "types-jsonschema==4.26.0.20260518",
 ]
 
-[build-system]
-requires = ["hatchling==1.28.0"]
-build-backend = "hatchling.build"
-
-[tool.hatch.build.targets.wheel]
-packages = ["harness/unicon_harness"]
-
-# The contract files are published as release assets from the repo root, so that
-# is where they are edited. The wheel carries a copy so an installed harness can
-# find them without knowing about a checkout.
-[tool.hatch.build.targets.wheel.force-include]
-"schemas" = "unicon_harness/schemas"
-
 [tool.ruff]
 line-length = 88
-src = ["harness", "socket_filter", "scripts", "images", "wrapper", "escape"]
+src = ["scripts", "images", "wrapper", "escape"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "UP", "B", "A", "C4", "PTH", "RUF"]
 
-[tool.ruff.lint.per-file-ignores]
-"*/tests/*.py" = ["A002"]
-
 [tool.mypy]
 python_version = "3.14"
 strict = true
-files = ["harness", "socket_filter", "scripts", "images", "wrapper", "escape"]
-mypy_path = ["harness", "socket_filter", "scripts", "wrapper"]
+files = ["scripts", "images", "wrapper", "escape"]
+mypy_path = ["scripts", "wrapper"]
 platform = "linux"
 
 [tool.pytest.ini_options]
 testpaths = [
-    "harness/tests",
-    "socket_filter/filter_tests",
-    "images/clone_tests",
     "scripts/declaration_tests",
     "wrapper/step_tests",
     "escape/escape_tests",
 ]
-pythonpath = ["harness", "socket_filter", "images", "scripts", "wrapper"]
+pythonpath = ["scripts", "wrapper"]
 addopts = "-q -m 'not docker'"
 markers = ["docker: runs against a real Docker daemon; `pytest -m docker`"]

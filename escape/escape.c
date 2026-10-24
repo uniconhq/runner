@@ -1,19 +1,17 @@
 // The escape fixtures: one C program, built by the compile primitive as a
 // contestant's program would be, that tries the attack named on its standard
 // input, or as its first argument, and prints one line per thing it tried,
-// "<check> REFUSED|ESCAPED|INFO <detail>". harness/tests/test_escape.py runs
-// it through sandbox-run or exec, as the container's own process under the
-// harness's flags, and with each of those flags taken away in turn. As
-// `partner` it is the programs form's partner, and its entrant's attack is on it.
-// The task beside it (task/, on workflow.yaml) runs it as an entrant's
-// program through a pipeline the forge builds, one attack a run; `container`
-// is the attack on the step container an exec box runs in.
+// "<check> REFUSED|ESCAPED|INFO <detail>". The task beside it (task/, on
+// workflow.yaml) runs it as an entrant's program through a pipeline the
+// forge builds, one attack a run; `container` is the attack on the step
+// container an exec box runs in. As `partner` it is the programs form's
+// partner, and its entrant's attack is on it.
 //
 // The resource attacks are capped (512 MB of memory, 3,000 processes or
-// threads, 1 GB of disk per directory), so a run with a limit taken away
-// still ends; for them the verdict is mostly the outcome sandbox-run or the
-// container reports. Brought over from the experiments of 2026-10-04 (A5),
-// where every attack was refused and every flag was shown to matter.
+// threads, 1 GB of disk per directory), so a run still ends where a limit
+// does not hold; for them the verdict is mostly the outcome exec reports.
+// Brought over from the experiments of 2026-10-04 (A5), where every attack
+// was refused and every flag was shown to matter.
 #define _GNU_SOURCE
 #include <arpa/inet.h>
 #include <dirent.h>
@@ -309,7 +307,7 @@ int main(int argc, char **argv) {
         return 0;
     }
 
-    // -- secrets: anything of the envelope in reach
+    // -- secrets: any token, password or signed URL in reach
     if (!strcmp(mode, "secrets")) {
         extern char **environ;
         char keys[512] = "";

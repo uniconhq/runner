@@ -25,7 +25,7 @@
       "const": 1
     },
     "inputs": {
-      "description": "The inputs.json the primitive reads, an inputs_file of primitive.schema.json in the version the primitive speaks, filled as the harness fills one: for a batch, only the runs still to be done, so a run an earlier step did not accept, or one the store holds, is left out. Every file it names is a path relative to /work that one entry of files places. The one thing the forge cannot fill is a secret's value, which Woodpecker holds: each is written {\"secret\": <setting>}, and the wrapper puts the setting's value in its place.",
+      "description": "The inputs.json the primitive reads, an inputs_file of primitive.schema.json: for a batch, only the runs still to be done, so a run an earlier step did not accept, or one the store holds, is left out. Every file it names is a path relative to /work that one entry of files places. The one thing the forge cannot fill is a secret's value, which Woodpecker holds: each is written {\"secret\": <setting>}, and the wrapper puts the setting's value in its place.",
       "type": "object",
       "required": ["schema_version"]
     },

@@ -1,5 +1,5 @@
-# What a program in an exec box may do, as harness/tests/test_escape.py's
-# BOXES_OWN says. Each name is a check escape.c prints.
+# What a program in an exec box may do. Each name is a check escape.c
+# prints.
 #
 # The box's own /dev/shm, a tmpfs isolate makes for each run.
 write-dev-shm

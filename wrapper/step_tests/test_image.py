@@ -24,7 +24,7 @@ from typing import Any
 
 import pytest
 
-from filter_tests.lab import docker, docker_ready, image
+from step_tests.lab import docker, docker_ready, image
 from step_tests.stand_in import TOKEN, StandIn, stand_in
 
 pytestmark = [

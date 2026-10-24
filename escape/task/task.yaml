@@ -1,8 +1,7 @@
 # The escape fixtures' task: one run an attack, each shown at once with
 # its attack's name (so `attacks/` is shown too), with 64 MB of memory
-# but where an attack must hold more to show its bound, as
-# harness/tests/test_escape.py gives them. The driver saves it on the
-# org's own copy of ../workflow.yaml, writing the org's name over
+# but where an attack must hold more to show its bound. The driver saves
+# it on the org's own copy of ../workflow.yaml, writing the org's name over
 # `escape-org`.
 name: Escape
 workflow: escape-org/escape@v1
