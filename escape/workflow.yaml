@@ -43,7 +43,7 @@ steps:
         output: ${{ steps.attack.output }}
         allowed: ${{ inputs.allowed }}
 
-reports:
+outputs:
   score: ${{ steps.check.score }}
   escaped: {from: "${{ steps.check.escaped }}", title: Escaped}
   time_ms: {from: "${{ steps.attack.time_ms }}", title: Run time, unit: ms}
