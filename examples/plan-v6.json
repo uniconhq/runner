@@ -240,7 +240,8 @@
       "key": {
         "env": "cartpole",
         "seed": 1
-      }
+      },
+      "titles": ["Cartpole", null]
     },
     {
       "early": false,

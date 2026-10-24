@@ -444,7 +444,12 @@
                 "propertyNames": { "$ref": "#/$defs/name" },
                 "additionalProperties": { "$ref": "#/$defs/key_value" }
               },
-              "early": { "type": "boolean" }
+              "early": { "type": "boolean" },
+              "titles": {
+                "description": "The run's tuples' titles, one per axis, none where that tuple has none. A title is not part of the key.",
+                "type": "array",
+                "items": { "type": ["string", "null"] }
+              }
             }
           }
         },
@@ -568,7 +573,21 @@
           "items": { "type": "string", "minLength": 1 }
         },
         "parts": { "type": "integer", "minimum": 1 },
-        "max_size": { "type": "integer", "minimum": 1 }
+        "max_size": { "type": "integer", "minimum": 1 },
+        "part_details": {
+          "description": "One entry per part, in order, when a part has a title or its own largest size. max_size on the input is the largest of these.",
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": ["max_size"],
+            "additionalProperties": false,
+            "properties": {
+              "title": { "type": ["string", "null"] },
+              "max_size": { "type": "integer", "minimum": 1 }
+            }
+          }
+        }
       }
     },
     "run_step": {
