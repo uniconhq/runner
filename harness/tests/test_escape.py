@@ -456,8 +456,8 @@ KEPT_BOX = (
     ),
     ("    cwd.mkdir(mode=0o755)\n", "    cwd.mkdir(mode=0o755, exist_ok=True)\n"),
     (
-        "            (box / name).mkdir()\n",
-        "            (box / name).mkdir(exist_ok=True)\n",
+        "\n            (box / name).mkdir()\n",
+        "\n            (box / name).mkdir(exist_ok=True)\n",
     ),
 )
 """One box for the whole batch: made for the first item, then neither
