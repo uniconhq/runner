@@ -67,8 +67,9 @@
       "pattern": "^[a-z0-9][a-z0-9._-]*(:[0-9]{1,5})?(/[a-z0-9][a-z0-9._-]*)+@sha256:[0-9a-f]{64}$"
     },
     "step_id": {
+      "description": "A step's name inside the plan: a written id, or a path of them joined by /.",
       "type": "string",
-      "pattern": "^[a-z0-9][a-z0-9_-]*$"
+      "pattern": "^[a-z0-9][a-z0-9_-]*(/[a-z0-9][a-z0-9_-]*)*$"
     },
     "test_id": {
       "description": "A test's id, <group>/<test>, its folder under tests/ in the task repo.",
@@ -560,6 +561,11 @@
           "type": "string",
           "enum": ["save_once", "save_per_run", "grading_once", "grading_per_run"]
         },
+        "woodpecker": {
+          "description": "The step's name in the Woodpecker file, s<n> by its place in steps from 1. One run of it is named <woodpecker>.<run>. Absent on a plan written before steps carried one, which keeps its own name.",
+          "type": "string",
+          "pattern": "^s[0-9]+$"
+        },
         "primitive": {
           "type": "string",
           "pattern": "^[a-z0-9][a-z0-9_-]*/[a-z0-9][a-z0-9_-]*@[A-Za-z0-9][A-Za-z0-9._-]*$"
@@ -815,9 +821,9 @@
         "additionalProperties": false,
         "properties": {
           "name": {
-            "description": "The Woodpecker step's name: the workflow step's id, or <step>.<run> for one run of a step that takes no batch.",
+            "description": "The step's name inside the plan: its path, or <path>.<run> for one run of a step that takes no batch. The Woodpecker file names it by the step's woodpecker.",
             "type": "string",
-            "pattern": "^[a-z0-9][a-z0-9_-]*(\\.[A-Za-z0-9_-]+)?$"
+            "pattern": "^[a-z0-9][a-z0-9_-]*(/[a-z0-9][a-z0-9_-]*)*(\\.[A-Za-z0-9_-]+)?$"
           },
           "step": { "$ref": "#/$defs/step_id" },
           "runs": {

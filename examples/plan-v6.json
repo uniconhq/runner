@@ -309,7 +309,8 @@
       "primitive": "unicon/compile@v3",
       "value": {
         "name": "mean"
-      }
+      },
+      "woodpecker": "s4"
     },
     "c1-episode": {
       "boxes": 1,
@@ -569,7 +570,8 @@
         "time_ms": "number"
       },
       "primitive": "unicon/exec@v1",
-      "self_reported": true
+      "self_reported": true,
+      "woodpecker": "s6"
     },
     "episode": {
       "boxes": 1,
@@ -825,7 +827,8 @@
         "time_ms": "number"
       },
       "primitive": "unicon/exec@v1",
-      "self_reported": true
+      "self_reported": true,
+      "woodpecker": "s3"
     },
     "exec-mean": {
       "boxes": 1,
@@ -876,7 +879,8 @@
       "value": {
         "name": "mean",
         "report": "mean"
-      }
+      },
+      "woodpecker": "s5"
     },
     "runner": {
       "cache": false,
@@ -899,7 +903,8 @@
         "outcome": "outcome",
         "program": "file"
       },
-      "primitive": "unicon/compile@v3"
+      "primitive": "unicon/compile@v3",
+      "woodpecker": "s1"
     },
     "scene": {
       "boxes": 1,
@@ -1021,7 +1026,8 @@
         "staff_message?": "text",
         "time_ms": "number"
       },
-      "primitive": "unicon/exec@v1"
+      "primitive": "unicon/exec@v1",
+      "woodpecker": "s2"
     }
   },
   "task_files": {
