@@ -339,7 +339,8 @@
               }
             },
             "manifest": {
-              "workflow": "runner/program.yaml"
+              "workflow": "runner/program.yaml",
+              "pin": 1
             },
             "memory_limit": {
               "value": 1024
@@ -357,7 +358,8 @@
           },
           "tainted": {
             "beside": {
-              "workflow": "runner/"
+              "workflow": "runner/",
+              "pin": 1
             }
           }
         },
@@ -378,7 +380,8 @@
               }
             },
             "manifest": {
-              "workflow": "runner/program.yaml"
+              "workflow": "runner/program.yaml",
+              "pin": 1
             },
             "memory_limit": {
               "value": 1024
@@ -396,7 +399,8 @@
           },
           "tainted": {
             "beside": {
-              "workflow": "runner/"
+              "workflow": "runner/",
+              "pin": 1
             }
           }
         },
@@ -417,7 +421,8 @@
               }
             },
             "manifest": {
-              "workflow": "runner/program.yaml"
+              "workflow": "runner/program.yaml",
+              "pin": 1
             },
             "memory_limit": {
               "value": 1024
@@ -435,7 +440,8 @@
           },
           "tainted": {
             "beside": {
-              "workflow": "runner/"
+              "workflow": "runner/",
+              "pin": 1
             }
           }
         },
@@ -456,7 +462,8 @@
               }
             },
             "manifest": {
-              "workflow": "runner/program.yaml"
+              "workflow": "runner/program.yaml",
+              "pin": 1
             },
             "memory_limit": {
               "value": 1024
@@ -474,7 +481,8 @@
           },
           "tainted": {
             "beside": {
-              "workflow": "runner/"
+              "workflow": "runner/",
+              "pin": 1
             }
           }
         },
@@ -495,7 +503,8 @@
               }
             },
             "manifest": {
-              "workflow": "runner/program.yaml"
+              "workflow": "runner/program.yaml",
+              "pin": 1
             },
             "memory_limit": {
               "value": 1024
@@ -513,7 +522,8 @@
           },
           "tainted": {
             "beside": {
-              "workflow": "runner/"
+              "workflow": "runner/",
+              "pin": 1
             }
           }
         },
@@ -534,7 +544,8 @@
               }
             },
             "manifest": {
-              "workflow": "runner/program.yaml"
+              "workflow": "runner/program.yaml",
+              "pin": 1
             },
             "memory_limit": {
               "value": 1024
@@ -552,7 +563,8 @@
           },
           "tainted": {
             "beside": {
-              "workflow": "runner/"
+              "workflow": "runner/",
+              "pin": 1
             }
           }
         }
@@ -596,7 +608,8 @@
               }
             },
             "manifest": {
-              "workflow": "runner/program.yaml"
+              "workflow": "runner/program.yaml",
+              "pin": 1
             },
             "memory_limit": {
               "value": 1024
@@ -614,7 +627,8 @@
           },
           "tainted": {
             "beside": {
-              "workflow": "runner/"
+              "workflow": "runner/",
+              "pin": 1
             }
           }
         },
@@ -635,7 +649,8 @@
               }
             },
             "manifest": {
-              "workflow": "runner/program.yaml"
+              "workflow": "runner/program.yaml",
+              "pin": 1
             },
             "memory_limit": {
               "value": 1024
@@ -653,7 +668,8 @@
           },
           "tainted": {
             "beside": {
-              "workflow": "runner/"
+              "workflow": "runner/",
+              "pin": 1
             }
           }
         },
@@ -674,7 +690,8 @@
               }
             },
             "manifest": {
-              "workflow": "runner/program.yaml"
+              "workflow": "runner/program.yaml",
+              "pin": 1
             },
             "memory_limit": {
               "value": 1024
@@ -692,7 +709,8 @@
           },
           "tainted": {
             "beside": {
-              "workflow": "runner/"
+              "workflow": "runner/",
+              "pin": 1
             }
           }
         },
@@ -713,7 +731,8 @@
               }
             },
             "manifest": {
-              "workflow": "runner/program.yaml"
+              "workflow": "runner/program.yaml",
+              "pin": 1
             },
             "memory_limit": {
               "value": 1024
@@ -731,7 +750,8 @@
           },
           "tainted": {
             "beside": {
-              "workflow": "runner/"
+              "workflow": "runner/",
+              "pin": 1
             }
           }
         },
@@ -752,7 +772,8 @@
               }
             },
             "manifest": {
-              "workflow": "runner/program.yaml"
+              "workflow": "runner/program.yaml",
+              "pin": 1
             },
             "memory_limit": {
               "value": 1024
@@ -770,7 +791,8 @@
           },
           "tainted": {
             "beside": {
-              "workflow": "runner/"
+              "workflow": "runner/",
+              "pin": 1
             }
           }
         },
@@ -791,7 +813,8 @@
               }
             },
             "manifest": {
-              "workflow": "runner/program.yaml"
+              "workflow": "runner/program.yaml",
+              "pin": 1
             },
             "memory_limit": {
               "value": 1024
@@ -809,7 +832,8 @@
           },
           "tainted": {
             "beside": {
-              "workflow": "runner/"
+              "workflow": "runner/",
+              "pin": 1
             }
           }
         }
@@ -894,7 +918,8 @@
           "value": "python"
         },
         "source": {
-          "workflow": "runner/"
+          "workflow": "runner/",
+          "pin": 1
         }
       },
       "network": false,
@@ -1044,18 +1069,26 @@
       "size": 64
     }
   },
+  "inner_workflows": [
+    {
+      "commit": "dddddddddddddddddddddddddddddddddddddddd",
+      "files": {
+        "runner/program.yaml": {
+          "sha256": "59b6b5fcdbe6a906f2ec90464e2be39869e6f1a3a94be43245f3af88e2aa73b6",
+          "size": 49
+        },
+        "runner/run.py": {
+          "sha256": "26225035fb279c547c6cf50ae5be8d569ff9328f61c40c7579b165ffaa702c28",
+          "size": 16
+        }
+      },
+      "id": "w2",
+      "ref": "cs2109s/runner@v1"
+    }
+  ],
   "workflow": {
     "commit": "cccccccccccccccccccccccccccccccccccccccc",
-    "files": {
-      "runner/program.yaml": {
-        "sha256": "59b6b5fcdbe6a906f2ec90464e2be39869e6f1a3a94be43245f3af88e2aa73b6",
-        "size": 49
-      },
-      "runner/run.py": {
-        "sha256": "26225035fb279c547c6cf50ae5be8d569ff9328f61c40c7579b165ffaa702c28",
-        "size": 16
-      }
-    },
+    "files": {},
     "id": "w1",
     "ref": "cs2109s/cartpole@v1"
   }

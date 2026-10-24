@@ -99,7 +99,11 @@
         "system_error"
       ]
     },
-    "step_id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9_-]*$" },
+    "step_id": {
+      "description": "A step's name: a written id, or a path of them joined by /.",
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9_-]*(/[a-z0-9][a-z0-9_-]*)*$"
+    },
     "step_stop": {
       "description": "An outcome a step that runs once stops the run with.",
       "type": "string",
