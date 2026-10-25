@@ -97,29 +97,22 @@ static void list_dir(const char *check, const char *path) {
 
 static void *spin(void *a) { pause(); return a; }
 
-/* The process of interact's partner: the one whose command line runs a file
-   named partner and is not its sandbox-exec, or 0. */
+/* The process of interact's partner: the one whose first argument is
+   `partner`, or 0. Under interact each program has a box and a PID
+   namespace of its own, so the entrant should find none. */
 static pid_t find_partner(void) {
     DIR *d = opendir("/proc"); struct dirent *e; pid_t found = 0;
     while (d && (e = readdir(d)) && !found) {
         if (e->d_name[0] < '0' || e->d_name[0] > '9' || atoi(e->d_name) == getpid()) continue;
-        char p[300], b[4096] = ""; snprintf(p, sizeof p, "/proc/%s/comm", e->d_name);
-        FILE *f = fopen(p, "r"); if (!f) continue;
-        int helper = fgets(b, sizeof b, f) && !strncmp(b, "sandbox-exec", 12); fclose(f);
+        char p[300], b[4096] = "";
         snprintf(p, sizeof p, "/proc/%s/cmdline", e->d_name);
         int fd = open(p, O_RDONLY); if (fd < 0) continue;
         ssize_t n = read(fd, b, sizeof b - 1); close(fd);
-        for (ssize_t i = 0, start = 0; i < n; i++)
-            if (!b[i]) { size_t len = i - start; if (len >= 8 && !strcmp(b + i - 8, "/partner") && !helper) found = atoi(e->d_name); start = i + 1; }
+        size_t first = strnlen(b, n);
+        if ((ssize_t)first + 1 < n && !strcmp(b + first + 1, "partner")) found = atoi(e->d_name);
     }
     if (d) closedir(d);
     return found;
-}
-
-/* The Landlock ABI the kernel offers, or 0. */
-static long landlock_abi(void) {
-    long r = syscall(444, 0, 0, 1);
-    return r < 0 ? 0 : r;
 }
 
 static int scan_for_secrets(const char *path, char *found, size_t n) {
@@ -396,6 +389,8 @@ int main(int argc, char **argv) {
     // -- interact: the partner holds the hidden input; the entrant reaches for it
     if (!strcmp(mode, "partner")) {
         int held = open("secret", O_RDONLY); if (held < 0) return 3;
+        int left = open("/tmp/partner-left", O_WRONLY | O_CREAT, 0644); if (left < 0) return 3;
+        close(left);
         char cwd[256] = ""; if (!getcwd(cwd, sizeof cwd)) return 3;
         printf("partner-files %s\n", cwd); fflush(stdout);
         const char *report = getenv("UNICON_REPORT"); if (!report) return 3;
@@ -413,18 +408,23 @@ int main(int argc, char **argv) {
     if (!strcmp(mode, "partner-files")) {
         char cwd[256] = "", p[600];
         if (scanf("%255s", cwd) != 1) return 2;
+        // Every attack through /proc, tracing and signalling needs the
+        // partner's process, so seeing it at all is the first escape.
         pid_t partner = find_partner();
-        info("partner", "%d", partner);
-        if (partner <= 0) return 2;
+        if (partner > 0) say("partner-process", 1, "found it, process %d", partner);
+        else say("partner-process", 0, "no process of its in sight");
         snprintf(p, sizeof p, "%s/secret", cwd); try_read("partner-secret", p);
-        // Landlock does not cover stat, so a path the entrant can name
-        // tells it the file's size: known, written down, and only a
-        // guessed or told path reaches it.
         struct stat st;
         if (stat(p, &st) == 0) info("partner-size", "%s: %lld bytes", p, (long long)st.st_size);
         else info("partner-size", "%s: %s", p, strerror(errno));
-        DIR *d = opendir(cwd); say("partner-folder", d != 0, "%s: %s", cwd, d ? "listed" : strerror(errno)); if (d) closedir(d);
-        d = opendir("/tmp"); say("partner-tmp", d != 0, "/tmp: %s", d ? "listed" : strerror(errno)); if (d) closedir(d);
+        // The partner's folder is at the path it told, which may be the
+        // entrant's own: listing it escapes only if the secret is there.
+        DIR *d = opendir(cwd); int listed = 0;
+        if (d) { struct dirent *e; while ((e = readdir(d))) if (!strcmp(e->d_name, "secret")) listed = 1; closedir(d); }
+        say("partner-folder", listed, "%s: %s", cwd, d ? (listed ? "lists the secret" : "listed, no secret in it") : strerror(errno));
+        int seen = access("/tmp/partner-left", F_OK) == 0;
+        say("partner-tmp", seen, "/tmp/partner-left: %s", seen ? "seen" : strerror(errno));
+        if (partner <= 0) return 0;
         snprintf(p, sizeof p, "/proc/%d/cwd/secret", partner); try_read("partner-cwd", p);
         snprintf(p, sizeof p, "/proc/%d/root%s/secret", partner, cwd); try_read("partner-root", p);
         snprintf(p, sizeof p, "/proc/%d/environ", partner); try_read("partner-environ", p);
@@ -438,8 +438,7 @@ int main(int argc, char **argv) {
         long r = ptrace(PTRACE_ATTACH, partner, 0, 0);
         say("partner-ptrace", r == 0, "%s", r == 0 ? "attached" : strerror(errno));
         r = kill(partner, 0);
-        if (landlock_abi() >= 6) say("partner-signal", r == 0, "%s", r == 0 ? "may signal it" : strerror(errno));
-        else info("partner-signal", "Landlock ABI %ld scopes no signals: %s", landlock_abi(), r == 0 ? "may signal it" : strerror(errno));
+        say("partner-signal", r == 0, "%s", r == 0 ? "may signal it" : strerror(errno));
         return 0;
     }
     printf("unknown mode %s\n", mode);
