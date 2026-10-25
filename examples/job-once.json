@@ -1,0 +1,37 @@
+{
+  "schema_version": 1,
+  "inputs": {
+    "schema_version": 6,
+    "inputs": {
+      "submission": {
+        "file": "in/Hs4t0aVc"
+      },
+      "rubric": {
+        "folder": "in/p9Xe2LmQ"
+      },
+      "api_key": {
+        "secret": "model_key"
+      },
+      "strict": true
+    }
+  },
+  "files": [
+    {
+      "path": "in/Hs4t0aVc",
+      "workspace": "files/answer/answer.txt"
+    },
+    {
+      "path": "in/p9Xe2LmQ/marks.txt",
+      "url": "http://proxy/forgejo-lfs/lfs/3d/6f/a9c2e5b8d1f4a7c0e3b6d9f2a5c8e1b4d7a0c3f6e9b1a7c3e9b5d2f8a1c4?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Expires=900&X-Amz-Signature=example",
+      "sha256": "3d6fa9c2e5b8d1f4a7c0e3b6d9f2a5c8e1b4d7a0c3f6e9b1a7c3e9b5d2f8a1c4",
+      "size": 4096
+    }
+  ],
+  "uploads": "http://proxy/api/v1/gradings/0199a2c1-6b7e-7c3a-9f10-5d2e4b8a6c31/steps/judge/uploads",
+  "done": "http://proxy/api/v1/gradings/0199a2c1-6b7e-7c3a-9f10-5d2e4b8a6c31/steps/judge/done",
+  "time_limit": 120,
+  "fail_on_non_accepted": true,
+  "secrets": [
+    "model_key"
+  ]
+}

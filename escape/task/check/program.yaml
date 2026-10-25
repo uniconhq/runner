@@ -1,0 +1,5 @@
+# What the check reports, read by exec as its manifest: 1 when nothing
+# escaped, and how many lines said something did.
+reports:
+  score: {better: higher, at_least: 0, at_most: 1}
+  escaped: {better: lower, at_least: 0}

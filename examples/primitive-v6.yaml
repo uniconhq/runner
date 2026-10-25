@@ -1,0 +1,36 @@
+image: ghcr.io/uniconhq/primitive-exec@sha256:3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2b
+title: Run program
+description: Runs a program under limits and records its output, time and memory.
+schema_version: 6
+batch: true
+network: false
+cache: true
+limits: {time_ms: 5000, cpu_ms: 5000, memory_mb: 256, pids: 128, output_mb: 64, gpus: 0}
+limits_from:
+  time_ms: {input: time_limit, scale: 2000, add: 3000}
+  memory_mb: {input: memory_limit, scale: 1, add: 256}
+outputs_from: manifest
+inputs:
+  program: {type: file, runs: true, description: The program to run.}
+  stdin: {type: file, runs: false, optional: true}
+  files: {type: named_files, runs: false, optional: true}
+  loads: {type: named_files, runs: true, optional: true}
+  pair: {type: named_files, runs: false, optional: true, names: [output, answer]}
+  manifest: {type: file, runs: false, optional: true}
+  time_limit: {type: number}
+  memory_limit: {type: number}
+outputs:
+  output: {type: file, optional: true}
+  time_ms: {type: number, better: lower, at_least: 0}
+  memory_kb: {type: number, better: lower, at_least: 0}
+  score: {type: number, optional: true, better: higher, at_least: 0, at_most: 1}
+  message: {type: text, optional: true}
+  outcome:
+    type: outcome
+    outcomes:
+      accepted: the program ran within its limits, and its report, if any, says judged
+      wrong_answer: its report says wrong
+      time_limit: it ran out of time
+      memory_limit: it used more memory than allowed
+      output_limit: it printed more than allowed
+      runtime_error: it crashed

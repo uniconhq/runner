@@ -1,0 +1,20 @@
+{
+  "network": ["accepted"],
+  "sockets": ["accepted"],
+  "files": ["accepted"],
+  "kernel": ["accepted"],
+  "container": ["accepted"],
+  "secrets": ["accepted"],
+  "stdin": ["accepted"],
+  "leave-sysv": ["accepted"],
+  "find-sysv": ["accepted"],
+  "mark": ["accepted"],
+  "read-mark": ["accepted"],
+  "threads": ["accepted"],
+  "fork": ["accepted", "runtime_error", "memory_limit"],
+  "memory": ["memory_limit"],
+  "disk": ["accepted", "memory_limit", "output_limit"],
+  "output": ["output_limit"],
+  "sleep": ["time_limit"],
+  "spin": ["time_limit"]
+}

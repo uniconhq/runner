@@ -15,6 +15,7 @@ import check_declaration
 REPO_ROOT = Path(__file__).parents[2]
 
 DECLARATION = """\
+schema_version: 6
 batch: false
 limits:
   {time_ms: 60000, cpu_ms: 60000, memory_mb: 1024, pids: 128, output_mb: 64, gpus: 0}
@@ -189,6 +190,215 @@ def test_a_field_the_contract_does_not_know_is_refused(
     assert "entrypoint" in found[0]
 
 
+DECLARATION_V6 = """\
+schema_version: 6
+batch: true
+cache: true
+limits:
+  {time_ms: 5000, cpu_ms: 5000, memory_mb: 256, pids: 128, output_mb: 64, gpus: 0}
+outputs_from: manifest
+inputs:
+  program: {type: file, runs: true}
+  files: {type: named_files, runs: false, optional: true, names: [output, answer]}
+  manifest: {type: file, runs: false}
+outputs:
+  time_ms: {type: number, better: lower, at_least: 0}
+  score: {type: number, better: higher, at_least: 0, at_most: 1}
+  outcome: {type: outcome}
+"""
+
+
+def test_a_version_6_declaration_with_each_new_key_conforms(
+    schema: dict[str, Any], tmp_path: Path
+) -> None:
+    assert check_declaration.problems(schema, _repo(tmp_path, DECLARATION_V6)) == []
+
+
+@pytest.mark.parametrize(
+    ("old", "new"),
+    [
+        ("better: lower", "better: faster"),
+        ("at_least: 0, at_most: 1", "at_least: 2, at_most: 1"),
+        ("names: [output, answer]", "names: [../x]"),
+        ("schema_version: 6", "schema_version: 5"),
+        ("schema_version: 6\n", ""),
+        ("cache: true", "cache: sometimes"),
+    ],
+)
+def test_a_version_6_declaration_that_breaks_a_rule_is_refused(
+    schema: dict[str, Any], tmp_path: Path, old: str, new: str
+) -> None:
+    text = DECLARATION_V6.replace(old, new)
+    assert text != DECLARATION_V6
+    assert check_declaration.problems(schema, _repo(tmp_path, text)) != []
+
+
+def test_bounds_that_cross_are_named(schema: dict[str, Any], tmp_path: Path) -> None:
+    text = DECLARATION_V6.replace(
+        "at_least: 0, at_most: 1", "at_least: 2.5, at_most: 1"
+    )
+    assert check_declaration.problems(schema, _repo(tmp_path, text)) == [
+        "outputs/score: at_least 2.5 is above at_most 1"
+    ]
+
+
+@pytest.mark.parametrize("bound", [".inf", "-.inf", ".nan"])
+def test_a_bound_that_is_not_finite_is_named(
+    schema: dict[str, Any], tmp_path: Path, bound: str
+) -> None:
+    text = DECLARATION_V6.replace("at_most: 1", f"at_most: {bound}")
+    [found] = check_declaration.problems(schema, _repo(tmp_path, text))
+    assert found.startswith("outputs/score/at_most: ")
+    assert found.endswith(" is not a finite number")
+
+
+def test_equal_bounds_conform(schema: dict[str, Any], tmp_path: Path) -> None:
+    text = DECLARATION_V6.replace("at_least: 0, at_most: 1", "at_least: 1, at_most: 1")
+    assert check_declaration.problems(schema, _repo(tmp_path, text)) == []
+
+
+DECLARATION_PROGRAMS = """\
+schema_version: 6
+batch: true
+limits:
+  {time_ms: 4000, cpu_ms: 4000, memory_mb: 512, pids: 1056, output_mb: 64, gpus: 0}
+limits_from:
+  time_ms: {max: programs.time_limit, scale: 4000, add: 6000}
+  memory_mb: {sum: programs.memory_limit, add: 512}
+outputs_from: programs
+inputs:
+  programs:
+    type: programs
+    inputs:
+      program: {type: file, runs: true}
+      files: {type: named_files, runs: false, optional: true}
+      time_limit: {type: number}
+      memory_limit: {type: number}
+      manifest: {type: file, runs: false, optional: true}
+      stops_others: {type: boolean, optional: true}
+    outputs:
+      time_ms: {type: number, better: lower, at_least: 0, at_most: 100}
+      ended: {type: enum, options: [finished, time_limit]}
+      stopped_by: {type: text, optional: true}
+  links: {type: links, optional: true}
+outputs:
+  facts: {type: file}
+  outcome: {type: outcome}
+"""
+
+
+def test_a_declaration_with_programs_conforms(
+    schema: dict[str, Any], tmp_path: Path
+) -> None:
+    found = check_declaration.problems(schema, _repo(tmp_path, DECLARATION_PROGRAMS))
+    assert found == []
+
+
+@pytest.mark.parametrize(
+    ("old", "new"),
+    [
+        ("schema_version: 6", "schema_version: 5"),
+        ("    type: programs\n", "    type: programs\n    runs: true\n"),
+        ("    outputs:\n      time_ms", "    output:\n      time_ms"),
+        ("max: programs.time_limit", "input: programs.time_limit"),
+        ("max: programs.time_limit,", "max: programs.time_limit, input: x,"),
+        ("max: programs.time_limit", "max: time_limit"),
+        ("      program: {type: file, runs: true}", "      inner: {type: links}"),
+        (
+            "  links: {type: links, optional: true}",
+            "  links: {type: links, runs: true}",
+        ),
+        ("  facts: {type: file}", "  facts: {type: file, inputs: {}}"),
+        ("      manifest: {type: file, runs: false, optional: true}\n", ""),
+        ("      program: {type: file, runs: true}\n", ""),
+        (
+            "      program: {type: file, runs: true}",
+            "      program: {type: file, runs: false}",
+        ),
+    ],
+)
+def test_a_declaration_with_programs_that_breaks_a_rule_is_refused(
+    schema: dict[str, Any], tmp_path: Path, old: str, new: str
+) -> None:
+    text = DECLARATION_PROGRAMS.replace(old, new)
+    assert text != DECLARATION_PROGRAMS
+    assert check_declaration.problems(schema, _repo(tmp_path, text)) != []
+
+
+@pytest.mark.parametrize(
+    ("old", "new", "problem"),
+    [
+        (
+            "sum: programs.memory_limit",
+            "sum: links.memory_limit",
+            "limits_from/memory_mb/sum: links is not a programs port",
+        ),
+        (
+            "max: programs.time_limit",
+            "max: programs.files",
+            "limits_from/time_ms/max: programs has no number input files",
+        ),
+        (
+            "max: programs.time_limit",
+            "max: programs.wall",
+            "limits_from/time_ms/max: programs has no number input wall",
+        ),
+        (
+            "at_least: 0, at_most: 100",
+            "at_least: 200, at_most: 100",
+            "inputs/programs/outputs/time_ms: at_least 200 is above at_most 100",
+        ),
+    ],
+)
+def test_what_a_programs_port_says_of_another_is_checked(
+    schema: dict[str, Any], tmp_path: Path, old: str, new: str, problem: str
+) -> None:
+    text = DECLARATION_PROGRAMS.replace(old, new)
+    assert text != DECLARATION_PROGRAMS
+    assert check_declaration.problems(schema, _repo(tmp_path, text)) == [problem]
+
+
+def test_two_programs_ports_are_named(schema: dict[str, Any], tmp_path: Path) -> None:
+    text = DECLARATION_PROGRAMS.replace(
+        "  links: {type: links, optional: true}",
+        "  links: {type: links, optional: true}\n  more: {type: programs, "
+        "inputs: {program: {type: file, runs: true}}, outputs: {}}",
+    )
+    found = check_declaration.problems(schema, _repo(tmp_path, text))
+    assert "inputs: programs, more are each a programs port" in found
+
+
+def test_a_programs_port_must_be_named_programs(
+    schema: dict[str, Any], tmp_path: Path
+) -> None:
+    text = DECLARATION_PROGRAMS.replace("  programs:\n", "  players:\n").replace(
+        "outputs_from: programs\n", ""
+    )
+    found = check_declaration.problems(schema, _repo(tmp_path, text))
+    assert "inputs/players: a programs port must be named programs" in found
+
+
+def test_a_programs_port_needs_outputs_from_programs(
+    schema: dict[str, Any], tmp_path: Path
+) -> None:
+    text = DECLARATION_PROGRAMS.replace("outputs_from: programs\n", "")
+    assert check_declaration.problems(schema, _repo(tmp_path, text)) == [
+        "outputs_from: a declaration with a programs port needs outputs_from: programs"
+    ]
+
+
+def test_links_without_a_programs_port_are_named(
+    schema: dict[str, Any], tmp_path: Path
+) -> None:
+    text = DECLARATION_V6.replace(
+        "  manifest: {type: file, runs: false}\n",
+        "  manifest: {type: file, runs: false}\n  links: {type: links}\n",
+    )
+    assert check_declaration.problems(schema, _repo(tmp_path, text)) == [
+        "inputs/links: links with no programs port to link"
+    ]
+
+
 def test_the_command_line_names_the_schema_and_the_repo(
     schema: dict[str, Any], tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -204,3 +414,86 @@ def test_the_command_line_names_the_schema_and_the_repo(
     assert check_declaration.main(["", str(schema_file), str(repo)]) == 1
     assert "primitive.yaml: batch:" in capsys.readouterr().err
     assert check_declaration.main(["", str(schema_file)]) == 2
+
+
+FORMS = """\
+schema_version: 6
+batch: true
+forms:
+  one:
+    description: Runs one program.
+    outputs_from: manifest
+    limits: {time_ms: 1, cpu_ms: 1, memory_mb: 1, pids: 1, output_mb: 1, gpus: 0}
+    limits_from:
+      time_ms: {input: time_limit, scale: 2000, add: 3000}
+    inputs:
+      program: {type: file, runs: true}
+      manifest: {type: file, runs: false}
+      time_limit: {type: number}
+    outputs:
+      outcome: {type: outcome}
+  programs:
+    description: Runs several programs.
+    outputs_from: programs
+    limits: {time_ms: 1, cpu_ms: 1, memory_mb: 1, pids: 1, output_mb: 1, gpus: 0}
+    limits_from:
+      time_ms: {max: programs.time_limit, scale: 4000, add: 6000}
+    inputs:
+      programs:
+        type: programs
+        inputs:
+          program: {type: file, runs: true}
+          time_limit: {type: number}
+          manifest: {type: file, runs: false}
+        outputs:
+          time_ms: {type: number, better: lower, at_least: 0}
+    outputs:
+      outcome: {type: outcome}
+"""
+
+
+def test_a_two_form_declaration_conforms(
+    schema: dict[str, Any], tmp_path: Path
+) -> None:
+    assert check_declaration.problems(schema, _repo(tmp_path, FORMS)) == []
+
+
+def test_a_form_key_at_the_top_beside_forms_is_refused(
+    schema: dict[str, Any], tmp_path: Path
+) -> None:
+    text = FORMS.replace("batch: true\n", "batch: true\nlimits: {time_ms: 1}\n")
+    found = check_declaration.problems(schema, _repo(tmp_path, text))
+    assert any("limits" in problem for problem in found)
+
+
+def test_a_form_whose_required_inputs_another_form_declares_is_refused(
+    schema: dict[str, Any], tmp_path: Path
+) -> None:
+    text = """\
+schema_version: 6
+forms:
+  one:
+    outputs_from: manifest
+    limits: {time_ms: 1, cpu_ms: 1, memory_mb: 1, pids: 1, output_mb: 1, gpus: 0}
+    inputs:
+      shared: {type: text}
+      manifest: {type: file, runs: false, optional: true}
+    outputs:
+      outcome: {type: outcome}
+  programs:
+    outputs_from: programs
+    limits: {time_ms: 1, cpu_ms: 1, memory_mb: 1, pids: 1, output_mb: 1, gpus: 0}
+    inputs:
+      shared: {type: text, optional: true}
+      programs:
+        type: programs
+        inputs:
+          program: {type: file, runs: true}
+          manifest: {type: file, runs: false}
+        outputs:
+          time_ms: {type: number, better: lower, at_least: 0}
+    outputs:
+      outcome: {type: outcome}
+"""
+    found = check_declaration.problems(schema, _repo(tmp_path, text))
+    assert found == ["forms/one: a form needs a required input no other form declares"]

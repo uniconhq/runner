@@ -1,0 +1,40 @@
+# The escape fixtures' task: one run an attack, each shown at once with
+# its attack's name (so `attacks/` is shown too), with 64 MB of memory
+# but where an attack must hold more to show its bound. The driver saves
+# it on the org's own copy of ../workflow.yaml, writing the org's name over
+# `escape-org`.
+name: Escape
+workflow: escape-org/escape@v1
+inputs:
+  code: {entrant: {label: The attacker, max_size: 1MB}}
+  check: check/
+  check_manifest: check/program.yaml
+  allowed: check/allowed
+  time_limit: 2
+repeat:
+  - inputs: [attack, memory_limit]
+    tuples:
+      - [attacks/network.in, 64]
+      - [attacks/sockets.in, 64]
+      - [attacks/files.in, 300]
+      - [attacks/kernel.in, 64]
+      - [attacks/container.in, 64]
+      - [attacks/secrets.in, 64]
+      - [attacks/stdin.in, 64]
+      - [attacks/leave-sysv.in, 64]
+      - [attacks/find-sysv.in, 64]
+      - [attacks/mark.in, 64]
+      - [attacks/read-mark.in, 64]
+      - [attacks/threads.in, 64]
+      - [attacks/fork.in, 360]
+      - [attacks/memory.in, 64]
+      - [attacks/disk.in, 300]
+      - [attacks/output.in, 64]
+      - [attacks/sleep.in, 64]
+      - [attacks/spin.in, 64]
+scoring:
+  values:
+    refused: {block: sum, over: {runs: all}, of: {run: [all, passed]}}
+  show:
+    now: [refused, all, attacks/]
+submissions: {max: 50, rate: {count: 1, per: 5}}
