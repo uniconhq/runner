@@ -198,7 +198,7 @@
           "$ref": "#/$defs/test_id"
         },
         "batch": {
-          "description": "One item per test the container runs, in test order. A test that already has an outcome is left out when the harness runs the batch.",
+          "description": "One item per test the container runs, in the order the forge gives: the tests of the groups shown in full during the contest first, then those shown as an outcome, then those hidden until the reveal, each part in test order, so no test runs before one entrants see more of sooner. A test that already has an outcome is left out when the harness runs the batch.",
           "type": "array",
           "minItems": 1,
           "items": {
