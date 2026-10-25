@@ -1,0 +1,1096 @@
+{
+  "confirmations": [
+    {
+      "column": "passed",
+      "inputs": [
+        "weights"
+      ]
+    },
+    {
+      "column": "reward",
+      "inputs": [
+        "weights"
+      ]
+    },
+    {
+      "column": "verdict",
+      "inputs": [
+        "weights"
+      ]
+    }
+  ],
+  "entrant": {
+    "weights": {
+      "max_size": 10485760,
+      "type": "file"
+    }
+  },
+  "notes": [
+    "windy reads runs whose own steps run the entrant's code beside what entrants are not shown during the contest, such as `episode` beside the workflow's `runner/` in the run r4, so the entrant's code can signal a little about it through what windy shows."
+  ],
+  "pipelines": {
+    "early": [
+      {
+        "depends_on": [],
+        "limits": {
+          "cpu_ms": 369000,
+          "gpus": 0,
+          "memory_mb": 1280,
+          "output_mb": 64,
+          "pids": 160,
+          "time_ms": 369000
+        },
+        "name": "episode",
+        "runs": [
+          "r4",
+          "r5",
+          "r6"
+        ],
+        "step": "episode"
+      }
+    ],
+    "late": [
+      {
+        "depends_on": [],
+        "limits": {
+          "cpu_ms": 369000,
+          "gpus": 0,
+          "memory_mb": 1280,
+          "output_mb": 64,
+          "pids": 160,
+          "time_ms": 369000
+        },
+        "name": "episode",
+        "runs": [
+          "r1",
+          "r2",
+          "r3"
+        ],
+        "step": "episode"
+      },
+      {
+        "depends_on": [
+          "episode"
+        ],
+        "limits": {
+          "cpu_ms": 2000,
+          "gpus": 0,
+          "memory_mb": 256,
+          "output_mb": 64,
+          "pids": 32,
+          "time_ms": 2000
+        },
+        "name": "exec-mean",
+        "step": "exec-mean"
+      }
+    ],
+    "save": [
+      {
+        "depends_on": [],
+        "limits": {
+          "cpu_ms": 60000,
+          "gpus": 0,
+          "memory_mb": 1024,
+          "output_mb": 64,
+          "pids": 128,
+          "time_ms": 60000
+        },
+        "name": "runner",
+        "step": "runner"
+      },
+      {
+        "depends_on": [
+          "runner"
+        ],
+        "limits": {
+          "cpu_ms": 138000,
+          "gpus": 0,
+          "memory_mb": 512,
+          "output_mb": 64,
+          "pids": 160,
+          "time_ms": 138000
+        },
+        "name": "scene",
+        "runs": [
+          "r1",
+          "r2",
+          "r3",
+          "r4",
+          "r5",
+          "r6"
+        ],
+        "step": "scene"
+      },
+      {
+        "depends_on": [],
+        "limits": {
+          "cpu_ms": 60000,
+          "gpus": 0,
+          "memory_mb": 1024,
+          "output_mb": 64,
+          "pids": 128,
+          "time_ms": 60000
+        },
+        "name": "build-mean",
+        "step": "build-mean"
+      },
+      {
+        "depends_on": [
+          "build-mean",
+          "scene"
+        ],
+        "limits": {
+          "cpu_ms": 738000,
+          "gpus": 0,
+          "memory_mb": 1280,
+          "output_mb": 64,
+          "pids": 160,
+          "time_ms": 738000
+        },
+        "name": "c1-episode",
+        "runs": [
+          "r1",
+          "r2",
+          "r3",
+          "r4",
+          "r5",
+          "r6"
+        ],
+        "step": "c1-episode"
+      }
+    ]
+  },
+  "released": {
+    "early": [
+      "r1",
+      "r4",
+      "r5",
+      "r6"
+    ],
+    "pipelines": {
+      "early": [
+        {
+          "depends_on": [],
+          "limits": {
+            "cpu_ms": 492000,
+            "gpus": 0,
+            "memory_mb": 1280,
+            "output_mb": 64,
+            "pids": 160,
+            "time_ms": 492000
+          },
+          "name": "episode",
+          "runs": [
+            "r1",
+            "r4",
+            "r5",
+            "r6"
+          ],
+          "step": "episode"
+        }
+      ],
+      "late": [
+        {
+          "depends_on": [],
+          "limits": {
+            "cpu_ms": 246000,
+            "gpus": 0,
+            "memory_mb": 1280,
+            "output_mb": 64,
+            "pids": 160,
+            "time_ms": 246000
+          },
+          "name": "episode",
+          "runs": [
+            "r2",
+            "r3"
+          ],
+          "step": "episode"
+        },
+        {
+          "depends_on": [
+            "episode"
+          ],
+          "limits": {
+            "cpu_ms": 2000,
+            "gpus": 0,
+            "memory_mb": 256,
+            "output_mb": 64,
+            "pids": 32,
+            "time_ms": 2000
+          },
+          "name": "exec-mean",
+          "step": "exec-mean"
+        }
+      ]
+    }
+  },
+  "reports": {
+    "reward": {
+      "at_least": 0,
+      "better": "higher",
+      "output": "reward",
+      "step": "episode"
+    }
+  },
+  "runs": [
+    {
+      "early": false,
+      "id": "r1",
+      "key": {
+        "env": "cartpole",
+        "seed": 1
+      },
+      "titles": ["Cartpole", null]
+    },
+    {
+      "early": false,
+      "id": "r2",
+      "key": {
+        "env": "cartpole",
+        "seed": 2
+      }
+    },
+    {
+      "early": false,
+      "id": "r3",
+      "key": {
+        "env": "cartpole",
+        "seed": 3
+      }
+    },
+    {
+      "early": true,
+      "id": "r4",
+      "key": {
+        "env": "cartpole-wind",
+        "seed": 1
+      }
+    },
+    {
+      "early": true,
+      "id": "r5",
+      "key": {
+        "env": "cartpole-wind",
+        "seed": 2
+      }
+    },
+    {
+      "early": true,
+      "id": "r6",
+      "key": {
+        "env": "cartpole-wind",
+        "seed": 3
+      }
+    }
+  ],
+  "schema_version": 6,
+  "steps": {
+    "build-mean": {
+      "cache": false,
+      "class": "save_once",
+      "folders": [
+        "source"
+      ],
+      "image": "ghcr.io/uniconhq/primitive-compile@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+      "inputs": {
+        "language": {
+          "value": "python"
+        },
+        "source": {
+          "task": "mean/"
+        }
+      },
+      "network": false,
+      "outputs": {
+        "log": "text",
+        "outcome": "outcome",
+        "program": "file"
+      },
+      "primitive": "unicon/compile@v3",
+      "value": {
+        "name": "mean"
+      },
+      "woodpecker": "s4"
+    },
+    "c1-episode": {
+      "boxes": 1,
+      "cache": true,
+      "check": {
+        "index": 1,
+        "of": "episode"
+      },
+      "class": "save_per_run",
+      "image": "ghcr.io/uniconhq/primitive-exec@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+      "items": {
+        "r1": {
+          "inputs": {
+            "args": {
+              "value": "--env cartpole --seed 1 --episodes 100"
+            },
+            "loads": {
+              "files": {
+                "scene": {
+                  "output": "output",
+                  "step": "scene"
+                },
+                "weights": {
+                  "task": "checks/good.pt"
+                }
+              }
+            },
+            "manifest": {
+              "workflow": "runner/program.yaml",
+              "pin": 1
+            },
+            "memory_limit": {
+              "value": 1024
+            },
+            "program": {
+              "output": "program",
+              "step": "runner"
+            },
+            "self_reported": {
+              "value": true
+            },
+            "time_limit": {
+              "value": 60
+            }
+          },
+          "tainted": {
+            "beside": {
+              "workflow": "runner/",
+              "pin": 1
+            }
+          }
+        },
+        "r2": {
+          "inputs": {
+            "args": {
+              "value": "--env cartpole --seed 2 --episodes 100"
+            },
+            "loads": {
+              "files": {
+                "scene": {
+                  "output": "output",
+                  "step": "scene"
+                },
+                "weights": {
+                  "task": "checks/good.pt"
+                }
+              }
+            },
+            "manifest": {
+              "workflow": "runner/program.yaml",
+              "pin": 1
+            },
+            "memory_limit": {
+              "value": 1024
+            },
+            "program": {
+              "output": "program",
+              "step": "runner"
+            },
+            "self_reported": {
+              "value": true
+            },
+            "time_limit": {
+              "value": 60
+            }
+          },
+          "tainted": {
+            "beside": {
+              "workflow": "runner/",
+              "pin": 1
+            }
+          }
+        },
+        "r3": {
+          "inputs": {
+            "args": {
+              "value": "--env cartpole --seed 3 --episodes 100"
+            },
+            "loads": {
+              "files": {
+                "scene": {
+                  "output": "output",
+                  "step": "scene"
+                },
+                "weights": {
+                  "task": "checks/good.pt"
+                }
+              }
+            },
+            "manifest": {
+              "workflow": "runner/program.yaml",
+              "pin": 1
+            },
+            "memory_limit": {
+              "value": 1024
+            },
+            "program": {
+              "output": "program",
+              "step": "runner"
+            },
+            "self_reported": {
+              "value": true
+            },
+            "time_limit": {
+              "value": 60
+            }
+          },
+          "tainted": {
+            "beside": {
+              "workflow": "runner/",
+              "pin": 1
+            }
+          }
+        },
+        "r4": {
+          "inputs": {
+            "args": {
+              "value": "--env cartpole-wind --seed 1 --episodes 100"
+            },
+            "loads": {
+              "files": {
+                "scene": {
+                  "output": "output",
+                  "step": "scene"
+                },
+                "weights": {
+                  "task": "checks/good.pt"
+                }
+              }
+            },
+            "manifest": {
+              "workflow": "runner/program.yaml",
+              "pin": 1
+            },
+            "memory_limit": {
+              "value": 1024
+            },
+            "program": {
+              "output": "program",
+              "step": "runner"
+            },
+            "self_reported": {
+              "value": true
+            },
+            "time_limit": {
+              "value": 60
+            }
+          },
+          "tainted": {
+            "beside": {
+              "workflow": "runner/",
+              "pin": 1
+            }
+          }
+        },
+        "r5": {
+          "inputs": {
+            "args": {
+              "value": "--env cartpole-wind --seed 2 --episodes 100"
+            },
+            "loads": {
+              "files": {
+                "scene": {
+                  "output": "output",
+                  "step": "scene"
+                },
+                "weights": {
+                  "task": "checks/good.pt"
+                }
+              }
+            },
+            "manifest": {
+              "workflow": "runner/program.yaml",
+              "pin": 1
+            },
+            "memory_limit": {
+              "value": 1024
+            },
+            "program": {
+              "output": "program",
+              "step": "runner"
+            },
+            "self_reported": {
+              "value": true
+            },
+            "time_limit": {
+              "value": 60
+            }
+          },
+          "tainted": {
+            "beside": {
+              "workflow": "runner/",
+              "pin": 1
+            }
+          }
+        },
+        "r6": {
+          "inputs": {
+            "args": {
+              "value": "--env cartpole-wind --seed 3 --episodes 100"
+            },
+            "loads": {
+              "files": {
+                "scene": {
+                  "output": "output",
+                  "step": "scene"
+                },
+                "weights": {
+                  "task": "checks/good.pt"
+                }
+              }
+            },
+            "manifest": {
+              "workflow": "runner/program.yaml",
+              "pin": 1
+            },
+            "memory_limit": {
+              "value": 1024
+            },
+            "program": {
+              "output": "program",
+              "step": "runner"
+            },
+            "self_reported": {
+              "value": true
+            },
+            "time_limit": {
+              "value": 60
+            }
+          },
+          "tainted": {
+            "beside": {
+              "workflow": "runner/",
+              "pin": 1
+            }
+          }
+        }
+      },
+      "network": false,
+      "outputs": {
+        "extras?": "folder",
+        "label?": "text",
+        "memory_kb": "number",
+        "message?": "text",
+        "outcome": "outcome",
+        "output": "file",
+        "reward": "number",
+        "staff_message?": "text",
+        "time_ms": "number"
+      },
+      "primitive": "unicon/exec@v1",
+      "self_reported": true,
+      "woodpecker": "s6"
+    },
+    "episode": {
+      "boxes": 1,
+      "cache": true,
+      "class": "grading_per_run",
+      "image": "ghcr.io/uniconhq/primitive-exec@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+      "items": {
+        "r1": {
+          "inputs": {
+            "args": {
+              "value": "--env cartpole --seed 1 --episodes 100"
+            },
+            "loads": {
+              "files": {
+                "scene": {
+                  "output": "output",
+                  "step": "scene"
+                },
+                "weights": {
+                  "entrant": "weights"
+                }
+              }
+            },
+            "manifest": {
+              "workflow": "runner/program.yaml",
+              "pin": 1
+            },
+            "memory_limit": {
+              "value": 1024
+            },
+            "program": {
+              "output": "program",
+              "step": "runner"
+            },
+            "self_reported": {
+              "value": true
+            },
+            "time_limit": {
+              "value": 60
+            }
+          },
+          "tainted": {
+            "beside": {
+              "workflow": "runner/",
+              "pin": 1
+            }
+          }
+        },
+        "r2": {
+          "inputs": {
+            "args": {
+              "value": "--env cartpole --seed 2 --episodes 100"
+            },
+            "loads": {
+              "files": {
+                "scene": {
+                  "output": "output",
+                  "step": "scene"
+                },
+                "weights": {
+                  "entrant": "weights"
+                }
+              }
+            },
+            "manifest": {
+              "workflow": "runner/program.yaml",
+              "pin": 1
+            },
+            "memory_limit": {
+              "value": 1024
+            },
+            "program": {
+              "output": "program",
+              "step": "runner"
+            },
+            "self_reported": {
+              "value": true
+            },
+            "time_limit": {
+              "value": 60
+            }
+          },
+          "tainted": {
+            "beside": {
+              "workflow": "runner/",
+              "pin": 1
+            }
+          }
+        },
+        "r3": {
+          "inputs": {
+            "args": {
+              "value": "--env cartpole --seed 3 --episodes 100"
+            },
+            "loads": {
+              "files": {
+                "scene": {
+                  "output": "output",
+                  "step": "scene"
+                },
+                "weights": {
+                  "entrant": "weights"
+                }
+              }
+            },
+            "manifest": {
+              "workflow": "runner/program.yaml",
+              "pin": 1
+            },
+            "memory_limit": {
+              "value": 1024
+            },
+            "program": {
+              "output": "program",
+              "step": "runner"
+            },
+            "self_reported": {
+              "value": true
+            },
+            "time_limit": {
+              "value": 60
+            }
+          },
+          "tainted": {
+            "beside": {
+              "workflow": "runner/",
+              "pin": 1
+            }
+          }
+        },
+        "r4": {
+          "inputs": {
+            "args": {
+              "value": "--env cartpole-wind --seed 1 --episodes 100"
+            },
+            "loads": {
+              "files": {
+                "scene": {
+                  "output": "output",
+                  "step": "scene"
+                },
+                "weights": {
+                  "entrant": "weights"
+                }
+              }
+            },
+            "manifest": {
+              "workflow": "runner/program.yaml",
+              "pin": 1
+            },
+            "memory_limit": {
+              "value": 1024
+            },
+            "program": {
+              "output": "program",
+              "step": "runner"
+            },
+            "self_reported": {
+              "value": true
+            },
+            "time_limit": {
+              "value": 60
+            }
+          },
+          "tainted": {
+            "beside": {
+              "workflow": "runner/",
+              "pin": 1
+            }
+          }
+        },
+        "r5": {
+          "inputs": {
+            "args": {
+              "value": "--env cartpole-wind --seed 2 --episodes 100"
+            },
+            "loads": {
+              "files": {
+                "scene": {
+                  "output": "output",
+                  "step": "scene"
+                },
+                "weights": {
+                  "entrant": "weights"
+                }
+              }
+            },
+            "manifest": {
+              "workflow": "runner/program.yaml",
+              "pin": 1
+            },
+            "memory_limit": {
+              "value": 1024
+            },
+            "program": {
+              "output": "program",
+              "step": "runner"
+            },
+            "self_reported": {
+              "value": true
+            },
+            "time_limit": {
+              "value": 60
+            }
+          },
+          "tainted": {
+            "beside": {
+              "workflow": "runner/",
+              "pin": 1
+            }
+          }
+        },
+        "r6": {
+          "inputs": {
+            "args": {
+              "value": "--env cartpole-wind --seed 3 --episodes 100"
+            },
+            "loads": {
+              "files": {
+                "scene": {
+                  "output": "output",
+                  "step": "scene"
+                },
+                "weights": {
+                  "entrant": "weights"
+                }
+              }
+            },
+            "manifest": {
+              "workflow": "runner/program.yaml",
+              "pin": 1
+            },
+            "memory_limit": {
+              "value": 1024
+            },
+            "program": {
+              "output": "program",
+              "step": "runner"
+            },
+            "self_reported": {
+              "value": true
+            },
+            "time_limit": {
+              "value": 60
+            }
+          },
+          "tainted": {
+            "beside": {
+              "workflow": "runner/",
+              "pin": 1
+            }
+          }
+        }
+      },
+      "network": false,
+      "outputs": {
+        "extras?": "folder",
+        "label?": "text",
+        "memory_kb": "number",
+        "message?": "text",
+        "outcome": "outcome",
+        "output": "file",
+        "reward": "number",
+        "staff_message?": "text",
+        "time_ms": "number"
+      },
+      "primitive": "unicon/exec@v1",
+      "self_reported": true,
+      "woodpecker": "s3"
+    },
+    "exec-mean": {
+      "boxes": 1,
+      "cache": false,
+      "class": "grading_once",
+      "image": "ghcr.io/uniconhq/primitive-exec@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+      "inputs": {
+        "files": {
+          "files": {
+            "runs.json": {
+              "runs": [
+                "r1",
+                "r2",
+                "r3",
+                "r4",
+                "r5",
+                "r6"
+              ]
+            }
+          }
+        },
+        "manifest": {
+          "task": "mean/program.yaml"
+        },
+        "memory_limit": {
+          "value": 256
+        },
+        "program": {
+          "output": "program",
+          "step": "build-mean"
+        },
+        "time_limit": {
+          "value": 2
+        }
+      },
+      "network": false,
+      "outputs": {
+        "extras?": "folder",
+        "label?": "text",
+        "mean": "number",
+        "memory_kb": "number",
+        "message?": "text",
+        "outcome": "outcome",
+        "staff_message?": "text",
+        "time_ms": "number"
+      },
+      "primitive": "unicon/exec@v1",
+      "value": {
+        "name": "mean",
+        "report": "mean"
+      },
+      "woodpecker": "s5"
+    },
+    "runner": {
+      "cache": false,
+      "class": "save_once",
+      "folders": [
+        "source"
+      ],
+      "image": "ghcr.io/uniconhq/primitive-compile@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+      "inputs": {
+        "language": {
+          "value": "python"
+        },
+        "source": {
+          "workflow": "runner/",
+          "pin": 1
+        }
+      },
+      "network": false,
+      "outputs": {
+        "log": "text",
+        "outcome": "outcome",
+        "program": "file"
+      },
+      "primitive": "unicon/compile@v3",
+      "woodpecker": "s1"
+    },
+    "scene": {
+      "boxes": 1,
+      "cache": true,
+      "class": "save_per_run",
+      "image": "ghcr.io/uniconhq/primitive-exec@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+      "items": {
+        "r1": {
+          "inputs": {
+            "args": {
+              "value": "--env cartpole --seed 1 --scene"
+            },
+            "memory_limit": {
+              "value": 256
+            },
+            "program": {
+              "output": "program",
+              "step": "runner"
+            },
+            "time_limit": {
+              "value": 10
+            }
+          }
+        },
+        "r2": {
+          "inputs": {
+            "args": {
+              "value": "--env cartpole --seed 2 --scene"
+            },
+            "memory_limit": {
+              "value": 256
+            },
+            "program": {
+              "output": "program",
+              "step": "runner"
+            },
+            "time_limit": {
+              "value": 10
+            }
+          }
+        },
+        "r3": {
+          "inputs": {
+            "args": {
+              "value": "--env cartpole --seed 3 --scene"
+            },
+            "memory_limit": {
+              "value": 256
+            },
+            "program": {
+              "output": "program",
+              "step": "runner"
+            },
+            "time_limit": {
+              "value": 10
+            }
+          }
+        },
+        "r4": {
+          "inputs": {
+            "args": {
+              "value": "--env cartpole-wind --seed 1 --scene"
+            },
+            "memory_limit": {
+              "value": 256
+            },
+            "program": {
+              "output": "program",
+              "step": "runner"
+            },
+            "time_limit": {
+              "value": 10
+            }
+          }
+        },
+        "r5": {
+          "inputs": {
+            "args": {
+              "value": "--env cartpole-wind --seed 2 --scene"
+            },
+            "memory_limit": {
+              "value": 256
+            },
+            "program": {
+              "output": "program",
+              "step": "runner"
+            },
+            "time_limit": {
+              "value": 10
+            }
+          }
+        },
+        "r6": {
+          "inputs": {
+            "args": {
+              "value": "--env cartpole-wind --seed 3 --scene"
+            },
+            "memory_limit": {
+              "value": 256
+            },
+            "program": {
+              "output": "program",
+              "step": "runner"
+            },
+            "time_limit": {
+              "value": 10
+            }
+          }
+        }
+      },
+      "network": false,
+      "outputs": {
+        "extras?": "folder",
+        "label?": "text",
+        "memory_kb": "number",
+        "message?": "text",
+        "outcome": "outcome",
+        "output": "file",
+        "staff_message?": "text",
+        "time_ms": "number"
+      },
+      "primitive": "unicon/exec@v1",
+      "woodpecker": "s2"
+    }
+  },
+  "task_files": {
+    "checks/good.pt": {
+      "sha256": "5555555555555555555555555555555555555555555555555555555555555555",
+      "size": 2048
+    },
+    "mean/mean.py": {
+      "sha256": "3333333333333333333333333333333333333333333333333333333333333333",
+      "size": 120
+    },
+    "mean/program.yaml": {
+      "sha256": "4444444444444444444444444444444444444444444444444444444444444444",
+      "size": 64
+    }
+  },
+  "inner_workflows": [
+    {
+      "commit": "dddddddddddddddddddddddddddddddddddddddd",
+      "files": {
+        "runner/program.yaml": {
+          "sha256": "59b6b5fcdbe6a906f2ec90464e2be39869e6f1a3a94be43245f3af88e2aa73b6",
+          "size": 49
+        },
+        "runner/run.py": {
+          "sha256": "26225035fb279c547c6cf50ae5be8d569ff9328f61c40c7579b165ffaa702c28",
+          "size": 16
+        }
+      },
+      "id": "w2",
+      "ref": "cs2109s/runner@v1"
+    }
+  ],
+  "workflow": {
+    "commit": "cccccccccccccccccccccccccccccccccccccccc",
+    "files": {},
+    "id": "w1",
+    "ref": "cs2109s/cartpole@v1"
+  }
+}

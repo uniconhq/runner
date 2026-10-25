@@ -51,9 +51,8 @@ jobs:
       - run: uv run ruff check .
       - run: uv run mypy
       - run: uv run pytest
-      # Builds unicon-harness:lab, unicon-socket-filter:lab and unicon-clone:lab
-      # and runs whole gradings, the filter's checks and the clone image with
-      # them: these are the images the release pushes.
+      # Builds unicon-primitive-base:lab and runs the step wrapper in it: the
+      # image the release pushes.
       - run: uv run pytest -m docker
       - run: uv run python scripts/check_contract_files.py
 
@@ -69,10 +68,9 @@ jobs:
           esac
 
       # Exactly the tested images, handed to the job that pushes them.
-      - name: Save the four images
+      - name: Save the two images
         run: |
-          docker save -o images.tar unicon-harness:lab unicon-socket-filter:lab \
-            unicon-clone:lab unicon-worker:lab
+          docker save -o images.tar unicon-worker:lab unicon-primitive-base:lab
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: images
@@ -86,10 +84,8 @@ jobs:
     permissions:
       packages: write
     outputs:
-      harness: ${{ steps.push.outputs.harness }}
       worker: ${{ steps.push.outputs.worker }}
-      clone: ${{ steps.push.outputs.clone }}
-      socket-filter: ${{ steps.push.outputs.socket-filter }}
+      primitive-base: ${{ steps.push.outputs.primitive-base }}
     steps:
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
@@ -101,15 +97,15 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # Four images, each tagged with the release and never :latest. A plan
-      # pins the harness by digest and a grading machine pins the other three
-      # the same way, so a moving tag would run a plan against an image it was
-      # not compiled for.
+      # Two images, each tagged with the release and never :latest. A grading
+      # machine pins the worker by digest, so a moving tag would change what
+      # it runs under it. The primitives' releases build on primitive-base by
+      # this release's tag.
       - id: push
         name: Push the tested images and read their digests
         run: |
           docker load -i images.tar
-          for name in harness worker clone socket-filter; do
+          for name in worker primitive-base; do
             target="ghcr.io/uniconhq/$name:$GITHUB_REF_NAME"
             docker tag "unicon-$name:lab" "$target"
             docker push "$target"
@@ -134,42 +130,37 @@ jobs:
           persist-credentials: false
 
       # One file naming every image by digest, so deploy pins one release and
-      # reads the four digests from it.
+      # reads the two digests from it.
       - name: Write images.json
         env:
-          HARNESS: ${{ needs.publish.outputs.harness }}
           WORKER: ${{ needs.publish.outputs.worker }}
-          CLONE: ${{ needs.publish.outputs.clone }}
-          SOCKET_FILTER: ${{ needs.publish.outputs.socket-filter }}
+          PRIMITIVE_BASE: ${{ needs.publish.outputs.primitive-base }}
         run: |
           cat > images.json <<EOF
           {
             "release": "$GITHUB_REF_NAME",
             "images": {
-              "harness": "ghcr.io/uniconhq/harness@$HARNESS",
               "worker": "ghcr.io/uniconhq/worker@$WORKER",
-              "clone": "ghcr.io/uniconhq/clone@$CLONE",
-              "socket-filter": "ghcr.io/uniconhq/socket-filter@$SOCKET_FILTER"
+              "primitive-base": "ghcr.io/uniconhq/primitive-base@$PRIMITIVE_BASE"
             }
           }
           EOF
           cat images.json
 
-      # The five contract files and the four digests are what the rest of the
+      # The five contract files and the two digests are what the rest of the
       # platform pins.
       - uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
+        # zizmor: ignore[superfluous-actions] one step writes the body and uploads the files
         with:
           body: |
             | Image | Digest |
             |---|---|
-            | `ghcr.io/uniconhq/harness:${{ github.ref_name }}` | `${{ needs.publish.outputs.harness }}` |
             | `ghcr.io/uniconhq/worker:${{ github.ref_name }}` | `${{ needs.publish.outputs.worker }}` |
-            | `ghcr.io/uniconhq/clone:${{ github.ref_name }}` | `${{ needs.publish.outputs.clone }}` |
-            | `ghcr.io/uniconhq/socket-filter:${{ github.ref_name }}` | `${{ needs.publish.outputs.socket-filter }}` |
+            | `ghcr.io/uniconhq/primitive-base:${{ github.ref_name }}` | `${{ needs.publish.outputs.primitive-base }}` |
           files: |
             schemas/plan.schema.json
-            schemas/envelope.schema.json
             schemas/result.schema.json
             schemas/primitive.schema.json
             schemas/submission.schema.json
+            schemas/job.schema.json
             images.json

@@ -2,64 +2,20 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://raw.githubusercontent.com/uniconhq/runner/main/schemas/result.schema.json",
   "title": "Unicon grading result",
-  "description": "What the harness posts back through the callback at the end of a run, result.json. The forge repo checks it against this schema and keeps it whole on the gradings row. The callback it is posted to, and that callback's token, say which grading it is for. Nothing in it knows about test groups, points or boards: it is an outcome per test and the values the workflow's report names, per test or once. The platform works out every other outcome, and every number shown, from the rows.",
+  "description": "What a grading's result is, kept whole on its gradings row: a run task's, which the forge builds itself once the grading's pipeline has ended (result_v6).",
   "type": "object",
-  "required": ["schema_version", "stopped", "stopped_by", "tests", "values", "run_log", "error"],
-  "additionalProperties": false,
-  "allOf": [
-    {
-      "if": {
-        "properties": { "stopped": { "const": "system_error" } },
-        "required": ["stopped"]
-      },
-      "then": { "properties": { "error": { "type": "string", "minLength": 1 } } },
-      "else": { "properties": { "error": { "type": "null" } } }
-    },
-    {
-      "if": {
-        "properties": { "stopped": { "$ref": "#/$defs/step_stop" } },
-        "required": ["stopped"]
-      },
-      "then": { "properties": { "stopped_by": { "$ref": "#/$defs/step_id" } } },
-      "else": { "properties": { "stopped_by": { "type": "null" } } }
-    }
-  ],
+  "required": ["schema_version"],
   "properties": {
     "schema_version": {
-      "description": "The result shape this file is written against.",
+      "description": "The result shape this file is written against. A reader refuses a version it does not speak.",
       "type": "integer",
-      "const": 5
-    },
-    "stopped": {
-      "description": "What stopped the run, or null. A once step returning an outcome other than accepted stops the run before its tests, every test being skipped, and this is that outcome. system_error when a fault of the platform or of setter code ended the run; the rows keep the outcomes they had when it struck and every other test is skipped.",
-      "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/stop" }]
-    },
-    "stopped_by": {
-      "description": "The id of the step that runs once and stopped the run, when one did; null otherwise, a system_error included. The platform holds a stop back until the task's reveal when this step is sealed, and shows it at once when it is not.",
-      "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/step_id" }]
-    },
-    "tests": {
-      "description": "One row per plan test, in plan order.",
-      "type": "array",
-      "items": { "$ref": "#/$defs/test" }
-    },
-    "values": {
-      "description": "Every once name of the workflow's report whose output was written.",
-      "$ref": "#/$defs/values"
-    },
-    "run_log": {
-      "description": "Where the run log went, the URL without its presigned query, or null. The log is for organisers: it names every test.",
-      "type": ["string", "null"],
-      "format": "uri"
-    },
-    "error": {
-      "description": "One sentence for staff when the run ended in system_error, otherwise null. Never shown to a contestant.",
-      "type": ["string", "null"]
+      "const": 6
     }
   },
+  "$ref": "#/$defs/result_v6",
   "$defs": {
     "outcome": {
-      "description": "The fixed list every task shares. A step never returns skipped or system_error: skipped is the harness's word for a test that never ran, and system_error a fault of the platform or of setter code.",
+      "description": "The fixed list every task shares. A step never returns skipped or system_error: skipped is a run's verdict when a part it is made from was not given, and system_error a fault of the platform or of setter code.",
       "type": "string",
       "enum": [
         "accepted",
@@ -74,61 +30,172 @@
       ]
     },
     "step_id": {
+      "description": "A step's name: a written id, or a path of them joined by /.",
       "type": "string",
-      "pattern": "^[a-z0-9][a-z0-9_-]*$"
+      "pattern": "^[a-z0-9][a-z0-9_-]*(/[a-z0-9][a-z0-9_-]*)*$"
     },
-    "step_stop": {
-      "description": "An outcome a step that runs once stops the run with.",
-      "type": "string",
-      "enum": [
-        "wrong_answer",
-        "time_limit",
-        "memory_limit",
-        "output_limit",
-        "runtime_error",
-        "compile_error"
-      ]
-    },
-    "stop": {
-      "description": "An outcome that stops a run: any but accepted and skipped.",
-      "type": "string",
-      "enum": [
-        "wrong_answer",
-        "time_limit",
-        "memory_limit",
-        "output_limit",
-        "runtime_error",
-        "compile_error",
-        "system_error"
-      ]
-    },
-    "test": {
+    "value_numbers": {
       "type": "object",
-      "required": ["test", "outcome", "values"],
+      "propertyNames": { "pattern": "^[a-z][a-z0-9_]*$" },
+      "additionalProperties": { "type": "number" }
+    },
+    "result_v6": {
+      "description": "A run task's result, which the forge builds itself once a grading's pipeline has ended, from what each step's outputs.json held, its own and the ones the store held for an item it would have done again. Every run the pipeline grades, with its verdict and the reports its steps wrote; the reports of steps done once; what staff alone see; the number each value's program reported; and an error exactly when a run's verdict is system_error or a value's program faulted.",
+      "type": "object",
+      "required": ["schema_version", "runs", "once", "staff", "error", "run_log"],
       "additionalProperties": false,
       "properties": {
-        "test": {
-          "description": "The test's id, <group>/<test>, as the plan names it.",
-          "type": "string",
-          "maxLength": 255,
-          "pattern": "^[A-Za-z0-9_-]+/[A-Za-z0-9_-]+$"
+        "schema_version": {
+          "description": "The result shape this file is written against.",
+          "type": "integer",
+          "const": 6
         },
-        "outcome": {
-          "description": "The first outcome other than accepted any of the test's steps returned, after which no later step ran for it; skipped when it never ran; otherwise accepted. Never system_error: a fault stops the run and leaves the rows it had not reached skipped.",
-          "allOf": [{ "$ref": "#/$defs/outcome" }, { "not": { "const": "system_error" } }]
+        "runs": {
+          "description": "One entry per run the pipeline grades, early or late, in the plan's order; for a save's pipeline, every run.",
+          "type": "array",
+          "items": { "$ref": "#/$defs/run_result" }
         },
+        "once": { "$ref": "#/$defs/once_result" },
         "values": {
-          "description": "Every per-test name of the report whose step ran for this test and wrote the output. A skipped test has none.",
-          "$ref": "#/$defs/values"
+          "description": "The number each value's exec block came to, by the value's name: the one number report its program wrote, read through its program.yaml. A value whose program faulted or gave nothing has none, and the error names it.",
+          "$ref": "#/$defs/value_numbers"
+        },
+        "staff": { "$ref": "#/$defs/staff_items" },
+        "error": {
+          "description": "One sentence for staff naming the first step that faulted or gave nothing for a run, or a value's program that faulted or gave nothing, when one did, otherwise null. Never shown to an entrant.",
+          "oneOf": [{ "type": "null" }, { "type": "string", "minLength": 1 }]
+        },
+        "run_log": {
+          "description": "Where the run's log went, or null. A run task's steps' logs stay with the CI, so the forge writes null.",
+          "type": ["string", "null"],
+          "format": "uri"
+        },
+        "checks": {
+          "description": "A save's pipeline's checks, one per check of the task in its order, each graded as an entrant's submission through the copies of the steps graded per submission, and left out when the task has none.",
+          "type": "array",
+          "items": { "$ref": "#/$defs/check_result" }
         }
       }
     },
-    "values": {
-      "description": "Reported values by name: a number exactly as the primitive wrote it, or text cut at 10,000 characters with every secret's value replaced by ***.",
+    "once_result": {
+      "description": "The reports of the steps done once that this grading's pipeline ran, and the outcome each of those steps returned, by its id, which the compiled fact reads; a step that faulted or gave nothing has none.",
+      "type": "object",
+      "required": ["reports", "texts", "outcomes"],
+      "additionalProperties": false,
+      "properties": {
+        "reports": { "$ref": "#/$defs/report_numbers" },
+        "texts": { "$ref": "#/$defs/report_texts" },
+        "outcomes": {
+          "type": "object",
+          "propertyNames": { "$ref": "#/$defs/step_id" },
+          "additionalProperties": { "$ref": "#/$defs/outcome" }
+        }
+      }
+    },
+    "staff_items": {
+      "description": "What a step wrote for staff alone, once per item this grading's pipeline did: its staff_message and its extras folder. Never shown to an entrant.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["step", "run"],
+        "additionalProperties": false,
+        "properties": {
+          "step": { "$ref": "#/$defs/step_id" },
+          "run": {
+            "description": "The run the item was done for, null for a step done once.",
+            "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/run_id" }]
+          },
+          "staff_message": { "$ref": "#/$defs/text_ref" },
+          "extras": { "$ref": "#/$defs/text_ref" }
+        }
+      }
+    },
+    "check_result": {
+      "description": "One check graded at the save: the runs worth reading, each with its verdict and reports, the steps done once and each value's program's number, with each step named as the workflow names it, not by its copy; what its steps wrote for staff, done once or for a run kept, by the copies' names; an error exactly when a step of the check faulted or gave nothing; whether it got what it expects; and a sentence for each thing it did not get.",
+      "type": "object",
+      "required": ["runs", "once", "staff", "error", "passed", "failing"],
+      "additionalProperties": false,
+      "properties": {
+        "runs": {
+          "description": "The runs worth reading: none once the check passed, else at most 20, those that did not get what it expects first, in the task's order.",
+          "type": "array",
+          "maxItems": 20,
+          "items": { "$ref": "#/$defs/run_result" }
+        },
+        "once": { "$ref": "#/$defs/once_result" },
+        "values": { "$ref": "#/$defs/value_numbers" },
+        "staff": { "$ref": "#/$defs/staff_items" },
+        "error": { "oneOf": [{ "type": "null" }, { "type": "string", "minLength": 1 }] },
+        "passed": { "type": "boolean" },
+        "failing": {
+          "description": "Why the check did not get what it expects, one sentence each, at most 20, the last saying how many more when there are; empty when it did.",
+          "type": "array",
+          "maxItems": 20,
+          "items": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "run_result": {
+      "type": "object",
+      "required": ["id", "key", "verdict", "passed", "reports", "texts"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "$ref": "#/$defs/run_id" },
+        "key": { "description": "The run's key as the plan gives it.", "type": "object" },
+        "verdict": {
+          "description": "The outcome of the first step the run went through that did not accept it; skipped when a part it is made from was not given; system_error when a step faulted or gave nothing for it first; otherwise accepted.",
+          "$ref": "#/$defs/outcome"
+        },
+        "passed": {
+          "description": "1 when the verdict is accepted, otherwise 0.",
+          "type": "integer",
+          "enum": [0, 1]
+        },
+        "reports": { "$ref": "#/$defs/report_numbers" },
+        "texts": { "$ref": "#/$defs/report_texts" },
+        "label": {
+          "description": "The verdict's step's label, else the last step's that wrote one.",
+          "$ref": "#/$defs/text_ref"
+        },
+        "message": {
+          "description": "The verdict's step's message, else the last step's that wrote one.",
+          "$ref": "#/$defs/text_ref"
+        }
+      }
+    },
+    "run_id": {
+      "description": "A run's opaque id, as the plan gives it.",
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]+$"
+    },
+    "report_numbers": {
+      "description": "Reported numbers by the report's name, each exactly as the primitive wrote it.",
       "type": "object",
       "propertyNames": { "pattern": "^[a-z][a-z0-9_]*$" },
-      "additionalProperties": {
-        "oneOf": [{ "type": "number" }, { "type": "string", "maxLength": 10000 }]
+      "additionalProperties": { "type": "number" }
+    },
+    "report_texts": {
+      "description": "Reported texts by the report's name, each named where it is kept.",
+      "type": "object",
+      "propertyNames": { "pattern": "^[a-z][a-z0-9_]*$" },
+      "additionalProperties": { "$ref": "#/$defs/text_ref" }
+    },
+    "text_ref": {
+      "description": "A text a step wrote, named by the stored output that holds it and the output's name, so a long text on each of many runs leaves the result small. The platform reads the text from the store when it shows it.",
+      "type": "object",
+      "required": ["output", "name"],
+      "additionalProperties": false,
+      "properties": {
+        "output": {
+          "description": "The id of the step_outputs row that holds the text.",
+          "type": "string",
+          "format": "uuid"
+        },
+        "name": {
+          "description": "The output's name in that row: an output of the step, or for exec's programs form one of a program's, <program>.<output>.",
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)?$"
+        }
       }
     }
   }

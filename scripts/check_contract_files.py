@@ -1,6 +1,6 @@
 """Check that the published examples still match the published schemas. An example
-that drifts from its schema is the first warning that the backend and the
-harness have parted company.
+that drifts from its schema is the first warning that the forge and the steps
+it runs have parted company.
 
 `CONTRACTS` maps each contract to the examples that exercise it. The primitive
 contract describes three documents, inputs.json, outputs.json and the
@@ -21,24 +21,39 @@ from typing import Any
 from jsonschema import Draft202012Validator, FormatChecker
 
 import core_yaml
-from unicon_harness.contracts import SCHEMA_VERSION
 
 REPO_ROOT = Path(__file__).parents[1]
 SCHEMAS = REPO_ROOT / "schemas"
 EXAMPLES = REPO_ROOT / "examples"
 
+SCHEMA_VERSION = 6
+"""The version the plan, result, submission and primitive contracts are at."""
+
+# The job is spoken by the step wrapper (wrapper/unicon_step.py) and has a
+# version of its own, the wrapper's.
+sys.path.insert(0, str(REPO_ROOT / "wrapper"))
+from unicon_step import JOB_VERSION  # noqa: E402
+
+OWN_VERSIONS = {"job": JOB_VERSION}
+
 CONTRACTS: dict[str, list[tuple[str, str | None]]] = {
-    "plan": [("plan.json", None)],
-    "envelope": [("envelope.json", None)],
-    "result": [("result.json", None)],
-    "submission": [("submission.json", None)],
+    "plan": [("plan-v6.json", "plan_v6")],
+    "job": [("job.json", None), ("job-once.json", None)],
+    "result": [("result-v6.json", "result_v6")],
+    "submission": [("submission-v6.json", None)],
     "primitive": [
         ("primitive-inputs.json", "inputs_file"),
-        ("primitive-inputs-batch.json", "inputs_file"),
         ("primitive-outputs.json", "outputs_file"),
-        ("primitive-outputs-batch.json", "outputs_file"),
         ("primitive-outputs-error.json", "outputs_file"),
+        ("primitive-v6-inputs-batch.json", "inputs_file"),
+        ("primitive-v6-outputs-batch.json", "outputs_file"),
+        ("primitive-v6-programs-inputs-batch.json", "inputs_file"),
+        ("primitive-v6-programs-outputs-batch.json", "outputs_file"),
         ("primitive.yaml", "declaration"),
+        ("primitive-v6.yaml", "declaration"),
+        ("primitive-v6-programs.yaml", "declaration"),
+        ("primitive-v6-programs-limits.yaml", "declaration"),
+        ("primitive-v6-forms.yaml", "declaration"),
     ],
 }
 
@@ -102,27 +117,32 @@ def _branch_mismatch(
 
 
 def _version_pinned(name: str, schema: Any) -> list[str]:
-    """Every contract file pins the schema_version the harness speaks."""
-    declared = _schema_version_const(schema, schema)
-    if declared != SCHEMA_VERSION:
+    """Every contract file accepts the schema_version its reader speaks:
+    SCHEMA_VERSION, but for the job, which the step wrapper reads.
+    """
+    declared = _schema_versions(schema, schema)
+    speaks = OWN_VERSIONS.get(name, SCHEMA_VERSION)
+    if declared is None or speaks not in declared:
         return [
-            f"schemas/{name}.schema.json pins schema_version {declared}, "
-            f"but the harness speaks {SCHEMA_VERSION}"
+            f"schemas/{name}.schema.json accepts schema_version "
+            f"{sorted(declared) if declared else None}, "
+            f"but its reader speaks {speaks}"
         ]
     return []
 
 
-def _schema_version_const(node: Any, root: Any) -> Any:
-    """The `const` on schema_version, at the root or in every root branch that
-    carries one. The primitive declaration is a YAML file a person writes and
-    has no version of its own; the release it is validated against is its
-    version.
+def _schema_versions(node: Any, root: Any) -> frozenset[int] | None:
+    """The versions schema_version may be, by its `const` or `enum`, at the root
+    or the same in every root branch that carries one.
     """
     properties = node.get("properties", {})
     if "schema_version" in properties:
-        return properties["schema_version"].get("const")
+        version = properties["schema_version"]
+        if "const" in version:
+            return frozenset([version["const"]])
+        return frozenset(version.get("enum", []))
     found = {
-        _schema_version_const(_resolved(branch, root), root)
+        _schema_versions(_resolved(branch, root), root)
         for branch in node.get("oneOf", [])
         if "schema_version" in _resolved(branch, root).get("properties", {})
     }

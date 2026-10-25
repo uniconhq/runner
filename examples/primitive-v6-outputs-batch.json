@@ -1,0 +1,25 @@
+{
+  "schema_version": 6,
+  "batch": [
+    {
+      "run": "r7Kq2",
+      "outputs": {
+        "output": {
+          "file": "out/1/output"
+        },
+        "time_ms": 412,
+        "memory_kb": 18432,
+        "outcome": "accepted"
+      }
+    },
+    {
+      "run": "r7Kq3",
+      "outputs": {
+        "time_ms": 3,
+        "memory_kb": 9216,
+        "outcome": "wrong_answer",
+        "message": "line 3 differs"
+      }
+    }
+  ]
+}

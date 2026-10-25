@@ -1,0 +1,70 @@
+{
+  "schema_version": 6,
+  "runs": [
+    {
+      "id": "r1",
+      "key": { "input": "samples/1.in", "answer": "samples/1.ans" },
+      "verdict": "accepted",
+      "passed": 1,
+      "reports": { "memory_kb": 1520, "score": 1, "time_ms": 120 },
+      "texts": {
+        "feedback": { "output": "0199a2c1-6b7e-7c3a-9f10-5d2e4b8a6c33", "name": "judge.feedback" }
+      },
+      "label": { "output": "0199a2c1-6b7e-7c3a-9f10-5d2e4b8a6c32", "name": "label" },
+      "message": { "output": "0199a2c1-6b7e-7c3a-9f10-5d2e4b8a6c32", "name": "message" }
+    },
+    {
+      "id": "r2",
+      "key": { "input": "samples/2.in", "answer": "samples/2.ans" },
+      "verdict": "system_error",
+      "passed": 0,
+      "reports": { "memory_kb": 1490, "time_ms": 15 },
+      "texts": {}
+    }
+  ],
+  "once": {
+    "reports": {},
+    "texts": { "log": { "output": "0199a2c1-6b7e-7c3a-9f10-5d2e4b8a6c31", "name": "log" } },
+    "outcomes": { "compile": "accepted" }
+  },
+  "values": { "mean": 0.5 },
+  "staff": [
+    {
+      "step": "compare",
+      "run": "r1",
+      "staff_message": { "output": "0199a2c1-6b7e-7c3a-9f10-5d2e4b8a6c32", "name": "staff_message" },
+      "extras": { "output": "0199a2c1-6b7e-7c3a-9f10-5d2e4b8a6c32", "name": "extras" }
+    }
+  ],
+  "error": "The step compare.r2 faulted: outputs.json is not JSON.",
+  "run_log": null,
+  "checks": [
+    {
+      "runs": [
+        {
+          "id": "r1",
+          "key": { "input": "samples/1.in", "answer": "samples/1.ans" },
+          "verdict": "wrong_answer",
+          "passed": 0,
+          "reports": { "score": 0 },
+          "texts": {},
+          "label": { "output": "0199a2c1-6b7e-7c3a-9f10-5d2e4b8a6c34", "name": "label" },
+          "message": { "output": "0199a2c1-6b7e-7c3a-9f10-5d2e4b8a6c34", "name": "message" }
+        }
+      ],
+      "once": { "reports": {}, "texts": {}, "outcomes": { "compile": "accepted" } },
+      "values": { "mean": 0 },
+      "staff": [
+        {
+          "step": "c1-compare",
+          "run": "r1",
+          "staff_message": { "output": "0199a2c1-6b7e-7c3a-9f10-5d2e4b8a6c34", "name": "staff_message" },
+          "extras": { "output": "0199a2c1-6b7e-7c3a-9f10-5d2e4b8a6c34", "name": "extras" }
+        }
+      ],
+      "error": null,
+      "passed": false,
+      "failing": ["The run r1 got wrong_answer, not accepted."]
+    }
+  ]
+}

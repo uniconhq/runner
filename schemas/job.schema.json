@@ -1,0 +1,143 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/uniconhq/runner/main/schemas/job.schema.json",
+  "title": "Unicon step job",
+  "description": "What a grading step's door at the forge answers when the step's wrapper asks for its work. The forge writes each Woodpecker step a plugin step whose settings are data_url, the door, GET <machine URL>/api/v1/gradings/<row>/steps/<step>, <step> there the step's Woodpecker name, and data_token, which the wrapper (ghcr.io/uniconhq/primitive-base, wrapper/) sends only as `Authorization: Bearer <token>`, and only to the door and to links under it, never in a URL or a log; presigned links get no header. The job is minted when the step asks, so its links have not expired in the queue, and the token works from then until the wrapper posts to done, or the pipeline ends. The wrapper places the files, writes inputs, runs the image's own command, which the image names, uploads what it wrote and posts to done. The pipeline's last step, from the base image with the setting mode: report, only posts {} to its own data_url, whose token the forge gives it alike. Every POST to the door is sent as Content-Type: application/json. The wrapper follows no redirect, a 3xx failing the request, and uses no proxy. When nothing is left for the step to do, every run of it left out, as when another grading stored the same work first or an earlier step stopped every run, the door answers the GET 204 with no body, and the wrapper exits 0 without placing, running, uploading or posting to done, so Woodpecker still starts the later steps. A grading that has finished answers 410 and a token that no longer works 401, and either fails the step, exit 2.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "inputs",
+    "files",
+    "uploads",
+    "done",
+    "time_limit",
+    "fail_on_non_accepted"
+  ],
+  "additionalProperties": false,
+  "dependentRequired": {
+    "box_users": ["step_memory_mb"],
+    "step_memory_mb": ["box_users"]
+  },
+  "properties": {
+    "schema_version": {
+      "description": "The job shape this answer is written against. The wrapper refuses another, exit 2, before it does anything.",
+      "type": "integer",
+      "const": 1
+    },
+    "inputs": {
+      "description": "The inputs.json the primitive reads, an inputs_file of primitive.schema.json: for a batch, only the runs still to be done, so a run an earlier step did not accept, or one the store holds, is left out. Every file it names is a path relative to /work that one entry of files places. The one thing the forge cannot fill is a secret's value, which Woodpecker holds: each is written {\"secret\": <setting>}, and the wrapper puts the setting's value in its place.",
+      "type": "object",
+      "required": ["schema_version"]
+    },
+    "files": {
+      "description": "Every file and folder the inputs name, each placed at its path before the primitive starts. A download is checked against its size and SHA-256 and refused otherwise, which fails the step. Several are fetched side by side.",
+      "type": "array",
+      "items": {
+        "oneOf": [
+          { "$ref": "#/$defs/download" },
+          { "$ref": "#/$defs/from_workspace" },
+          { "$ref": "#/$defs/empty_folder" }
+        ]
+      }
+    },
+    "uploads": {
+      "description": "The door's link for the step's upload links, under data_url. Once the primitive has ended, the wrapper posts, as application/json, {\"files\": [{\"path\": <relative to /work>, \"sha256\": <hex>, \"size\": <bytes>}]} for outputs.json and every plain file under out/, and the door answers {\"files\": {<path>: <presigned PUT into unicon-results, under results/<row>/steps/<step>/, <step> there the step's name inside forge>}}, one per path, which the wrapper puts each file to as application/octet-stream, with the header x-amz-checksum-sha256 holding the file's SHA-256 in base64, and no Authorization header unless the link is under data_url. Each link is signed for the SHA-256 listed, so the store refuses a PUT without the header or with a body not of it: a link writes the listed bytes or nothing, however often it is used. outputs.json is always there: when the step could not do its work, the wrapper writes it itself, holding only error, a sentence for staff, as a primitive does. The list is what the forge reads the files by, each with its hash for a later step's download.",
+      "type": "string",
+      "format": "uri"
+    },
+    "done": {
+      "description": "The door's link, under data_url, that the wrapper posts {} to, as application/json, once every upload is in. It ends the token. The door answers a repeated done with the same token 2xx, as the first, so a done whose answer was cut off can be posted again; the wrapper also takes a 401 or 403 to a repeated done as done, and does the same for mode: report's post.",
+      "type": "string",
+      "format": "uri"
+    },
+    "time_limit": {
+      "description": "Seconds the primitive may run, from its start. At the limit the wrapper kills it and everything it started, and writes the error itself. Once it ends, either way, the wrapper, the container's first process, kills every process left in the container before it uploads. Woodpecker has only a pipeline's timeout.",
+      "type": "number",
+      "exclusiveMinimum": 0
+    },
+    "box_users": {
+      "description": "For an exec step: the step's box users, both included, which the wrapper hands the primitive as UNICON_BOX_USERS=<first>-<last>. No other step that can run at the same time holds any of them, nor is any a container's user. Left out for a step whose primitive runs no boxes.",
+      "type": "object",
+      "required": ["first", "last"],
+      "additionalProperties": false,
+      "properties": {
+        "first": { "type": "integer", "minimum": 10000, "maximum": 65000 },
+        "last": { "type": "integer", "minimum": 10000, "maximum": 65000 }
+      }
+    },
+    "step_memory_mb": {
+      "description": "For an exec step, given with box_users: the memory the forge's planner gave the step, its largest item's boxes' memory limits, the files it copies in beside them and the room its declaration adds, which the wrapper hands the primitive as UNICON_STEP_MEMORY_MB. The primitive caps its own processes and its boxes together at it, so steps side by side in one slot of a machine stay within what each was planned, and refuses an item that does not fit it. The container's own limit is the slot's, never less.",
+      "type": "integer",
+      "minimum": 1
+    },
+    "fail_on_non_accepted": {
+      "description": "True for every step not done once per run: an outcome other than accepted, such as a compile error, or none at all, makes the wrapper exit 1 after the uploads, so Woodpecker starts no later step, and the forge reads that outcome from outputs.json. A step whose outputs.json holds an error exits 1 either way.",
+      "type": "boolean"
+    },
+    "secrets": {
+      "description": "The settings the step's YAML gives a secret under, with from_secret, each read as PLUGIN_<SETTING>. The wrapper fills them into inputs, takes every PLUGIN_ variable from the primitive's environment, and replaces each value, the data link and the token with *** in every text of outputs.json, but an outcome's, and every line the primitive prints; a number of outputs.json holding one becomes the text ***. A value shorter than 8 characters is refused, an error of the step, as one that short would be masked inside ordinary words and numbers. Left out when the step takes none.",
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "pattern": "^[a-z][a-z0-9_]*$",
+        "not": { "enum": ["data_url", "data_token", "mode"] }
+      }
+    }
+  },
+  "$defs": {
+    "path": {
+      "description": "Where under /work a file goes: in/ and one or more names, each [A-Za-z0-9_][A-Za-z0-9_.-]*, random so a name tells a run nothing; or, for a cached file, cache/<item>/<name>. The names are the forge's, and the wrapper makes the folders.",
+      "type": "string",
+      "pattern": "^(in(/[A-Za-z0-9_][A-Za-z0-9_.-]*)+|cache/[A-Za-z0-9_][A-Za-z0-9_.-]*/[A-Za-z0-9_][A-Za-z0-9_.-]*)$"
+    },
+    "download": {
+      "description": "A file fetched by link: a presigned GET into forgejo-lfs for a task file that is an LFS object, or into unicon-results for an earlier step's output, or a link under data_url for a small file the forge serves itself.",
+      "type": "object",
+      "required": ["path", "url", "sha256", "size"],
+      "additionalProperties": false,
+      "properties": {
+        "path": { "$ref": "#/$defs/path" },
+        "url": { "type": "string", "format": "uri" },
+        "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "size": { "type": "integer", "minimum": 0 },
+        "cached": {
+          "description": "True for a task file of a step whose primitive declares cache: true and is given the org's cache volume at /cache. The file is fetched once per machine into /cache/objects/<sha256> and hard-linked as <name> into this running step's item folder <item>, which the wrapper makes under /cache/items/ and reaches as /work/cache; its path is cache/<item>/<name>. An item holds the cached files of one box and nothing else: for exec's one form, every cached file of one run; for its programs form, every cached file of one program of a run, so a file two programs of a run read is placed in each one's item. The primitive binds that folder whole into the box read-only, so the file is never copied, and refuses an item folder holding any file the run or program is not given. <item> is random and <name> is the run's name for the file, or random where it has none.",
+          "type": "boolean"
+        }
+      }
+    },
+    "empty_folder": {
+      "description": "A folder the inputs name that holds no file, such as an entrant's folder given empty or an earlier step's folder output with nothing in it, which the wrapper makes empty at path.",
+      "type": "object",
+      "required": ["path", "folder"],
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "description": "Under in/, as from_workspace's.",
+          "type": "string",
+          "pattern": "^in(/[A-Za-z0-9_][A-Za-z0-9_.-]*)+$"
+        },
+        "folder": { "type": "boolean", "const": true }
+      }
+    },
+    "from_workspace": {
+      "description": "A file or folder of the submission the pipeline's clone step checked out, copied to path. A link, or anything else not a plain file or folder, inside it fails the step.",
+      "type": "object",
+      "required": ["path", "workspace"],
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "description": "Under in/: a cached file is a task file, never the submission's.",
+          "type": "string",
+          "pattern": "^in(/[A-Za-z0-9_][A-Za-z0-9_.-]*)+$"
+        },
+        "workspace": {
+          "description": "Its path relative to the step's workspace, CI_WORKSPACE.",
+          "type": "string",
+          "pattern": "^[^/]"
+        }
+      }
+    }
+  }
+}
