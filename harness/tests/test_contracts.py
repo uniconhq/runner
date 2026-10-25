@@ -26,6 +26,11 @@ def plan() -> dict[str, Any]:
 
 
 @pytest.fixture
+def run_plan() -> dict[str, Any]:
+    return example("plan-v6.json")
+
+
+@pytest.fixture
 def declaration() -> dict[str, Any]:
     return _yaml("primitive.yaml")
 
@@ -160,6 +165,135 @@ def test_a_report_entry_names_a_step_and_an_output(plan: dict[str, Any]) -> None
 def test_a_plan_of_the_previous_version_is_refused(plan: dict[str, Any]) -> None:
     plan["schema_version"] = 4
     assert violation(plan, "plan") is not None
+
+
+# A run task's plan, schema_version 6, which the forge reads
+
+
+def test_the_example_run_plan_is_accepted(run_plan: dict[str, Any]) -> None:
+    assert violation(run_plan, "plan") is None
+
+
+def test_each_version_carries_only_its_own_fields(
+    plan: dict[str, Any], run_plan: dict[str, Any]
+) -> None:
+    plan["pipelines"] = run_plan["pipelines"]
+    assert violation(plan, "plan") is not None
+    run_plan["harness_image"] = example("plan.json")["harness_image"]
+    assert violation(run_plan, "plan") is not None
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        {},
+        {"task": "runner/", "workflow": "runner/"},
+        {"step": "runner"},
+        {"entrant": "weights", "part": 0},
+        {"workflow": "../runner/"},
+        {"value": ["--seed", "1"]},
+        {"links": ["judge <- entrant"]},
+    ],
+)
+def test_a_run_plan_value_is_exactly_one_known_form(
+    run_plan: dict[str, Any], value: dict[str, Any]
+) -> None:
+    run_plan["steps"]["runner"]["inputs"]["source"] = value
+    assert violation(run_plan, "plan") is not None
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        {"task": "tests/1.in"},
+        {"entrant": "route", "part": 2},
+        {"secret": "api-key"},
+        {"template": "--best {0}", "parts": [{"entrant": "best"}]},
+        {"programs": {"entrant": {"program": {"step": "runner", "output": "program"}}}},
+        {"links": ["entrant -> judge"]},
+    ],
+)
+def test_the_value_forms_a_run_plan_carries(
+    run_plan: dict[str, Any], value: dict[str, Any]
+) -> None:
+    run_plan["steps"]["runner"]["inputs"]["source"] = value
+    assert violation(run_plan, "plan") is None
+
+
+def test_a_step_done_per_run_has_items_and_no_inputs_of_its_own(
+    run_plan: dict[str, Any],
+) -> None:
+    episode = run_plan["steps"]["episode"]
+    episode["inputs"] = episode["items"]["r1"]["inputs"]
+    assert violation(run_plan, "plan") is not None
+    del episode["inputs"]
+    episode["tainted"] = episode["items"]["r1"]["tainted"]
+    assert violation(run_plan, "plan") is not None
+    del episode["tainted"], episode["items"]
+    assert violation(run_plan, "plan") is not None
+
+
+def test_a_step_done_once_has_inputs_and_no_items(run_plan: dict[str, Any]) -> None:
+    runner = run_plan["steps"]["runner"]
+    runner["items"] = {"r1": {"inputs": runner["inputs"]}}
+    assert violation(run_plan, "plan") is not None
+    del runner["inputs"]
+    assert violation(run_plan, "plan") is not None
+
+
+def test_a_taint_is_beside_a_file_or_reads_a_step(run_plan: dict[str, Any]) -> None:
+    item = run_plan["steps"]["episode"]["items"]["r1"]
+    item["tainted"] = {"reads": "runner"}
+    assert violation(run_plan, "plan") is None
+    item["tainted"] = {"beside": {"task": "tests/1.in"}, "reads": "runner"}
+    assert violation(run_plan, "plan") is not None
+    item["tainted"] = {"beside": {"entrant": "weights"}}
+    assert violation(run_plan, "plan") is not None
+
+
+@pytest.mark.parametrize("version", [4, 7, "6", None])
+def test_a_plan_of_an_unknown_version_is_refused_at_its_version(
+    run_plan: dict[str, Any], version: object
+) -> None:
+    run_plan["schema_version"] = version
+    found = violation(run_plan, "plan")
+    assert found is not None and found.startswith("at schema_version: ")
+
+
+def test_a_plan_without_a_version_is_refused_for_it_alone(
+    run_plan: dict[str, Any],
+) -> None:
+    del run_plan["schema_version"]
+    assert (
+        violation(run_plan, "plan")
+        == "at the top: 'schema_version' is a required property"
+    )
+
+
+def test_every_woodpecker_step_carries_all_its_limits(run_plan: dict[str, Any]) -> None:
+    del run_plan["pipelines"]["late"][0]["limits"]["pids"]
+    assert violation(run_plan, "plan") is not None
+
+
+def test_a_pipeline_with_no_step_is_left_out(run_plan: dict[str, Any]) -> None:
+    run_plan["pipelines"]["late"] = []
+    assert violation(run_plan, "plan") is not None
+    run_plan["pipelines"] = {}
+    assert violation(run_plan, "plan") is not None
+
+
+def test_a_workflow_is_pinned_by_its_commit(run_plan: dict[str, Any]) -> None:
+    run_plan["workflow"]["commit"] = "main"
+    assert violation(run_plan, "plan") is not None
+
+
+def test_every_file_is_pinned_by_its_sha256(run_plan: dict[str, Any]) -> None:
+    run_plan["task_files"]["tests/1.in"] = {"size": 3, "sha256": "a" * 64}
+    assert violation(run_plan, "plan") is None
+    run_plan["task_files"]["tests/1.in"]["sha256"] = "a" * 40
+    assert violation(run_plan, "plan") is not None
+    del run_plan["task_files"]["tests/1.in"]["sha256"]
+    assert violation(run_plan, "plan") is not None
 
 
 def test_every_primitive_example_is_accepted() -> None:

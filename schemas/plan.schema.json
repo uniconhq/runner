@@ -2,47 +2,65 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://raw.githubusercontent.com/uniconhq/runner/main/schemas/plan.schema.json",
   "title": "Unicon grading plan",
-  "description": "What the compiler in the forge repo writes at every valid save of a task, as plans/plan.json in the task repo, in the commit its publication points at: the task's workflow with the task's values filled in, flat. Every per-test step is expanded over the task's tests, and folded into one batch step where the primitive takes a batch. Every step carries its primitive image by digest, its limits and its declared outputs; the plan names the harness image by digest; nothing of the task's or the workflow's is resolved at grade time, and the harness fills in only the contestant's values and the secrets. The harness runs the steps in order, one sandboxed container each, and never reads a workflow or a primitive's declaration. The plan carries no test groups, rule weights or show: those are scoring, which the platform does from task.yaml.",
+  "description": "What the forge writes at every valid save of a task, as plans/plan.json in the task repo, in the commit its publication points at. One of two versions, chosen by schema_version: 5, a task with tests, which the harness grades in one run (plan_v5); 6, a task with runs, which the forge grades as Woodpecker pipelines (plan_v6).",
   "type": "object",
-  "required": ["schema_version", "harness_image", "tests", "contestant", "steps", "report"],
-  "additionalProperties": false,
+  "required": ["schema_version"],
   "properties": {
     "schema_version": {
-      "description": "The plan shape this file is written against. The harness refuses a version it does not speak, because a compiler that emits a shape the harness reads differently produces a wrong result rather than an error.",
+      "description": "The plan shape this file is written against. A reader refuses a version it does not speak, because a writer that emits a shape the reader reads differently produces a wrong result rather than an error.",
       "type": "integer",
-      "const": 5
-    },
-    "harness_image": {
-      "description": "The harness image this plan was compiled for, as a full reference by content digest and never by tag, so a task keeps grading on the image it was published with. The forge repo tells the CI to run exactly this image.",
-      "$ref": "#/$defs/image"
-    },
-    "tests": {
-      "description": "Every test of the task, by id, <group>/<test>: groups in name order and tests in natural order within each (2 before 10), so the list depends on the folders alone. The harness grades every test, and result.json has one row per entry in this order.",
-      "type": "array",
-      "minItems": 1,
-      "uniqueItems": true,
-      "items": { "$ref": "#/$defs/test_id" }
-    },
-    "contestant": {
-      "description": "The inputs the contestant gives, as the workflow declares them: what a submit checks submission.json against, with the task's form details in task.yaml, and what the harness checks it against before any step runs. A per_test input gives one file per test.",
-      "type": "object",
-      "propertyNames": { "$ref": "#/$defs/input_id" },
-      "additionalProperties": { "$ref": "#/$defs/contestant_input" }
-    },
-    "steps": {
-      "description": "Run in order, one container each. Every step that runs once comes before every step that runs per test. A step sees another step's outputs only through the references in its inputs, and only when that step's outcome was accepted.",
-      "type": "array",
-      "minItems": 1,
-      "items": { "$ref": "#/$defs/step" }
-    },
-    "report": {
-      "description": "The workflow's report compiled: each name a step and an output, with the bounds the workflow declares for a number. A per-test step's entry is read per test, a once step's once. The harness refuses a reported number that is not finite or lies outside its bounds, compared exactly as written. How a value folds and which way is better are not here: they are meaning, read only by the platform.",
-      "type": "object",
-      "propertyNames": { "$ref": "#/$defs/name" },
-      "additionalProperties": { "$ref": "#/$defs/report_entry" }
+      "enum": [5, 6]
     }
   },
+  "if": { "required": ["schema_version"], "properties": { "schema_version": { "const": 6 } } },
+  "then": { "$ref": "#/$defs/plan_v6" },
+  "else": {
+    "if": { "required": ["schema_version"], "properties": { "schema_version": { "const": 5 } } },
+    "then": { "$ref": "#/$defs/plan_v5" }
+  },
   "$defs": {
+    "plan_v5": {
+      "description": "What the compiler in the forge repo writes at every valid save of a task, as plans/plan.json in the task repo, in the commit its publication points at: the task's workflow with the task's values filled in, flat. Every per-test step is expanded over the task's tests, and folded into one batch step where the primitive takes a batch. Every step carries its primitive image by digest, its limits and its declared outputs; the plan names the harness image by digest; nothing of the task's or the workflow's is resolved at grade time, and the harness fills in only the contestant's values and the secrets. The harness runs the steps in order, one sandboxed container each, and never reads a workflow or a primitive's declaration. The plan carries no test groups, rule weights or show: those are scoring, which the platform does from task.yaml.",
+      "type": "object",
+      "required": ["schema_version", "harness_image", "tests", "contestant", "steps", "report"],
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "description": "The plan shape this file is written against. The harness refuses a version it does not speak, because a compiler that emits a shape the harness reads differently produces a wrong result rather than an error.",
+          "type": "integer",
+          "const": 5
+        },
+        "harness_image": {
+          "description": "The harness image this plan was compiled for, as a full reference by content digest and never by tag, so a task keeps grading on the image it was published with. The forge repo tells the CI to run exactly this image.",
+          "$ref": "#/$defs/image"
+        },
+        "tests": {
+          "description": "Every test of the task, by id, <group>/<test>: groups in name order and tests in natural order within each (2 before 10), so the list depends on the folders alone. The harness grades every test, and result.json has one row per entry in this order.",
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/test_id" }
+        },
+        "contestant": {
+          "description": "The inputs the contestant gives, as the workflow declares them: what a submit checks submission.json against, with the task's form details in task.yaml, and what the harness checks it against before any step runs. A per_test input gives one file per test.",
+          "type": "object",
+          "propertyNames": { "$ref": "#/$defs/input_id" },
+          "additionalProperties": { "$ref": "#/$defs/contestant_input" }
+        },
+        "steps": {
+          "description": "Run in order, one container each. Every step that runs once comes before every step that runs per test. A step sees another step's outputs only through the references in its inputs, and only when that step's outcome was accepted.",
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/step" }
+        },
+        "report": {
+          "description": "The workflow's report compiled: each name a step and an output, with the bounds the workflow declares for a number. A per-test step's entry is read per test, a once step's once. The harness refuses a reported number that is not finite or lies outside its bounds, compared exactly as written. How a value folds and which way is better are not here: they are meaning, read only by the platform.",
+          "type": "object",
+          "propertyNames": { "$ref": "#/$defs/name" },
+          "additionalProperties": { "$ref": "#/$defs/report_entry" }
+        }
+      }
+    },
     "image": {
       "description": "A container image by content digest: a registry path, which may carry a port, followed by @sha256: and 64 hex characters.",
       "type": "string",
@@ -305,6 +323,474 @@
       "properties": {
         "step": { "$ref": "#/$defs/step_id" },
         "output": { "$ref": "#/$defs/name" },
+        "at_least": { "$ref": "#/$defs/number" },
+        "at_most": { "$ref": "#/$defs/number" }
+      }
+    },
+    "limits": {
+      "description": "A container's limits, all six.",
+      "type": "object",
+      "required": ["time_ms", "cpu_ms", "memory_mb", "pids", "output_mb", "gpus"],
+      "additionalProperties": false,
+      "properties": {
+        "time_ms": {
+          "description": "Wall clock for the container. It is killed when it passes.",
+          "type": "integer",
+          "minimum": 1
+        },
+        "cpu_ms": {
+          "description": "CPU time any one process in the container may use.",
+          "type": "integer",
+          "minimum": 1
+        },
+        "memory_mb": {
+          "description": "Memory cap for the container, with no swap.",
+          "type": "integer",
+          "minimum": 1
+        },
+        "pids": {
+          "description": "Process limit, what stops a fork bomb.",
+          "type": "integer",
+          "minimum": 1
+        },
+        "output_mb": {
+          "description": "How much one run may write: the largest file, and for a batch the total under out/ divided by the number of items.",
+          "type": "integer",
+          "minimum": 1
+        },
+        "gpus": {
+          "description": "GPU devices the container is given.",
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "plan_v6": {
+      "description": "A run task's plan: its runs, each workflow step bound to the task's values and placed by how often it runs, and the Woodpecker steps of each pipeline. Nothing of the task's or the workflow's is resolved at grade time: the forge fills in only the entrant's values, and every file is pinned by path, size and hash.",
+      "type": "object",
+      "required": ["schema_version", "workflow", "task_files", "entrant", "runs", "steps", "pipelines", "reports", "notes", "confirmations"],
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "description": "A run task's plan, which the forge reads; the harness speaks only 5 and refuses it.",
+          "type": "integer",
+          "const": 6
+        },
+        "workflow": {
+          "description": "The run workflow the task names, pinned: the reference the task wrote, the forge's own id for it, and the commit its version stood at when the task was saved, which every read of its files at grade time is pinned to.",
+          "type": "object",
+          "required": ["ref", "id", "commit", "files"],
+          "additionalProperties": false,
+          "properties": {
+            "ref": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*/[A-Za-z0-9][A-Za-z0-9_.-]*@[A-Za-z0-9][A-Za-z0-9._-]*$"
+            },
+            "id": { "type": "string", "minLength": 1 },
+            "commit": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{40}([0-9a-f]{24})?$"
+            },
+            "files": {
+              "description": "Each file of the workflow a step is given, a folder's files each by itself, as the commit holds it.",
+              "$ref": "#/$defs/file_facts"
+            }
+          }
+        },
+        "task_files": {
+          "description": "Each file of the publication a step is given, a folder's files each by itself.",
+          "$ref": "#/$defs/file_facts"
+        },
+        "entrant": {
+          "description": "The inputs the entrant gives, each with its type, its options on an enum, the number of parts when it is given once per tuple, and on a file or folder the most it may hold, in bytes.",
+          "type": "object",
+          "propertyNames": { "$ref": "#/$defs/name" },
+          "additionalProperties": { "$ref": "#/$defs/entrant_input" }
+        },
+        "runs": {
+          "description": "Every run, in the order the task's tuples give them: its id, kept across the task's versions; its key, each repeated input's value, a part where the entrant fills it; and whether it is early, read by what is shown during the contest.",
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "object",
+            "required": ["id", "key", "early"],
+            "additionalProperties": false,
+            "properties": {
+              "id": { "$ref": "#/$defs/run_id" },
+              "key": {
+                "type": "object",
+                "propertyNames": { "$ref": "#/$defs/name" },
+                "additionalProperties": { "$ref": "#/$defs/key_value" }
+              },
+              "early": { "type": "boolean" }
+            }
+          }
+        },
+        "steps": {
+          "description": "Each workflow step by its id, bound to the task's values.",
+          "type": "object",
+          "propertyNames": { "$ref": "#/$defs/step_id" },
+          "additionalProperties": { "$ref": "#/$defs/run_step" }
+        },
+        "pipelines": {
+          "description": "The Woodpecker steps of each pipeline: save, the steps done when the task is saved; early, the steps done once per grading that an early run reads and every early run; late, every other step and run, started only once the early pipeline has finished. A pipeline with no step is left out.",
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": false,
+          "properties": {
+            "save": { "$ref": "#/$defs/pipeline" },
+            "early": { "$ref": "#/$defs/pipeline" },
+            "late": { "$ref": "#/$defs/pipeline" }
+          }
+        },
+        "reports": {
+          "description": "The workflow's reports: each name a step and an output, with the bounds of a number where known.",
+          "type": "object",
+          "propertyNames": { "$ref": "#/$defs/name" },
+          "additionalProperties": { "$ref": "#/$defs/run_report" }
+        },
+        "notes": {
+          "description": "What the save says of the task beside publishing it.",
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "confirmations": {
+          "description": "Every column the entrant could set under this version, with the entrant inputs that let them, sorted, whether or not this save asked the organiser to confirm it: the save asks only when the columns or their inputs change.",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["column", "inputs"],
+            "additionalProperties": false,
+            "properties": {
+              "column": { "$ref": "#/$defs/name" },
+              "inputs": {
+                "type": "array",
+                "minItems": 1,
+                "uniqueItems": true,
+                "items": { "$ref": "#/$defs/name" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "run_id": {
+      "description": "A run's opaque id, kept with its key across the task's versions.",
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]+$"
+    },
+    "key_value": {
+      "description": "One repeated input's value in a run's key: a scalar, a file or folder of the task by path, or the part of an entrant input the run reads.",
+      "oneOf": [
+        { "type": ["string", "number", "boolean"] },
+        {
+          "type": "object",
+          "required": ["part"],
+          "additionalProperties": false,
+          "properties": { "part": { "type": "integer", "minimum": 1 } }
+        }
+      ]
+    },
+    "file_facts": {
+      "type": "object",
+      "propertyNames": { "$ref": "#/$defs/path" },
+      "additionalProperties": {
+        "type": "object",
+        "required": ["size", "sha256"],
+        "additionalProperties": false,
+        "properties": {
+          "size": {
+            "description": "The file's size in bytes, an upload's own and not its pointer's.",
+            "type": "integer",
+            "minimum": 0
+          },
+          "sha256": {
+            "description": "The SHA-256 of what the file holds, an upload's from its pointer, any other file's from its content, which a step checks every file it is given against.",
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          }
+        }
+      }
+    },
+    "entrant_input": {
+      "type": "object",
+      "required": ["type"],
+      "additionalProperties": false,
+      "properties": {
+        "type": { "$ref": "#/$defs/type" },
+        "options": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "parts": { "type": "integer", "minimum": 1 },
+        "max_size": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "run_step": {
+      "description": "One workflow step bound to the task's values. A step done once has its inputs; a step done once per run has an item per run, by the run's id.",
+      "type": "object",
+      "required": ["class", "primitive", "image", "network", "cache", "outputs"],
+      "additionalProperties": false,
+      "properties": {
+        "class": {
+          "description": "How often the step runs, from what it reads directly or through earlier steps: at the save once, or once per run, when it reads nothing of the entrant's; once per grading, or once per run of a grading, when it does.",
+          "type": "string",
+          "enum": ["save_once", "save_per_run", "grading_once", "grading_per_run"]
+        },
+        "primitive": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9_-]*/[a-z0-9][a-z0-9_-]*@[A-Za-z0-9][A-Za-z0-9._-]*$"
+        },
+        "image": { "$ref": "#/$defs/image" },
+        "network": { "type": "boolean" },
+        "cache": {
+          "description": "Whether the primitive takes the org's cache of task files.",
+          "type": "boolean"
+        },
+        "boxes": {
+          "description": "The isolate boxes one item uses at once, for a primitive that runs its programs in boxes: one for exec, one per program for interact.",
+          "type": "integer",
+          "minimum": 1
+        },
+        "outputs": {
+          "description": "The step's outputs with their types, a manifest's reports and each program's among them, a ? after the name of one that may be missing.",
+          "type": "object",
+          "required": ["outcome"],
+          "propertyNames": { "pattern": "^[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)?\\??$" },
+          "properties": {
+            "outcome": { "const": "outcome" }
+          },
+          "additionalProperties": {
+            "type": "string",
+            "enum": ["text", "number", "boolean", "enum", "file", "folder"]
+          }
+        },
+        "folders": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/name" }
+        },
+        "self_reported": {
+          "description": "The entrant's code chooses what the step's program given a manifest reports, so its reports are the entrant's own.",
+          "const": true
+        },
+        "tainted": { "$ref": "#/$defs/taint" },
+        "inputs": { "$ref": "#/$defs/run_inputs" },
+        "items": {
+          "type": "object",
+          "minProperties": 1,
+          "propertyNames": { "$ref": "#/$defs/run_id" },
+          "additionalProperties": {
+            "type": "object",
+            "required": ["inputs"],
+            "additionalProperties": false,
+            "properties": {
+              "inputs": { "$ref": "#/$defs/run_inputs" },
+              "tainted": { "$ref": "#/$defs/taint" }
+            }
+          }
+        }
+      },
+      "if": {
+        "properties": { "class": { "enum": ["save_once", "grading_once"] } }
+      },
+      "then": {
+        "required": ["inputs"],
+        "not": { "required": ["items"] }
+      },
+      "else": {
+        "required": ["items"],
+        "not": { "anyOf": [{ "required": ["inputs"] }, { "required": ["tainted"] }] }
+      }
+    },
+    "taint": {
+      "description": "Why a step sees what entrants are not shown during the contest: it runs the entrant's code beside such a file of the task or the workflow, or it reads a step that does.",
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["beside"],
+          "additionalProperties": false,
+          "properties": {
+            "beside": { "oneOf": [{ "$ref": "#/$defs/task_value" }, { "$ref": "#/$defs/workflow_value" }] }
+          }
+        },
+        {
+          "type": "object",
+          "required": ["reads"],
+          "additionalProperties": false,
+          "properties": { "reads": { "$ref": "#/$defs/step_id" } }
+        }
+      ]
+    },
+    "run_inputs": {
+      "type": "object",
+      "propertyNames": { "$ref": "#/$defs/name" },
+      "additionalProperties": { "$ref": "#/$defs/run_value" }
+    },
+    "run_value": {
+      "description": "Exactly one of: a literal, with the task's scalars written in; a file or folder of the task, or of the workflow at its commit; an entrant input, or one part of it; a secret by name; an output of an earlier step; text with the entrant's scalars written in; named files; a step's programs, each with its own inputs; the links between them.",
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["value"],
+          "additionalProperties": false,
+          "properties": { "value": { "type": ["string", "number", "boolean"] } }
+        },
+        { "$ref": "#/$defs/task_value" },
+        { "$ref": "#/$defs/workflow_value" },
+        { "$ref": "#/$defs/entrant_value" },
+        {
+          "type": "object",
+          "required": ["secret"],
+          "additionalProperties": false,
+          "properties": {
+            "secret": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$" }
+          }
+        },
+        { "$ref": "#/$defs/output_value" },
+        {
+          "type": "object",
+          "required": ["template", "parts"],
+          "additionalProperties": false,
+          "properties": {
+            "template": {
+              "description": "Text with {0}, {1}, ... where the parts go, in order; a literal brace is written twice.",
+              "type": "string"
+            },
+            "parts": {
+              "type": "array",
+              "minItems": 1,
+              "items": { "$ref": "#/$defs/entrant_value" }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": ["files"],
+          "additionalProperties": false,
+          "properties": {
+            "files": {
+              "type": "object",
+              "propertyNames": { "pattern": "^[A-Za-z0-9_][A-Za-z0-9_.-]{0,254}$" },
+              "additionalProperties": {
+                "oneOf": [
+                  { "$ref": "#/$defs/task_value" },
+                  { "$ref": "#/$defs/workflow_value" },
+                  { "$ref": "#/$defs/entrant_value" },
+                  { "$ref": "#/$defs/output_value" }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": ["programs"],
+          "additionalProperties": false,
+          "properties": {
+            "programs": {
+              "type": "object",
+              "minProperties": 1,
+              "maxProperties": 8,
+              "propertyNames": { "pattern": "^[a-z][a-z0-9_]{0,63}$" },
+              "additionalProperties": { "$ref": "#/$defs/run_inputs" }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": ["links"],
+          "additionalProperties": false,
+          "properties": {
+            "links": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9_]{0,63} -> [a-z][a-z0-9_]{0,63}$"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "task_value": {
+      "type": "object",
+      "required": ["task"],
+      "additionalProperties": false,
+      "properties": { "task": { "$ref": "#/$defs/path" } }
+    },
+    "workflow_value": {
+      "type": "object",
+      "required": ["workflow"],
+      "additionalProperties": false,
+      "properties": { "workflow": { "$ref": "#/$defs/path" } }
+    },
+    "entrant_value": {
+      "type": "object",
+      "required": ["entrant"],
+      "additionalProperties": false,
+      "properties": {
+        "entrant": { "$ref": "#/$defs/name" },
+        "part": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "output_value": {
+      "type": "object",
+      "required": ["step", "output"],
+      "additionalProperties": false,
+      "properties": {
+        "step": { "$ref": "#/$defs/step_id" },
+        "output": {
+          "description": "The output's name, <program>.<output> for one program's.",
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)?$"
+        }
+      }
+    },
+    "pipeline": {
+      "description": "The pipeline's Woodpecker steps in the order the workflow gives its steps: one per workflow step done once, one per workflow step of a primitive that takes a batch holding the pipeline's runs of it in run order, and one per run of any other step done per run.",
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["name", "step", "depends_on", "limits"],
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "description": "The Woodpecker step's name: the workflow step's id, or <step>.<run> for one run of a step that takes no batch.",
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9_-]*(\\.[A-Za-z0-9_-]+)?$"
+          },
+          "step": { "$ref": "#/$defs/step_id" },
+          "runs": {
+            "description": "The runs it holds, by id, in run order; none for a step done once.",
+            "type": "array",
+            "minItems": 1,
+            "uniqueItems": true,
+            "items": { "$ref": "#/$defs/run_id" }
+          },
+          "depends_on": {
+            "description": "The Woodpecker steps of the same pipeline holding what this one reads, from the wiring.",
+            "type": "array",
+            "uniqueItems": true,
+            "items": { "type": "string" }
+          },
+          "limits": {
+            "description": "The container's limits: time_ms and cpu_ms summed over its runs, the others the most of any run, memory with room for the files it copies into its boxes.",
+            "$ref": "#/$defs/limits"
+          }
+        }
+      }
+    },
+    "run_report": {
+      "type": "object",
+      "required": ["step", "output"],
+      "additionalProperties": false,
+      "properties": {
+        "step": { "$ref": "#/$defs/step_id" },
+        "output": { "type": "string", "pattern": "^[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)?$" },
         "at_least": { "$ref": "#/$defs/number" },
         "at_most": { "$ref": "#/$defs/number" }
       }

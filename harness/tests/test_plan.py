@@ -62,6 +62,11 @@ def test_a_plan_of_another_version_is_refused() -> None:
     assert "schema_version 4" in _refusal(plan)
 
 
+def test_a_run_tasks_plan_is_the_forges_and_refused() -> None:
+    document = exact.loads((EXAMPLES / "plan-v6.json").read_bytes())
+    assert "schema_version 6" in _refusal(document)
+
+
 def test_a_plan_with_a_stage_is_refused() -> None:
     plan = classic_plan(TESTS)
     plan["stage"] = "default"

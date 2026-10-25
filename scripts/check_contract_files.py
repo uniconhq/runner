@@ -32,7 +32,7 @@ EXAMPLES = REPO_ROOT / "examples"
 OWN_VERSIONS = {"job": 1}
 
 CONTRACTS: dict[str, list[tuple[str, str | None]]] = {
-    "plan": [("plan.json", None)],
+    "plan": [("plan.json", "plan_v5"), ("plan-v6.json", "plan_v6")],
     "envelope": [("envelope.json", None)],
     "job": [("job.json", None), ("job-once.json", None)],
     "result": [("result.json", None)],
