@@ -1,0 +1,41 @@
+{
+  "schema_version": 6,
+  "batch": [
+    {
+      "run": "g4Tz1",
+      "inputs": {
+        "programs": {
+          "programs": {
+            "entrant": {
+              "program": {
+                "file": "in/1/program"
+              },
+              "time_limit": 1,
+              "memory_limit": 256
+            },
+            "judge": {
+              "program": {
+                "file": "in/2/program"
+              },
+              "files": {
+                "files": {
+                  "input": {
+                    "file": "in/3/input"
+                  }
+                }
+              },
+              "args": "--rounds 10",
+              "manifest": {
+                "file": "in/4/manifest.json"
+              },
+              "time_limit": 3,
+              "memory_limit": 256,
+              "stops_others": true
+            }
+          }
+        },
+        "links": ["entrant -> judge", "judge -> entrant"]
+      }
+    }
+  ]
+}

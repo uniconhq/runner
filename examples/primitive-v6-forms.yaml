@@ -1,0 +1,46 @@
+image: ghcr.io/uniconhq/primitive-exec@sha256:3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2b
+title: Run programs
+description: Runs one program, or several linked by pipes, under limits, and records how each ended.
+schema_version: 6
+batch: true
+network: false
+cache: true
+forms:
+  one:
+    description: Runs a program once under limits and records its output, time and memory.
+    outputs_from: manifest
+    limits: {time_ms: 2000, cpu_ms: 2000, memory_mb: 256, pids: 160, output_mb: 64, gpus: 0}
+    limits_from:
+      time_ms: {input: time_limit, scale: 2000, add: 3000}
+      memory_mb: {input: memory_limit, add: 256}
+    inputs:
+      program: {type: file, runs: true, description: The program to run.}
+      manifest: {type: file, runs: false}
+      time_limit: {type: number}
+      memory_limit: {type: number}
+    outputs:
+      output: {type: file, optional: true}
+      time_ms: {type: number, better: lower, at_least: 0}
+      outcome: {type: outcome}
+  programs:
+    description: Runs programs side by side, linked by pipes, each under its own limits, and records how each one ended.
+    outputs_from: programs
+    limits: {time_ms: 4000, cpu_ms: 4000, memory_mb: 512, pids: 1056, output_mb: 64, gpus: 0}
+    limits_from:
+      time_ms: {max: programs.time_limit, scale: 4000, add: 6000}
+      memory_mb: {sum: programs.memory_limit, add: 512}
+    inputs:
+      programs:
+        type: programs
+        description: The programs to run, by name.
+        inputs:
+          program: {type: file, runs: true}
+          time_limit: {type: number}
+          memory_limit: {type: number}
+          manifest: {type: file, runs: false}
+        outputs:
+          time_ms: {type: number, better: lower, at_least: 0}
+      links: {type: links, optional: true, description: The pipes between the programs.}
+    outputs:
+      facts: {type: file, optional: true}
+      outcome: {type: outcome}

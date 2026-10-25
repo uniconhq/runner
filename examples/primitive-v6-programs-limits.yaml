@@ -1,0 +1,28 @@
+# Each limit from the other of sum and max than in primitive-v6-programs.yaml,
+# so that between them the two exercise every field of limits_from.
+image: ghcr.io/uniconhq/primitive-exec@sha256:4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c
+schema_version: 6
+limits: {time_ms: 4000, cpu_ms: 4000, memory_mb: 512, pids: 1056, output_mb: 64, gpus: 0}
+limits_from:
+  time_ms: {sum: programs.time_limit, scale: 2000, add: 1000}
+  cpu_ms: {sum: programs.time_limit}
+  memory_mb: {max: programs.memory_limit, scale: 8}
+  pids: {max: programs.processes, scale: 8, add: 32}
+  output_mb: {max: programs.output_limit, scale: 8}
+  gpus: {sum: programs.gpus}
+outputs_from: programs
+inputs:
+  programs:
+    type: programs
+    inputs:
+      program: {type: file, runs: true}
+      time_limit: {type: number}
+      memory_limit: {type: number}
+      processes: {type: number}
+      output_limit: {type: number}
+      gpus: {type: number}
+      manifest: {type: file, runs: false, optional: true}
+    outputs:
+      time_ms: {type: number}
+outputs:
+  outcome: {type: outcome}

@@ -1,0 +1,48 @@
+{
+  "schema_version": 6,
+  "batch": [
+    {
+      "run": "r7Kq2",
+      "inputs": {
+        "program": {
+          "file": "in/1/program"
+        },
+        "stdin": {
+          "file": "in/2/stdin"
+        },
+        "files": {
+          "files": {
+            "grid.txt": {
+              "file": "in/3/grid.txt"
+            }
+          }
+        },
+        "time_limit": 2,
+        "memory_limit": 256
+      }
+    },
+    {
+      "run": "r7Kq3",
+      "inputs": {
+        "program": {
+          "file": "in/4/program"
+        },
+        "manifest": {
+          "file": "in/5/program.yaml"
+        },
+        "files": {
+          "files": {
+            "output": {
+              "file": "in/6/output"
+            },
+            "answer": {
+              "file": "in/7/answer"
+            }
+          }
+        },
+        "time_limit": 2,
+        "memory_limit": 256
+      }
+    }
+  ]
+}

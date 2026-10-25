@@ -1,0 +1,25 @@
+{
+  "schema_version": 6,
+  "batch": [
+    {
+      "run": "g4Tz1",
+      "outputs": {
+        "entrant.time_ms": 1000,
+        "entrant.memory_kb": 5120,
+        "entrant.ended": "time_limit",
+        "entrant.ended_at": 3004,
+        "entrant.stopped_by": "wall_clock",
+        "judge.time_ms": 2,
+        "judge.memory_kb": 4096,
+        "judge.ended": "runtime_error",
+        "judge.signal": "SIGKILL",
+        "judge.ended_at": 3010,
+        "judge.stopped_by": "entrant",
+        "facts": {
+          "file": "out/1/facts.json"
+        },
+        "outcome": "accepted"
+      }
+    }
+  ]
+}

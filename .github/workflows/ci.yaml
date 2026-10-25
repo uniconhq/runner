@@ -9,7 +9,7 @@ permissions:
   contents: read
 
 jobs:
-  harness:
+  checks:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -26,16 +26,15 @@ jobs:
       - run: uv run pytest
       # A schema change that forgets the examples is caught here, not at a grading.
       - run: uv run python scripts/check_contract_files.py
-      # The harness, worker and socket-filter images share one base by digest.
+      # The worker and primitive-base images share one base by digest.
       - name: The python base is one digest
         run: |
           found="$(grep -h '^FROM python' images/*/Dockerfile | cut -d' ' -f2 | sort -u)"
           echo "$found"
           test "$(echo "$found" | wc -l)" -eq 1
 
-  # The harness and the socket filter against a real daemon: a whole grading
-  # run through the filter, the escape checks, cross-run isolation and the
-  # reaper. The tests build the images they need.
+  # The step wrapper in primitive-base against a real daemon. The tests
+  # build the images they need.
   docker:
     runs-on: ubuntu-latest
     steps:
@@ -48,36 +47,14 @@ jobs:
           enable-cache: true
       - run: uv sync --locked
       - run: docker version
-      - run: uv run pytest -m docker --ignore=harness/tests/test_escape.py
-
-  # The escape fixtures: a C program that tries every way out of a grading
-  # step, run through sandbox-run, as the container's own process under the
-  # harness's flags, and with each flag taken away in turn
-  # (harness/tests/test_escape.py). sandbox-run refuses to run anything
-  # without Landlock, so the kernel's security modules are printed first.
-  escape:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
-        with:
-          version: "0.12.13"
-          enable-cache: true
-      - run: uv sync --locked
-      - name: The kernel and its security modules
-        run: |
-          uname -r
-          sudo cat /sys/kernel/security/lsm
-      - run: uv run pytest -m docker harness/tests/test_escape.py
+      - run: uv run pytest -m docker
 
   image:
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        name: [harness, worker, clone, socket-filter]
+        name: [worker, primitive-base]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -91,51 +68,6 @@ jobs:
           load: true
           tags: unicon-${{ matrix.name }}:ci
 
-      # Run the harness the way the CI does, with nothing set: exit 2, and the
-      # code first on stderr.
-      - name: The harness refuses an empty environment
-        if: matrix.name == 'harness'
-        run: |
-          set +e
-          stderr="$(docker run --rm unicon-harness:ci 2>&1 >/dev/null)"
-          status=$?
-          set -e
-          echo "$stderr"
-          if [ "$status" -ne 2 ]; then
-            echo "expected exit 2, got $status"
-            exit 1
-          fi
-          case "$stderr" in
-            "unicon-harness: missing_environment:"*) ;;
-            *) echo "expected a missing_environment line"; exit 1 ;;
-          esac
-
-      # Started without its image list the filter refuses to start.
-      - name: The socket filter refuses to start without its image list
-        if: matrix.name == 'socket-filter'
-        run: |
-          set +e
-          stderr="$(docker run --rm unicon-socket-filter:ci 2>&1 >/dev/null)"
-          status=$?
-          set -e
-          echo "$stderr"
-          if [ "$status" -ne 2 ]; then
-            echo "expected exit 2, got $status"
-            exit 1
-          fi
-          case "$stderr" in
-            "unicon-socket-filter: missing_environment:"*) ;;
-            *) echo "expected a missing_environment line"; exit 1 ;;
-          esac
-
-      # The clone image is plugin-git with one line of system git config.
-      - name: The clone image keeps big files in /lfs-cache
-        if: matrix.name == 'clone'
-        run: |
-          found="$(docker run --rm --entrypoint git unicon-clone:ci config --system lfs.storage)"
-          echo "lfs.storage=$found"
-          test "$found" = "/lfs-cache"
-
       # The worker carries a placeholder that names the image and exits 0.
       - name: The placeholder runs
         if: matrix.name == 'worker'
@@ -146,3 +78,28 @@ jobs:
             "unicon-worker: placeholder"*) ;;
             *) echo "expected the placeholder line"; exit 1 ;;
           esac
+
+      # With no data link the wrapper runs the image's command in its own
+      # place, so a primitive started directly behaves as before it.
+      - name: The wrapper runs its command without a data link
+        if: matrix.name == 'primitive-base'
+        run: |
+          output="$(docker run --rm unicon-primitive-base:ci echo passed through)"
+          echo "$output"
+          test "$output" = "passed through"
+
+  workflows:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        with:
+          version: "0.12.13"
+      - name: zizmor
+        run: uvx zizmor@1.31.1 --offline --format github .github/workflows
+      - name: actionlint
+        run: docker run --rm -v "$PWD:/repo" -w /repo rhysd/actionlint:1.7.12@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667 -color
