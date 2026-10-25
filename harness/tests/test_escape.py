@@ -8,18 +8,23 @@ each time in a container made from exactly the body the harness sends
 
 1. through the run primitive, sandbox-run or exec, as a contestant's program
    is run: one batch, one item per attack. Every attack is refused. Against
-   exec, which speaks contract 6, the batch also holds the attacks exec
-   itself refuses: an internet socket and an io_uring ring, refused again
-   with the container's network left on, and a System V segment and an
-   attribute on the program left for the next item.
+   exec, which speaks contract 6, the batch also holds the attacks exec's
+   isolate boxes refuse: a connection out and an io_uring ring, refused
+   again with the container's network and process limit left off, and a
+   System V segment and an attribute on the program left for the next item.
+   exec's container is changed to the shape its step runs in (phase 4.1),
+   which the harness does not make: privileged, as root, its root writable,
+   given its box users, and on root Docker started through primitive-exec's
+   `tests/userns.py`, since exec refuses to start as the machine's own root.
 2. as the container's own process, without the primitive in front, so the
    container's protections are tested alone. Every attack is refused except
    what belongs to the step: its own `/work`, which it may write and read.
 3. as the container's own process with one protection taken away at a time.
    Each removal lets a named attack through; if one ever does not, the
    protection is no longer covered and the fixture set is missing a case.
-   exec's own protections, its seccomp filter and its System V sweep, are
-   taken away in an image made from exec's with that one part left out.
+   exec's own protections, isolate's settings for its boxes, are taken
+   away in an image made from exec's with that one setting changed: the
+   box's network namespace, its process limit and a fresh box per item.
 4. through interact, when INTERACT_IMAGE names one, as the entrant of a
    partner that holds a hidden file: the entrant reaches none of it.
 
@@ -27,7 +32,7 @@ The primitives are the released images by digest, the ones the platform's
 image manifest pins; COMPILE_IMAGE and EXEC_IMAGE (or SANDBOX_RUN_IMAGE)
 name others, which is how a primitive's own CI runs these against the image
 it just built. EXEC_SOURCE names a primitive-exec checkout, or one beside
-this repo is used, to build the image without the filter. The fixtures speak
+this repo is used, for its `tests/userns.py`. The fixtures speak
 the contract the image speaks: each image is asked in contract version 6
 first, then 5, and one that answers with an error about the contract
 version is asked again in the next, down to version 4, the version the
@@ -39,8 +44,8 @@ compile's `source` is a folder holding the one file; in 4 an item is keyed
 the path the primitive reports. The inputs.json
 files are written here, not by the harness: the escape fixtures test the
 container the harness builds, not the files it writes.
-sandbox-run and exec refuse to run anything on a kernel without Landlock, so
-on such a kernel the first test fails rather than passing on nothing. Run with
+sandbox-run refuses to run anything on a kernel without Landlock, so on such
+a kernel the first test fails rather than passing on nothing. Run with
 `pytest -m docker harness/tests/test_escape.py`; it needs the daemon's unix
 socket on this machine (DOCKER_HOST, or /var/run/docker.sock).
 """
@@ -80,14 +85,18 @@ RUN_IMAGE = (
     )
 )
 """The run primitive: primitive-sandbox-run v1.3.0, unless exec is named."""
+RUN_IS_EXEC = bool(os.environ.get("EXEC_IMAGE"))
+"""Whether the run primitive is exec, whose container is made privileged."""
 INTERACT_IMAGE = os.environ.get("INTERACT_IMAGE", "")
 """interact, which has no release to pin yet; its test is skipped without."""
 EXEC_SOURCE = Path(
     os.environ.get("EXEC_SOURCE")
     or Path(__file__).resolve().parents[3] / "primitive-exec"
 )
-"""A primitive-exec checkout, whose `sandbox-exec.c` is built without its
-filter for the removal that shows the filter matters."""
+"""A primitive-exec checkout, whose `tests/userns.py` starts exec on root
+Docker."""
+EXEC_BOX_USERS = "60000-60009"
+"""The box users exec's step is given, as the phase 4.8 wrapper will."""
 
 SOURCE = (Path(__file__).parent / "escape" / "escape.c").read_text(encoding="utf-8")
 MOUNT = Path("/w")
@@ -105,6 +114,16 @@ DISK_MEMORY_MB = 300
 sandbox-run counts a run's files in its directory, which is on that tmpfs,
 as memory, so under the other attacks' 64 MB it would be stopped for memory
 before it could show the directory is bounded by the tmpfs."""
+FORK_MEMORY_MB = 360
+"""The fork attack's own memory limit: an exec box counts its processes'
+kernel memory, about 100 KB each (304 MB for 3,000 on the phase 4.1
+machine), so with its process limit taken away the fixture's would be
+stopped for memory under 64 MB before they showed it."""
+MEMORY_MB = {"disk": DISK_MEMORY_MB, "files": DISK_MEMORY_MB, "fork": FORK_MEMORY_MB}
+"""The attacks with a memory limit of their own; the others have 64 MB. The
+files attack's one big file goes to `/tmp` in an exec box, whose pages count
+against the box's memory, so under 64 MB the run would be stopped for memory
+before the file size limit showed, and before its later checks."""
 DIRECT_SECONDS = 20.0
 """How long a run of the fixture alone may take before the test, standing in
 for the harness's wall clock, kills it."""
@@ -127,16 +146,26 @@ before trying anything does not pass as refused. The resource attacks that
 print nothing are judged by their outcome."""
 
 EXEC_ATTACKS = {
-    "sockets": {"inet-socket", "inet6-socket", "io-uring"},
+    "sockets": {
+        "inet-lookup",
+        "inet-connect",
+        "inet-route",
+        "inet6-connect",
+        "io-uring",
+    },
     "leave-sysv": {"sysv-made"},
     "find-sysv": {"sysv-left"},
+    "stdin": {"write-stdin"},
     "mark": {"mark"},
     "read-mark": {"mark-left"},
 }
-"""The attacks exec refuses itself, from contract 6: its seccomp filter
-refuses the sockets and the ring, and what one item leaves, a System V
-segment or an attribute on the program, is gone for the next, which runs
-right after it. The container alone does not refuse them: they are exec's."""
+"""The attacks exec's boxes refuse, from contract 6: a box has a network
+namespace of its own, so no connection goes out, isolate's filter refuses
+the ring, the box cannot write its input by opening it again through
+`/proc/self/fd/0`, whatever the input's mode, and what one item leaves, a
+System V segment or an attribute on the program, is gone for the next,
+which runs right after it in a fresh box. The container alone does not
+refuse them all: they are exec's."""
 
 PARTNER_CHECKS = {
     "partner-secret",
@@ -163,6 +192,25 @@ STEPS_OWN = {
 }
 """What a container without sandbox-run may do: `/work` is the step's own.
 Through sandbox-run, Landlock keeps a contestant's program out of it."""
+
+BOXES_OWN = {"write-dev-shm", "capability-bounding-set"}
+"""What a program in an exec box may do: write the box's own `/dev/shm`, a
+tmpfs isolate makes for each run, as it does `/tmp`, whose pages count
+against the box's memory; and keep the full bounding set isolate leaves it,
+which gives it nothing, since isolate sets `no_new_privs` on every box, so
+no program it starts gains a capability."""
+
+
+def machines_own() -> set[str]:
+    """What a program in an exec box may do where the machine allows it:
+    make a BPF map, where `kernel.unprivileged_bpf_disabled` is 0, as in
+    Docker Desktop's VM. isolate's filter does not refuse `bpf`, and the
+    privileged container has no seccomp profile, so the machine's setting
+    decides; Ubuntu's default, 2, refuses it."""
+    setting = docker(
+        "run", "--rm", PYTHON, "cat", "/proc/sys/kernel/unprivileged_bpf_disabled"
+    )
+    return {"bpf"} if setting.strip() == "0" else set()
 
 
 @dataclass(frozen=True)
@@ -303,50 +351,107 @@ CPU share, the mounts and the log's size, `Init: false`, which only
 differs from leaving it out on a daemon configured to add an init, and the
 private cgroup namespace, which is for measuring memory)."""
 
-NO_FILTER = """\
-FROM {compile} AS helper
-USER 0
-COPY sandbox-exec.c /src/
-RUN grep -q 'install_filter() != 0' /src/sandbox-exec.c \\
-    && sed -i 's/install_filter() != 0/0/' /src/sandbox-exec.c \\
-    && gcc -O2 -static -o /sandbox-exec /src/sandbox-exec.c
-FROM {image}
-COPY --from=helper --chmod=0755 /sandbox-exec /usr/local/bin/sandbox-exec
-"""
-"""exec's image with a `sandbox-exec` that installs no seccomp filter, built
-from exec's source with the compile image's static C toolchain."""
 
-NO_SWEEP = """\
-FROM {image}
-USER 0
-RUN python3 -c "import pathlib; p = pathlib.Path('/usr/local/bin/exec'); \\
-t = p.read_text(); a = 'def sweep_sysv() -> None:\\n'; assert t.count(a) == 1; \\
-p.write_text(t.replace(a, a + '    return\\n'))"
-USER 65532:65532
-"""
-"""exec's image with a System V sweep that removes nothing."""
+def without_pids_or_network(body: dict[str, Any]) -> None:
+    without_network(body)
+    without_pids(body)
 
-NO_CLEAR = """\
+
+def as_exec_runs(body: dict[str, Any]) -> None:
+    """The harness's body changed to the shape exec's step runs in, which
+    phase 4.8 gives the harness: privileged, as root, its root writable, and
+    given its box users. A privileged container has no seccomp profile, and
+    the daemon refuses to start one named `seccomp=builtin`. On root Docker,
+    where a privileged container's root is the machine's and exec refuses to
+    start, exec is started in a user namespace of its own by primitive-exec's
+    `tests/userns.py`.
+    """
+    host = body["HostConfig"]
+    host["Privileged"] = True
+    body["User"] = "0:0"
+    del host["ReadonlyRootfs"]
+    del host["CapDrop"]
+    host["SecurityOpt"].remove("seccomp=builtin")
+    body["Env"] = [*body["Env"], f"UNICON_BOX_USERS={EXEC_BOX_USERS}"]
+    if "rootless" not in docker("info", "--format", "{{json .SecurityOptions}}"):
+        userns = EXEC_SOURCE / "tests" / "userns.py"
+        if not userns.is_file():
+            pytest.skip(f"no primitive-exec checkout at {EXEC_SOURCE}; set EXEC_SOURCE")
+        host["Mounts"] = [
+            *host["Mounts"],
+            {
+                "Type": "bind",
+                "Source": str(userns),
+                "Target": "/userns.py",
+                "ReadOnly": True,
+            },
+        ]
+        body["Entrypoint"] = ["python3", "/userns.py", "/usr/local/bin/exec"]
+
+
+CHANGED_EXEC = """\
 FROM {image}
-USER 0
-RUN python3 -c "import pathlib; p = pathlib.Path('/usr/local/bin/exec'); \\
-t = p.read_text(); a = 'def clear_attributes(top: Path) -> None:\\n'; \\
-assert t.count(a) == 1; p.write_text(t.replace(a, a + '    return\\n'))"
-USER 65532:65532
+COPY changes.json /changes.json
+RUN python3 -c "import functools, json, pathlib; \\
+p = pathlib.Path('/usr/local/bin/exec'); t = p.read_text(); \\
+c = json.loads(pathlib.Path('/changes.json').read_text()); \\
+assert all(t.count(old) == 1 for old, _ in c), c; \\
+p.write_text(functools.reduce(lambda s, r: s.replace(*r), c, t))" \\
+    && rm /changes.json
 """
-"""exec's image that removes no extended attribute after a run."""
+"""exec's image with `changes.json`'s replacements made in its program, each
+of a text found there exactly once."""
+
+SHARE_NET = (
+    (
+        '        f"--dir=dev={BOX_DEV}:dev",\n',
+        '        "--share-net",\n        f"--dir=dev={BOX_DEV}:dev",\n',
+    ),
+)
+"""A box that shares the container's network namespace."""
+NO_PROCESS_LIMIT = (('f"--processes={PROCESS_LIMIT}",', '"--processes",'),)
+"""A box with no process limit: `--processes` with no number."""
+KEPT_BOX = (
+    (
+        "    if folder.is_mount():\n        unmount(folder)\n",
+        "    if folder.is_mount():\n        yield folder\n        return\n",
+    ),
+    (
+        "def close_box(number: int, folder: Path) -> None:\n",
+        "def close_box(number: int, folder: Path) -> None:\n    return\n",
+    ),
+    ("    cwd.mkdir(mode=0o755)\n", "    cwd.mkdir(mode=0o755, exist_ok=True)\n"),
+    (
+        "            (box / name).mkdir()\n",
+        "            (box / name).mkdir(exist_ok=True)\n",
+    ),
+)
+"""One box for the whole batch: made for the first item, then neither
+unmounted nor cleaned, and found still mounted by each item after."""
 
 EXEC_REMOVALS: dict[
-    str, tuple[str, Callable[[dict[str, Any]], None] | None, tuple[str, ...], str]
+    str,
+    tuple[
+        tuple[tuple[str, str], ...],
+        Callable[[dict[str, Any]], None] | None,
+        tuple[str, ...],
+        str,
+    ],
 ] = {
-    "seccomp filter": (NO_FILTER, without_network, ("sockets",), "inet-socket"),
-    "System V sweep": (NO_SWEEP, None, ("leave-sysv", "find-sysv"), "sysv-left"),
-    "attribute clearing": (NO_CLEAR, None, ("mark", "read-mark"), "mark-left"),
+    "network namespace": (
+        SHARE_NET,
+        without_network,
+        ("sockets",),
+        "inet-route",
+    ),
+    "process limit": (NO_PROCESS_LIMIT, without_pids, ("fork",), "fork"),
+    "fresh box": (KEPT_BOX, None, ("mark", "read-mark"), "mark-left"),
 }
-"""REMOVALS' rows for the protections exec gives itself: the image made
-without one, the change to the harness's body the attack needs (the
-network left on, so a socket has somewhere to go), the attacks run as one
-batch, and the check that then escapes."""
+"""REMOVALS' rows for the protections exec gives its boxes: the changes to
+exec's program that take one away, the change to the harness's body the
+attack needs (the network left on, so a box sharing it has a route out;
+no process limit on the container, so only the box's stops a fork bomb),
+the attacks run as one batch, and the check that then escapes."""
 
 
 VERSIONS = (6, 5, 4)
@@ -395,7 +500,7 @@ def batch_inputs(version: int, only: tuple[str, ...] = ()) -> dict[str, Any]:
                     program: {"file": "in/binary"},
                     stdin: {"file": f"in/{attack}"},
                     "time_limit": 1,
-                    "memory_limit": DISK_MEMORY_MB if attack == "disk" else 64,
+                    "memory_limit": MEMORY_MB.get(attack, 64),
                 },
             }
             for attack in (only or attacks(version))
@@ -453,7 +558,7 @@ def another_version(outputs: dict[str, Any]) -> bool:
 
 BATCHES = {
     "batch": (),
-    "network-on": ("network", "sockets"),
+    "container-open": ("network", "sockets", "fork"),
     **{removed: only for removed, (_, _, only, _) in EXEC_REMOVALS.items()},
 }
 """The run primitive's step directories, each with the attacks of its batch:
@@ -504,6 +609,8 @@ class Fixtures:
             volume=self.volume, mount=MOUNT, user=f"{STEP_UID}:{STEP_UID}"
         )
         self._in_volume(f"chown -R {STEP_UID}:{STEP_UID} /v/unicon-steps")
+        # Writable by anyone, so the stdin attack shows exec takes that away.
+        self._in_volume("chmod 0666 /v/unicon-steps/*/in/stdin")
 
     def build(self) -> None:
         code, printed, outputs = self._speaking(COMPILE_IMAGE, "compile")
@@ -522,12 +629,6 @@ class Fixtures:
             + f" && chown {STEP_UID}:{STEP_UID} {' '.join(copies)}"
         )
 
-    def version_of(self, image: str) -> int:
-        """The contract version the run image speaks, asked once."""
-        if "batch" not in self.versions:
-            self._speaking(image, "batch")
-        return self.versions["batch"]
-
     def through_run(
         self,
         name: str = "batch",
@@ -536,10 +637,18 @@ class Fixtures:
     ) -> tuple[dict[str, dict[str, Any]], dict[str, str]]:
         """The run primitive's outputs for batch `name` by attack, and what
         each attack printed, read at the path the primitive reports for it,
-        under the harness's body changed by `change`.
+        under the harness's body, in the shape exec runs in when the run
+        image is exec, changed by `change`.
         """
+
+        def changed(body: dict[str, Any]) -> None:
+            if RUN_IS_EXEC:
+                as_exec_runs(body)
+            if change is not None:
+                change(body)
+
         directory = step_directory(name)
-        code, printed, outputs = self._speaking(image, directory, change)
+        code, printed, outputs = self._speaking(image, directory, changed)
         assert code == 0 and "batch" in outputs, (printed, outputs)
         found = by_attack(outputs, self.versions[directory])
         paths = {attack: item["output"]["file"] for attack, item in found.items()}
@@ -565,17 +674,10 @@ class Fixtures:
     def without(self, removed: str) -> str:
         """exec's image with the protection `removed` left out, built once."""
         if removed not in self.variants:
-            dockerfile, _, _, _ = EXEC_REMOVALS[removed]
-            source = EXEC_SOURCE / "src"
-            needs_source = "sandbox-exec.c" in dockerfile
-            if needs_source and not (source / "sandbox-exec.c").is_file():
-                pytest.skip(
-                    f"no primitive-exec checkout at {EXEC_SOURCE}; set EXEC_SOURCE"
-                )
+            changes, _, _, _ = EXEC_REMOVALS[removed]
             tag = f"unicon-escape-{step_directory(removed)}:{self.made.suffix}"
-            text = dockerfile.format(image=RUN_IMAGE, compile=COMPILE_IMAGE)
-            with tempfile.TemporaryDirectory() as empty:
-                context = source if needs_source else Path(empty)
+            with tempfile.TemporaryDirectory() as context:
+                (Path(context) / "changes.json").write_text(json.dumps(changes))
                 docker(
                     "build",
                     "-q",
@@ -583,8 +685,8 @@ class Fixtures:
                     tag,
                     "-f",
                     "-",
-                    str(context),
-                    stdin=text.encode(),
+                    context,
+                    stdin=CHANGED_EXEC.format(image=RUN_IMAGE).encode(),
                 )
             self.variants[removed] = tag
         return self.variants[removed]
@@ -738,43 +840,53 @@ def test_through_the_run_primitive_every_attack_is_refused(
 ) -> None:
     outputs, printed = fixtures.through_run()
     outcomes = {attack: item["outcome"] for attack, item in outputs.items()}
+    allowed = machines_own() if RUN_IS_EXEC else set()
 
     assert outcomes["memory"] == "memory_limit"
     assert outcomes["spin"] == "time_limit"
     assert outcomes["sleep"] == "time_limit"
     assert outcomes["output"] == "output_limit"
-    for attack, expected in attacks(fixtures.versions["batch"]).items():
+    expected_of = attacks(fixtures.versions["batch"])
+    if RUN_IS_EXEC:
+        # A box's files are its memory, and its tmpfs is no smaller than its
+        # memory limit, so filling the disk ends at that limit.
+        assert outcomes["disk"] == "memory_limit"
+        expected_of["disk"] = set()
+    for attack, expected in expected_of.items():
         checks = checks_of(printed.get(attack, ""))
         escaped = {n for n, (verdict, _) in checks.items() if verdict == "ESCAPED"}
+        if RUN_IS_EXEC:
+            escaped -= BOXES_OWN | allowed
         assert escaped == set(), (attack, {n: checks[n] for n in escaped})
         assert expected <= checks.keys(), (attack, outcomes[attack], sorted(checks))
-    # The mark attack tests something only if the run could set the mark.
+    # The mark attack tests something only if the run could set the mark, on
+    # its own copy of the program.
     if "mark" in printed:
-        assert "mark INFO /work/in/binary: marked" in printed["mark"], printed["mark"]
-    # Landlock keeps the program out of /work: not even the step's own
-    # directory is written.
+        assert "mark INFO /proc/self/exe: marked" in printed["mark"], printed["mark"]
+    # Landlock, or exec's box, keeps the program out of /work: not even the
+    # step's own directory is written.
     files = checks_of(printed["files"])
     assert files["write-work-root"][0] == "REFUSED"
 
 
 @pytest.mark.docker
 @pytest.mark.skipif(not docker_ready(), reason="needs a Docker daemon")
-def test_through_exec_with_the_network_on_no_socket_is_made(
+def test_through_exec_with_the_container_open_its_boxes_hold(
     fixtures: Fixtures,
 ) -> None:
-    """exec's filter, not the container's network, keeps a run off the
-    network: with the network left on, as a Woodpecker step may have it, no
-    internet socket and no ring is made. The interfaces are there to see."""
-    if fixtures.version_of(RUN_IMAGE) < 6:
+    """exec's boxes, not its container, keep a run off the network and its
+    processes down: with the container's network left on, as a Woodpecker
+    step may have it, and its process limit off, no connection goes out, the
+    box sees no interface but its own namespace's, no ring is made and the
+    fork bomb stops. The removals below show the network was on."""
+    if not RUN_IS_EXEC:
         pytest.skip("the run image is not exec")
-    _, printed = fixtures.through_run("network-on", change=without_network)
-    for attack in ("network", "sockets"):
+    _, printed = fixtures.through_run("container-open", change=without_pids_or_network)
+    for attack in ("network", "sockets", "fork"):
         checks = checks_of(printed[attack])
         escaped = {n for n, (verdict, _) in checks.items() if verdict == "ESCAPED"}
-        assert escaped <= {"network-interfaces"}, (attack, checks)
+        assert escaped == set(), (attack, checks)
         assert (ATTACKS | EXEC_ATTACKS)[attack] <= checks.keys(), (attack, checks)
-    interfaces = checks_of(printed["network"])["network-interfaces"]
-    assert interfaces[0] == "ESCAPED", f"the network was not on: {interfaces}"
 
 
 @pytest.mark.docker
@@ -819,18 +931,19 @@ def test_taking_away_one_protection_lets_an_attack_through(
 def test_taking_away_one_of_execs_protections_lets_an_attack_through(
     fixtures: Fixtures, removed: str
 ) -> None:
-    if fixtures.version_of(RUN_IMAGE) < 6:
+    if not RUN_IS_EXEC:
         pytest.skip("the run image is not exec")
     _, change, attacks_run, check = EXEC_REMOVALS[removed]
     image = fixtures.without(removed)
-    _, printed = fixtures.through_run(removed, image=image, change=change)
+    outputs, printed = fixtures.through_run(removed, image=image, change=change)
     escaped = {
         name.rstrip("+")
         for attack in attacks_run
         for name, (verdict, _) in checks_of(printed[attack]).items()
         if verdict == "ESCAPED"
     }
-    assert check in escaped, (removed, printed)
+    outcomes = {attack: item["outcome"] for attack, item in outputs.items()}
+    assert check in escaped, (removed, outcomes, printed)
 
 
 @pytest.mark.docker

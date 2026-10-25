@@ -325,17 +325,45 @@ int main(int argc, char **argv) {
         list_dir("processes", "/proc");
         return 0;
     }
-    // -- what exec keeps from a run: sockets, rings, and marks for the next item
+    // -- what exec keeps from a run: connections out, rings, and marks for
+    // the next item. A box has a network namespace of its own, so a socket
+    // is made, with nowhere to go. The name is looked up first, as it
+    // answers at once where there is a network and a connection may wait.
     if (!strcmp(mode, "sockets")) {
-        int s = socket(AF_INET, SOCK_STREAM, 0);
-        say("inet-socket", s >= 0, "socket(AF_INET): %s", s >= 0 ? "made" : strerror(errno));
-        if (s >= 0) close(s);
-        s = socket(AF_INET6, SOCK_DGRAM, 0);
-        say("inet6-socket", s >= 0, "socket(AF_INET6): %s", s >= 0 ? "made" : strerror(errno));
-        if (s >= 0) close(s);
+        struct addrinfo *res; int found = getaddrinfo("example.com", "443", 0, &res);
+        say("inet-lookup", found == 0, "getaddrinfo example.com: %s", found == 0 ? "resolved" : gai_strerror(found));
+        try_connect("inet-connect", "1.1.1.1", 443);
+        {   // A datagram socket connects where there is a route, sending nothing.
+            int u = socket(AF_INET, SOCK_DGRAM, 0);
+            struct sockaddr_in a = {.sin_family = AF_INET, .sin_port = htons(53)};
+            inet_pton(AF_INET, "1.1.1.1", &a.sin_addr);
+            int r = u >= 0 ? connect(u, (struct sockaddr *)&a, sizeof a) : -1;
+            say("inet-route", r == 0, "a route to 1.1.1.1: %s", r == 0 ? "there is one" : strerror(errno));
+            if (u >= 0) close(u);
+        }
+        int s = socket(AF_INET6, SOCK_STREAM, 0);
+        if (s < 0) say("inet6-connect", 0, "socket(AF_INET6): %s", strerror(errno));
+        else {
+            struct sockaddr_in6 a = {.sin6_family = AF_INET6, .sin6_port = htons(443)};
+            inet_pton(AF_INET6, "2606:4700:4700::1111", &a.sin6_addr);
+            struct timeval tv = {2, 0};
+            setsockopt(s, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof tv);
+            int r = connect(s, (struct sockaddr *)&a, sizeof a);
+            say("inet6-connect", r == 0, "connect [2606:4700:4700::1111]:443: %s", r == 0 ? "connected" : strerror(errno));
+            close(s);
+        }
         char params[120] = {0};
         long r = syscall(425 /* io_uring_setup */, 8, params);
         say("io-uring", r >= 0, "io_uring_setup: %s", r >= 0 ? "ring made" : strerror(errno));
+        return 0;
+    }
+    if (!strcmp(mode, "stdin")) {
+        // The input is handed over open; opened again by path, its own mode
+        // decides, and the fixtures' inputs are writable by anyone.
+        int fd = open("/proc/self/fd/0", O_WRONLY | O_APPEND);
+        int w = fd >= 0 ? (int)write(fd, "x", 1) : -1;
+        say("write-stdin", w == 1, "/proc/self/fd/0: %s", w == 1 ? "appended to the input" : strerror(errno));
+        if (fd >= 0) close(fd);
         return 0;
     }
     if (!strcmp(mode, "leave-sysv")) {
