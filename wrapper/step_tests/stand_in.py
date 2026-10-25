@@ -71,6 +71,9 @@ class StandIn:
     job_code: int = 200
     """What the door answers the job's GET: 204 for nothing to do, or a
     refusal."""
+    raw: dict[str, str] = field(default_factory=dict)
+    """Texts of the job written into its JSON as they are, unquoted, for
+    numbers Python writes only one way."""
 
     @property
     def door(self) -> str:
@@ -186,7 +189,10 @@ class Handler(BaseHTTPRequestHandler):
         elif self.path == "/door" and self.state.job_code != 200:
             self._send(self.state.job_code, {})
         elif self.path == "/door":
-            job = json.dumps(self.state.job).encode()
+            text = json.dumps(self.state.job)
+            for name, written in self.state.raw.items():
+                text = text.replace(json.dumps(name), written)
+            job = text.encode()
             if not self._cut(job):
                 self._send(200, raw=job)
         elif self.path.startswith(("/files/", "/door/files/")):

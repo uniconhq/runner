@@ -321,14 +321,51 @@ def test_a_step_done_per_run_exits_zero_whatever_its_outcomes(
     assert step(source, fail_on_non_accepted=True) == 1
 
 
-def test_a_primitive_that_writes_no_outputs_is_an_error(
+def test_a_primitive_that_writes_no_outputs_is_an_error_naming_how_it_ended(
     step: Step, server: StandIn
 ) -> None:
     assert step("raise SystemExit(3)") == 1
     assert server.outputs() == {
         "schema_version": 6,
-        "error": "the primitive ended and wrote no outputs.json",
+        "error": "the primitive exited with code 3 and wrote no outputs.json",
     }
+
+    assert step("import os, signal; os.kill(os.getpid(), signal.SIGKILL)") == 1
+    assert server.outputs()["error"] == (
+        "the primitive was killed by signal 9 and wrote no outputs.json"
+    )
+
+
+def test_the_inputs_reach_inputs_json_with_each_number_as_written(
+    step: Step, server: StandIn
+) -> None:
+    whole = "9" * 5000
+    server.raw = {
+        "@fraction": "1.0000000000000000001",
+        "@exponent": "1E+2",
+        "@whole": whole,
+    }
+    inputs = {
+        "schema_version": 6,
+        "inputs": {"a": "@fraction", "b": "@exponent", "c": ["@whole", "\u00e9"]},
+    }
+    source = "import os, shutil\nos.makedirs('out')\n"
+    source += "shutil.copy('inputs.json', 'out/inputs.json')\n" + WRITES_ACCEPTED
+
+    assert step(source, inputs=inputs) == 0
+    assert server.put["out/inputs.json"].decode() == (
+        '{"schema_version":6,"inputs":{"a":1.0000000000000000001,"b":1E+2,'
+        f'"c":[{whole},"\u00e9"]}}}}'
+    )
+
+
+def test_a_failed_step_writes_the_inputs_version_as_written(
+    step: Step, server: StandIn
+) -> None:
+    server.raw = {"@version": "6.0"}
+
+    assert step("raise SystemExit(1)", inputs={"schema_version": "@version"}) == 1
+    assert server.put["outputs.json"].startswith(b'{"schema_version":6.0,')
 
 
 def test_the_primitives_error_fails_the_step(step: Step, server: StandIn) -> None:
@@ -603,6 +640,32 @@ def test_a_name_is_fetched_once_while_another_step_holds_its_lock(
 
     assert target.read_bytes() == b"fetched elsewhere"
     assert server.calls("GET", "/files/train") == 0
+
+
+@pytest.mark.parametrize("found", [b"tampered", b"", None])
+def test_a_cached_object_not_its_names_is_fetched_again_before_it_is_linked(
+    server: StandIn, tmp_path: Path, work: Path, found: bytes | None
+) -> None:
+    cache = tmp_path / "cache"
+    entry = cached(server, "train", b"the real answer", "cache/Wq81/n")
+    store = unicon_step.Cache(cache)
+    door = unicon_step.Door(server.door, TOKEN)
+    object_ = cache / "objects" / entry["sha256"]
+    if found is None:
+        object_.symlink_to(tmp_path / "elsewhere")
+        (tmp_path / "elsewhere").write_bytes(b"the real answer")
+    else:
+        object_.write_bytes(found)
+        object_.chmod(0o444)
+    target = store.folder / "Wq81" / "n"
+
+    store.place(door, entry, target)
+
+    assert target.read_bytes() == b"the real answer"
+    assert not object_.is_symlink()
+    assert object_.read_bytes() == b"the real answer"
+    assert object_.samefile(target)
+    assert server.calls("GET", "/files/train") == 1
 
 
 def test_past_its_cap_the_cache_removes_the_least_recently_used_it_can(

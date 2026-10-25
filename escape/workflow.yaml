@@ -1,0 +1,50 @@
+# The escape fixtures' workflow: escape.c, sent as an entrant's code, built
+# by compile and run by exec on one attack, the attack's name as its input,
+# as an entrant's program is run; then the task's check reads what it
+# printed. A run is accepted when nothing escaped but what the task allows,
+# and otherwise ends on the limit its attack is bounded by (expected.json).
+# Saved as an org's workflow, since the check comes from the task, not this
+# file's folder.
+inputs:
+  code: {type: folder, title: Attacker}
+  attack: {type: file, title: Attack}
+  check: {type: folder, title: Check}
+  check_manifest: {type: file, title: Check's program.yaml}
+  allowed: {type: file, title: What a box may do}
+  time_limit: {type: number, title: Time limit, unit: seconds}
+  memory_limit: {type: number, title: Memory limit, unit: MB}
+
+steps:
+  - id: compile
+    use: unicon/compile@v3
+    with:
+      source: ${{ inputs.code }}
+      language: c
+  - id: attack
+    use: unicon/exec@v1
+    with:
+      program: ${{ steps.compile.program }}
+      stdin: ${{ inputs.attack }}
+      time_limit: ${{ inputs.time_limit }}
+      memory_limit: ${{ inputs.memory_limit }}
+  - id: build_check
+    use: unicon/compile@v3
+    with:
+      source: ${{ inputs.check }}
+      language: python
+  - id: check
+    use: unicon/exec@v1
+    with:
+      program: ${{ steps.build_check.program }}
+      manifest: ${{ inputs.check_manifest }}
+      time_limit: 10
+      memory_limit: 64
+      files:
+        output: ${{ steps.attack.output }}
+        allowed: ${{ inputs.allowed }}
+
+reports:
+  score: ${{ steps.check.score }}
+  escaped: {from: "${{ steps.check.escaped }}", title: Escaped}
+  time_ms: {from: "${{ steps.attack.time_ms }}", title: Run time, unit: ms}
+  memory_kb: {from: "${{ steps.attack.memory_kb }}", title: Memory used, unit: KB}

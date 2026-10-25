@@ -109,7 +109,7 @@ EXEC_BOX_USERS = "60000-60009"
 """The box users an exec or interact step is given, as whoever starts the
 step gives them."""
 
-SOURCE = (Path(__file__).parent / "escape" / "escape.c").read_text(encoding="utf-8")
+SOURCE = (Path(__file__).parents[2] / "escape" / "escape.c").read_text(encoding="utf-8")
 MOUNT = Path("/w")
 """Where a Workspace would see the test's volume; nothing mounts it there."""
 LIMITS = Limits(

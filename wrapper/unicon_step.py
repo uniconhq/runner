@@ -145,7 +145,7 @@ def main(argv: list[str]) -> int:
             door.call("POST", url, {}, ends_token=True)
             say(door, "unicon-step: told the forge the pipeline ended")
             return 0
-        job = door.call("GET", url)
+        job = read_job(door, url)
         if job is None:
             say(door, "unicon-step: the forge has nothing left for this step to do")
             return 0
@@ -164,6 +164,20 @@ def main(argv: list[str]) -> int:
         return 2
 
 
+def read_job(door: Door, url: str) -> Any:
+    """The step's job, or none for a 204: its inputs with each number as
+    written, so inputs.json carries it exactly, as TASK-FORMAT 1.6 asks,
+    and the rest read as Python numbers for the wrapper's own use."""
+    job = door.call("GET", url, exactly=True)
+    if not isinstance(job, dict):
+        return job
+    inputs = job.pop("inputs", None)
+    job = json.loads(exact(job))
+    if inputs is not None:
+        job["inputs"] = inputs
+    return job
+
+
 def grade(door: Door, job: dict[str, Any], command: list[str]) -> int:
     """Steps 3 to 6 for one job, and the exit code."""
     outputs = WORK / "outputs.json"
@@ -173,13 +187,13 @@ def grade(door: Door, job: dict[str, Any], command: list[str]) -> int:
         with Cache.for_step(job["files"]) as cache:
             place(door, job["files"], cache)
             filled = fill_secrets(job["inputs"], secrets)
-            (WORK / "inputs.json").write_text(json.dumps(filled, ensure_ascii=False))
-            run(door, command, job)
-        document = mask(door, read_plain(outputs))
+            (WORK / "inputs.json").write_text(exact(filled), encoding="utf-8")
+            ended = run(door, command, job)
+        document = mask(door, read_plain(outputs, ended))
     except (StepError, OSError, ValueError, http.client.HTTPException) as error:
         version = job["inputs"].get("schema_version")
         document = {"schema_version": version, "error": door.masked(str(error))}
-        write_outputs(json.dumps(document, ensure_ascii=False))
+        write_outputs(exact(document))
     upload(door, job)
     door.call("POST", job["done"], {}, ends_token=True)
     if "error" in document:
@@ -359,10 +373,16 @@ class Door:
             raise RetryError(f"{method} found no answer: {reason}") from None
 
     def call(
-        self, method: str, url: str, document: Any = None, ends_token: bool = False
+        self,
+        method: str,
+        url: str,
+        document: Any = None,
+        ends_token: bool = False,
+        exactly: bool = False,
     ) -> Any:
         """Ask the door, sending `document` as JSON, and read its answer:
-        none for a 204, which has no body. A request that `ends_token`,
+        none for a 204, which has no body; read `exactly`, each number a
+        `Number` as written. A request that `ends_token`,
         done or the end of the pipeline, may have been taken by the door
         though its answer was cut off: tried again, a 401 or 403, the token
         ended, is that request done."""
@@ -389,7 +409,11 @@ class Door:
             return None if answer.status == 204 else text
 
         text = retried(once)
-        return None if text is None else json.loads(text)
+        if text is None:
+            return None
+        if exactly:
+            return json.loads(text, parse_float=Number, parse_int=Number)
+        return json.loads(text)
 
     def put(self, url: str, descriptor: int, size: int, path: str, sha256: str) -> None:
         checksum = base64.b64encode(bytes.fromhex(sha256)).decode()
@@ -464,11 +488,16 @@ class Cache:
 
     def place(self, door: Door, entry: dict[str, Any], target: Path) -> None:
         """Link the object `entry` names at `target`, fetching it first when
-        the cache lacks it."""
+        the cache lacks it. An object already there is hashed again first,
+        and removed and fetched anew unless it is still the length and
+        SHA-256 its name says: a step's root can write to /cache, so a name
+        alone is not trusted."""
         digest = entry["sha256"]
         held = take_lock(self.root / "locks" / digest)
         try:
             found = self.root / "objects" / digest
+            if found.is_file() and not holds(found, entry["size"], digest):
+                found.unlink()
             if not found.is_file():
                 self.make_room(entry["size"])
                 descriptor, name = tempfile.mkstemp(dir=self.fetching)
@@ -522,6 +551,23 @@ class Cache:
                     os.close(held)
         finally:
             os.close(evicting)
+
+
+def holds(path: Path, size: int, digest: str) -> bool:
+    """Whether the plain file at `path` is `size` bytes with SHA-256 `digest`."""
+    try:
+        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except OSError:
+        return False
+    try:
+        found = os.fstat(descriptor)
+        return (
+            stat.S_ISREG(found.st_mode)
+            and found.st_size == size
+            and digest_of(descriptor, size) == digest
+        )
+    finally:
+        os.close(descriptor)
 
 
 def take_lock(path: Path, wait: bool = True, create: bool = True) -> int:
@@ -718,11 +764,11 @@ def fill_secrets(value: Any, secrets: dict[str, str]) -> Any:
     return value
 
 
-def run(door: Door, command: list[str], job: dict[str, Any]) -> None:
+def run(door: Door, command: list[str], job: dict[str, Any]) -> str:
     """Run the primitive in /work, what it prints masked into the step's log,
     and kill it and all it started at the job's time limit; as the
     container's first process, kill whatever is left once it ends, so
-    nothing changes /work/out while it is uploaded."""
+    nothing changes /work/out while it is uploaded. Says how it ended."""
     if not command:
         raise StepError("the image names no primitive to run")
     environment = {k: v for k, v in os.environ.items() if not k.startswith("PLUGIN_")}
@@ -742,7 +788,7 @@ def run(door: Door, command: list[str], job: dict[str, Any]) -> None:
     relaying = threading.Thread(target=relay, args=(door, printed), daemon=True)
     relaying.start()
     try:
-        process.wait(timeout=job["time_limit"])
+        code = process.wait(timeout=job["time_limit"])
     except subprocess.TimeoutExpired:
         os.killpg(process.pid, signal.SIGKILL)
         process.wait()
@@ -753,6 +799,7 @@ def run(door: Door, command: list[str], job: dict[str, Any]) -> None:
     finally:
         kill_the_rest()
         relaying.join(timeout=10)
+    return f"was killed by signal {-code}" if code < 0 else f"exited with code {code}"
 
 
 def kill_the_rest() -> None:
@@ -801,13 +848,14 @@ def write(text: str) -> None:
     sys.stdout.flush()
 
 
-def read_plain(path: Path) -> str:
-    """A file the primitive wrote, refused unless it is a plain file."""
+def read_plain(path: Path, ended: str) -> str:
+    """A file the primitive wrote, refused unless it is a plain file; its
+    absence told with how the primitive `ended`, such as its exit code."""
     name = path.relative_to(WORK)
     try:
         descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     except FileNotFoundError:
-        raise StepError(f"the primitive ended and wrote no {name}") from None
+        raise StepError(f"the primitive {ended} and wrote no {name}") from None
     except OSError:
         raise StepError(f"the primitive's {name} is not a plain file") from None
     with os.fdopen(descriptor, "rb") as stream:

@@ -180,7 +180,7 @@ The harness removes every container it created in a `finally`, and the filter
 removes any it misses.
 
 The escape fixtures keep this set honest (`harness/tests/test_escape.py`,
-`harness/tests/escape/escape.c`). One C program, built by the compile
+`escape/escape.c`). One C program, built by the compile
 primitive, tries every way out: memory, processes, threads, CPU, sleeping,
 output and disk; the network, the cloud metadata address and name lookup;
 writing outside its directory and reading other tests' files, the task's
@@ -200,6 +200,19 @@ read at the path the primitive reports. They write their own `inputs.json`,
 since they test the container the harness builds, not the files it writes.
 CI runs them in a job of their own, and sandbox-run's CI runs them against
 the image it just built (`SANDBOX_RUN_IMAGE`, `COMPILE_IMAGE`).
+
+The same program is the escape fixture of a run task, graded through a
+pipeline the forge builds on a grading machine (`escape/`). `workflow.yaml`
+builds it as an entrant's code and runs it in exec, one attack a run, the
+attack's name as its input, and the task's check (`task/check/`) reads
+what it printed: a run is accepted when no check escaped but those a box
+may pass (`task/check/allowed`), and otherwise must end on the limit its
+attack is bounded by (`expected.json`). Beside the attacks above it tries
+`container`: the step container an exec box runs in, its devices, a
+cgroup's `release_agent`, the step's files, `inputs.json` and cache, and
+its first process. `escape/escape_tests/` checks that the task holds
+together; deploy's end to end saves it on the dev stack and grades it
+(`tests/e2e/test_escape.py`).
 
 ### The host-path trap
 
@@ -457,7 +470,8 @@ cannot read its `/proc/1/environ`, then:
    and makes each empty folder the job names;
 3. writes `inputs.json` with each `{"secret": <setting>}` filled from the
    step's settings, refusing a setting of the wrapper's own and a value
-   shorter than 8 characters, too short to mask;
+   shorter than 8 characters, too short to mask, and each number exactly as
+   the job wrote it;
 4. runs the command in `/work` with every `PLUGIN_` variable taken out of its
    environment and `UNICON_BOX_USERS` set from the job, prints what it prints
    with each secret, the link and the token as `***`, a mask split across
@@ -467,7 +481,8 @@ cannot read its `/proc/1/environ`, then:
 5. masks `outputs.json` the same way, numbers kept exactly as written but
    one holding a secret, which becomes the text `***`, and an `outcome`
    never masked, or writes it itself, holding only `error`, when the step
-   could not do its work or `outputs.json` is not a plain file;
+   could not do its work or `outputs.json` is not a plain file; a primitive
+   that wrote none is told with its exit code or the signal that killed it;
 6. asks the door for an upload link per file, `outputs.json` and every file
    under `out/`, with its SHA-256 and size, puts each, and posts to done.
    Each file is opened once, without following a link, and hashed, measured
@@ -493,7 +508,9 @@ posts `{}` to its own door, telling the forge the pipeline ended.
 A step given the org's cache volume at `/cache`, a root step, as only exec
 and interact use it, fetches a task file marked `cached` once per machine
 into `/cache/objects/<sha256>`, under a lock per name, downloading into its
-own folder on the volume, and hard-links it into a folder of its own under
+own folder on the volume, hashes an object already there again under its
+lock, removing and fetching it anew unless it is still the length and
+SHA-256 its name says, and hard-links it into a folder of its own under
 `/cache/items/`, reached as `/work/cache`, held by a lock for the step's
 life and removed at its end. A step given cached files and no volume is
 refused. What killed steps left is swept: a folder whose lock no one holds,
@@ -750,8 +767,9 @@ pins the other three the same way. The base images are pinned by digest too.
 ```
 harness/unicon_harness/          the harness
 harness/tests/                   its tests; primitives/ holds the fixture image, one
-                                 program that stands in for every primitive, and
-                                 escape/ the escape fixtures' C program
+                                 program that stands in for every primitive
+escape/                          the escape fixtures' C program, and the run task
+                                 and workflow that grade it through the forge
 socket_filter/unicon_filter/     the socket filter
 socket_filter/filter_tests/      its tests, and the Docker lab the integration tests use
 images/<name>/Dockerfile         the five images

@@ -1,0 +1,11 @@
+# What a program in an exec box may do, as harness/tests/test_escape.py's
+# BOXES_OWN says. Each name is a check escape.c prints.
+#
+# The box's own /dev/shm, a tmpfs isolate makes for each run.
+write-dev-shm
+# The full bounding set isolate leaves, which gives nothing: every box has
+# no_new_privs, so no program it starts gains a capability.
+capability-bounding-set
+# One file past 64 MB in the box's /tmp: exec sets no file size limit, and
+# every page on the box's tmpfs is charged to the run's memory.
+one-big-file

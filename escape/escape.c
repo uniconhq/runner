@@ -5,6 +5,9 @@
 // it through sandbox-run or exec, as the container's own process under the
 // harness's flags, and with each of those flags taken away in turn. As
 // `partner` it is interact's partner, and its entrant's attack is on it.
+// The task beside it (task/, on workflow.yaml) runs it as an entrant's
+// program through a pipeline the forge builds, one attack a run; `container`
+// is the attack on the step container an exec box runs in.
 //
 // The resource attacks are capped (512 MB of memory, 3,000 processes or
 // threads, 1 GB of disk per directory), so a run with a limit taken away
@@ -95,6 +98,17 @@ static void list_dir(const char *check, const char *path) {
     info(check, "%s holds: %s", path, names);
 }
 
+/* Listing a folder of the step's escapes when it opens and holds a name:
+   the names are another run's files, or the cache's. */
+static void try_list(const char *check, const char *path) {
+    DIR *d = opendir(path);
+    if (!d) { say(check, 0, "%s: %s", path, strerror(errno)); return; }
+    char names[600] = ""; struct dirent *e; int n = 0;
+    while ((e = readdir(d))) if (e->d_name[0] != '.') { n++; if (strlen(names) < 500) { strcat(names, e->d_name); strcat(names, " "); } }
+    closedir(d);
+    say(check, n > 0, "%s holds %d: %s", path, n, names);
+}
+
 static void *spin(void *a) { pause(); return a; }
 
 /* The process of interact's partner: the one whose first argument is
@@ -121,7 +135,7 @@ static int scan_for_secrets(const char *path, char *found, size_t n) {
     if (k <= 0) return 0;
     for (ssize_t i = 0; i < k; i++) if (!b[i]) b[i] = '\n';
     b[k] = 0;
-    const char *needles[] = {"TOKEN=", "token=", "UNICON_", "X-Amz-Signature", "Authorization:", "SECRET=", "PASSWORD=", "password=", "CI_", "WOODPECKER_", 0};
+    const char *needles[] = {"TOKEN=", "token=", "UNICON_", "X-Amz-Signature", "Authorization:", "SECRET=", "PASSWORD=", "password=", "CI_", "WOODPECKER_", "PLUGIN_", "Bearer ", "data_token", 0};
     int hit = 0;
     for (int i = 0; needles[i]; i++) if (strstr(b, needles[i])) { hit = 1; snprintf(found + strlen(found), n - strlen(found), "%s:%s ", path, needles[i]); }
     return hit;
@@ -318,6 +332,38 @@ int main(int argc, char **argv) {
         list_dir("processes", "/proc");
         return 0;
     }
+    // -- the step container an exec box runs in: privileged, with the step's
+    // files, its inputs.json holding its secrets, the machine's cache and
+    // the wrapper as its first process. A box sees none of it, but its own
+    // run's cached files, which exec binds at /cache.
+    if (!strcmp(mode, "container")) {
+        list_dir("dev", "/dev");
+        const char *devices[] = {"/dev/vda", "/dev/vdb", "/dev/sda", "/dev/nvme0n1", "/dev/loop0", "/dev/nbd0", "/dev/ram0", "/dev/mem", "/dev/kmsg", "/dev/fuse", 0};
+        for (int i = 0; devices[i]; i++) try_open("device", devices[i]);
+        mkdir("/tmp/cg", 0700);
+        long r = mount("cgroup", "/tmp/cg", "cgroup", 0, "memory");
+        say("mount-cgroup", r == 0, "%s", r == 0 ? "a v1 hierarchy mounted" : strerror(errno));
+        try_write("release-agent", "/sys/fs/cgroup/release_agent");
+        if (r == 0) try_write("release-agent-v1", "/tmp/cg/release_agent");
+        try_write("cgroup-subtree", "/sys/fs/cgroup/cgroup.subtree_control");
+        try_read("step-inputs", "/work/inputs.json");
+        try_read("step-inputs-by-pid1", "/proc/1/root/work/inputs.json");
+        {   // The first process in sight is the box's own, not the wrapper.
+            char found[1024] = "";
+            int hit = scan_for_secrets("/proc/1/environ", found, sizeof found);
+            hit |= scan_for_secrets("/proc/1/cmdline", found, sizeof found);
+            say("first-process", hit, "%s", hit ? found : "no token or link in process 1's environment or command line");
+        }
+        try_list("step-files", "/work/in");
+        try_list("step-files-by-pid1", "/proc/1/root/work/in");
+        try_list("step-outputs", "/work/out");
+        list_dir("cache", "/cache");  // the run's own cached files, bound read-only
+        try_list("cache-by-pid1", "/proc/1/root/cache");
+        try_read("daemon-socket", "/run/unicon-docker/docker.sock");
+        try_list("woodpecker-workspace", "/woodpecker");
+        return 0;
+    }
+
     // -- what exec keeps from a run: connections out, rings, and marks for
     // the next item. A box has a network namespace of its own, so a socket
     // is made, with nowhere to go. The name is looked up first, as it

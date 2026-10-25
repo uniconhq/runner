@@ -41,7 +41,7 @@ packages = ["harness/unicon_harness"]
 
 [tool.ruff]
 line-length = 88
-src = ["harness", "socket_filter", "scripts", "images", "wrapper"]
+src = ["harness", "socket_filter", "scripts", "images", "wrapper", "escape"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "UP", "B", "A", "C4", "PTH", "RUF"]
@@ -52,7 +52,7 @@ select = ["E", "F", "I", "N", "UP", "B", "A", "C4", "PTH", "RUF"]
 [tool.mypy]
 python_version = "3.14"
 strict = true
-files = ["harness", "socket_filter", "scripts", "images", "wrapper"]
+files = ["harness", "socket_filter", "scripts", "images", "wrapper", "escape"]
 mypy_path = ["harness", "socket_filter", "scripts", "wrapper"]
 platform = "linux"
 
@@ -63,6 +63,7 @@ testpaths = [
     "images/clone_tests",
     "scripts/declaration_tests",
     "wrapper/step_tests",
+    "escape/escape_tests",
 ]
 pythonpath = ["harness", "socket_filter", "images", "scripts", "wrapper"]
 addopts = "-q -m 'not docker'"
