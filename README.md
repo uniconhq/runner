@@ -521,7 +521,7 @@ declaration names no program. A primitive repo validates its
 filled in, since bootstrap writes the image (below).
 
 Version 6, which a declaration asks for with `schema_version: 6` (5 when left
-out), changes four things, and only it allows them:
+out), changes these things, and only it allows them:
 
 - **A batch item is keyed by `run`,** an id of letters, digits, `_` and `-`
   that only the forge knows the meaning of, in place of `test`.
@@ -534,6 +534,27 @@ out), changes four things, and only it allows them:
   bounds that cross or aren't finite, which a schema can't compare.
 - **`outputs_from: manifest`** says the primitive also gives back the reports
   of the `program.yaml` on its `manifest` input, a file input it must declare.
+- **A `programs` input,** named `programs`, takes programs the step names,
+  one to eight, which the primitive runs side by side, as `interact` does.
+  The port declares `inputs`, what each program takes, as the primitive's
+  own inputs are declared, and `outputs`, what it gives of each. The value
+  is `{"programs": {"<name>": {<that program's inputs>}}}`; a name is a port
+  name of at most 64 characters, never `wall_clock`. A declaration has at
+  most one programs port, named `programs`, and needs `outputs_from:
+  programs` with it, since the step's outputs come from that one port.
+- **A `links` input** beside it takes the pipes between them, a list of
+  `"<from> -> <to>"`, each at most once.
+- **`outputs_from: programs`** says the primitive also gives back, for each
+  program, `<name>.<output>` for each output the programs port declares,
+  and on a verdict of `0` `<name>.<report>` for each report of the
+  `program.yaml` on that program's `manifest` input, a file input the port
+  must declare. An output name in `outputs.json` may so hold one `.`.
+- **A limit may follow a sum or a largest** over the programs, `{sum:
+  programs.memory_limit, add: 512}` or `{max: programs.time_limit, scale:
+  4000, add: 6000}`, in place of `input`. `check_declaration.py` checks
+  that the names are a programs port and a number input it declares, that a
+  links port has a programs port beside it, and that a programs port is
+  named `programs` and comes with `outputs_from: programs`.
 
 **`submission.schema.json`.** `submission.json` at the root of a submission
 commit: `{"schema_version": 5, "inputs": {id: entry}}`, one entry per

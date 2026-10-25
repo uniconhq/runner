@@ -65,7 +65,7 @@
         },
         "outputs": {
           "description": "One entry per output written, keyed by the output name, outcome always among them. A file output names a path under out/, a folder output a folder under out/. On accepted every output the declaration does not mark optional is written; on any other outcome only outcome need be.",
-          "$ref": "#/$defs/values"
+          "$ref": "#/$defs/output_values"
         },
         "batch": {
           "description": "One entry per item of inputs.json's batch, in the same order and with the same tests or runs.",
@@ -77,7 +77,7 @@
             "properties": {
               "test": { "$ref": "#/$defs/test_id" },
               "run": { "$ref": "#/$defs/run_id" },
-              "outputs": { "$ref": "#/$defs/values" }
+              "outputs": { "$ref": "#/$defs/output_values" }
             }
           }
         },
@@ -95,17 +95,21 @@
       "$ref": "#/$defs/batch_key"
     },
     "batch_key": {
-      "description": "What a batch item is keyed by: test in version 5, run in version 6, never both. Only version 6 carries named_files values.",
+      "description": "What a batch item is keyed by: test in version 5, run in version 6, never both. Only version 6 carries named_files, programs and links values, and output names of the form <program>.<output>.",
       "if": { "properties": { "schema_version": { "const": 6 } } },
       "then": { "properties": { "batch": { "items": { "required": ["run"], "not": { "required": ["test"] } } } } },
       "else": {
         "properties": {
           "inputs": { "$ref": "#/$defs/values" },
+          "outputs": { "$ref": "#/$defs/values" },
           "batch": {
             "items": {
               "required": ["test"],
               "not": { "required": ["run"] },
-              "properties": { "inputs": { "$ref": "#/$defs/values" } }
+              "properties": {
+                "inputs": { "$ref": "#/$defs/values" },
+                "outputs": { "$ref": "#/$defs/values" }
+              }
             }
           }
         }
@@ -126,7 +130,7 @@
           "$ref": "#/$defs/line"
         },
         "schema_version": {
-          "description": "The contract version the primitive speaks: the schema_version of every inputs.json it is given and outputs.json it writes. 5 when left out. Only version 6 has named_files inputs, better and bounds on a number output, and outputs_from.",
+          "description": "The contract version the primitive speaks: the schema_version of every inputs.json it is given and outputs.json it writes. 5 when left out. Only version 6 has named_files, programs and links inputs, better and bounds on a number output, outputs_from, and a limit from sum or max.",
           "type": "integer",
           "enum": [5, 6]
         },
@@ -148,7 +152,7 @@
           "$ref": "#/$defs/limits"
         },
         "limits_from": {
-          "description": "Raises a limit from a number input, so the container never dies before the primitive's own per-test limit: the limit is max(limits.<name>, input * scale + add), rounded up.",
+          "description": "Raises a limit from a number input, so the container never dies before the primitive's own per-test limit: the limit is max(limits.<name>, input * scale + add), rounded up, where input is the number input, or the sum or the largest of one number input over the programs of a programs input.",
           "type": "object",
           "additionalProperties": false,
           "properties": {
@@ -161,8 +165,8 @@
           }
         },
         "outputs_from": {
-          "description": "manifest: the primitive's outputs are those listed here and also the reports of the program.yaml given on its manifest input, a file input it must declare. It reads them from what the program it runs reports, and the forge checks a step's wiring against both.",
-          "const": "manifest"
+          "description": "manifest: the primitive's outputs are those listed here and also the reports of the program.yaml given on its manifest input, a file input it must declare. It reads them from what the program it runs reports, and the forge checks a step's wiring against both. programs: the outputs listed here and also, for each program its programs input gives, <name>.<output> for each output the programs port declares and <name>.<report> for each report of the program.yaml given on that program's manifest input, a file input the programs port must declare; a report is given on a verdict of 0 alone.",
+          "enum": ["manifest", "programs"]
         },
         "inputs": {
           "description": "What the primitive takes, by name. Every file or folder input says whether the primitive runs what arrives there as a program.",
@@ -200,7 +204,7 @@
       },
       "allOf": [
         {
-          "if": { "required": ["outputs_from"] },
+          "if": { "required": ["outputs_from"], "properties": { "outputs_from": { "const": "manifest" } } },
           "then": {
             "required": ["inputs"],
             "properties": {
@@ -212,11 +216,34 @@
           }
         },
         {
+          "if": { "required": ["outputs_from"], "properties": { "outputs_from": { "const": "programs" } } },
+          "then": {
+            "required": ["inputs"],
+            "properties": {
+              "inputs": {
+                "required": ["programs"],
+                "properties": {
+                  "programs": {
+                    "properties": {
+                      "type": { "const": "programs" },
+                      "inputs": {
+                        "required": ["manifest"],
+                        "properties": { "manifest": { "properties": { "type": { "const": "file" } } } }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
           "if": { "required": ["schema_version"], "properties": { "schema_version": { "const": 6 } } },
           "else": {
             "not": { "required": ["outputs_from"] },
             "properties": {
-              "inputs": { "additionalProperties": { "properties": { "type": { "not": { "const": "named_files" } } } } },
+              "limits_from": { "patternProperties": { "": { "not": { "anyOf": [{ "required": ["sum"] }, { "required": ["max"] }] } } } },
+              "inputs": { "additionalProperties": { "properties": { "type": { "not": { "enum": ["named_files", "programs", "links"] } } } } },
               "outputs": { "additionalProperties": { "not": { "$ref": "#/$defs/number_meaning" } } }
             }
           }
@@ -237,19 +264,32 @@
       }
     },
     "limit_from": {
-      "description": "input * scale + add; scale is 1 and add 0 when left out.",
+      "description": "input * scale + add, where input is one number input, or in version 6 the sum or the largest over the programs of a programs input; scale is 1 and add 0 when left out. Exactly one of input, sum and max.",
       "type": "object",
-      "required": ["input"],
       "additionalProperties": false,
+      "oneOf": [{ "required": ["input"] }, { "required": ["sum"] }, { "required": ["max"] }],
       "properties": {
         "input": {
           "description": "The number input the limit follows.",
           "type": "string",
           "pattern": "^[a-z][a-z0-9_]*$"
         },
+        "sum": {
+          "description": "<port>.<input>: the sum of a number input over every program of a programs port, such as programs.memory_limit, since the programs run side by side. check_declaration.py checks that both names are declared.",
+          "$ref": "#/$defs/program_input"
+        },
+        "max": {
+          "description": "<port>.<input>: the largest of a number input over every program of a programs port, such as programs.time_limit. check_declaration.py checks that both names are declared.",
+          "$ref": "#/$defs/program_input"
+        },
         "scale": { "type": "number", "exclusiveMinimum": 0 },
         "add": { "type": "number", "minimum": 0 }
       }
+    },
+    "program_input": {
+      "description": "A programs port and one of its number inputs, <port>.<input>.",
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
     },
     "line": {
       "description": "One line of text: not empty, not only spaces, no line break.",
@@ -264,16 +304,33 @@
       "items": { "type": "string", "minLength": 1 }
     },
     "input_port": {
-      "description": "One declared input. options on an enum and nowhere else. runs on every file, folder or named_files port and nowhere else: whether the primitive runs what arrives there as a program. names on a named_files port and nowhere else: the names its files must have, when the primitive fixes them. secret: the image keeps what arrives there from any program it runs from another port. optional: the port may be left without a value. description: what the port takes, for the workflow editor.",
+      "description": "One declared input. options on an enum and nowhere else. runs on every file, folder or named_files port and nowhere else: whether the primitive runs what arrives there as a program. names on a named_files port and nowhere else: the names its files must have, when the primitive fixes them. inputs and outputs on a programs port and nowhere else. secret: the image keeps what arrives there from any program it runs from another port. optional: the port may be left without a value. description: what the port takes, for the workflow editor. A programs port, version 6, takes programs the step names, at most 8, each with the inputs the port declares, which the primitive runs side by side; a links port takes the links between them. check_declaration.py allows one programs port, and a links port only beside it.",
       "type": "object",
       "required": ["type"],
       "additionalProperties": false,
       "properties": {
         "type": {
           "type": "string",
-          "enum": ["text", "number", "boolean", "enum", "file", "folder", "named_files"]
+          "enum": ["text", "number", "boolean", "enum", "file", "folder", "named_files", "programs", "links"]
         },
         "options": { "$ref": "#/$defs/options" },
+        "inputs": {
+          "description": "What each program of a programs port takes, by name, declared as the primitive's own inputs are; none of them a programs or links port.",
+          "type": "object",
+          "propertyNames": { "pattern": "^[a-z][a-z0-9_]*$" },
+          "additionalProperties": {
+            "allOf": [
+              { "$ref": "#/$defs/input_port" },
+              { "properties": { "type": { "not": { "enum": ["programs", "links"] } } } }
+            ]
+          }
+        },
+        "outputs": {
+          "description": "What the primitive gives of each program of a programs port, by name: the output <program>.<name> for each.",
+          "type": "object",
+          "propertyNames": { "pattern": "^[a-z][a-z0-9_]*$" },
+          "additionalProperties": { "$ref": "#/$defs/output_port" }
+        },
         "names": {
           "description": "The names a value must give its files, each of them; any names when left out.",
           "type": "array",
@@ -303,6 +360,11 @@
         {
           "if": { "properties": { "type": { "const": "named_files" } } },
           "else": { "not": { "required": ["names"] } }
+        },
+        {
+          "if": { "properties": { "type": { "const": "programs" } } },
+          "then": { "required": ["inputs", "outputs"] },
+          "else": { "not": { "anyOf": [{ "required": ["inputs"] }, { "required": ["outputs"] }] } }
         }
       ]
     },
@@ -362,16 +424,66 @@
       "not": { "type": "string", "pattern": "\\n$" }
     },
     "values": {
-      "description": "Values by port name: every output, and every input of version 5.",
+      "description": "Values by port name: every output and every input of version 5.",
       "type": "object",
       "propertyNames": { "pattern": "^[a-z][a-z0-9_]*$" },
       "additionalProperties": { "$ref": "#/$defs/value" }
     },
+    "output_values": {
+      "description": "Outputs by name, which in version 6 may also be <program>.<output>, from a primitive whose outputs_from is programs.",
+      "type": "object",
+      "propertyNames": { "pattern": "^[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)?$" },
+      "additionalProperties": { "$ref": "#/$defs/value" }
+    },
     "input_values": {
-      "description": "Inputs by port name, which in version 6 may also be named_files values.",
+      "description": "Inputs by port name, which in version 6 may also be named_files, programs and links values.",
       "type": "object",
       "propertyNames": { "pattern": "^[a-z][a-z0-9_]*$" },
-      "additionalProperties": { "oneOf": [{ "$ref": "#/$defs/value" }, { "$ref": "#/$defs/named_files" }] }
+      "additionalProperties": {
+        "oneOf": [
+          { "$ref": "#/$defs/value" },
+          { "$ref": "#/$defs/named_files" },
+          { "$ref": "#/$defs/programs" },
+          { "$ref": "#/$defs/links" }
+        ]
+      }
+    },
+    "programs": {
+      "description": "A programs value, version 6: one to 8 programs, each by the name the step gives it, with its own inputs, those its port declares. The name is what links and the outputs <name>.<output> call it, and never wall_clock, which stopped_by says for the wall clock.",
+      "type": "object",
+      "required": ["programs"],
+      "additionalProperties": false,
+      "properties": {
+        "programs": {
+          "type": "object",
+          "minProperties": 1,
+          "maxProperties": 8,
+          "propertyNames": { "$ref": "#/$defs/program_name" },
+          "additionalProperties": {
+            "type": "object",
+            "propertyNames": { "pattern": "^[a-z][a-z0-9_]*$" },
+            "additionalProperties": { "oneOf": [{ "$ref": "#/$defs/value" }, { "$ref": "#/$defs/named_files" }] }
+          }
+        }
+      }
+    },
+    "links": {
+      "description": "A links value, version 6: the pipes between the programs of the programs value beside it, each \"<from> -> <to>\", what the first writes read by the second. A program's first link each way is its standard output or input, and each further one a named pipe in its folder, to_<name> or from_<name>.",
+      "type": "array",
+      "maxItems": 56,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "pattern": "^[a-z][a-z0-9_]{0,63} -> [a-z][a-z0-9_]{0,63}$",
+        "not": { "type": "string", "pattern": "\\n$" }
+      }
+    },
+    "program_name": {
+      "description": "A program's name in a programs value: a port name of at most 64 characters, never wall_clock. The not refuses a trailing newline, as the name becomes a path.",
+      "type": "string",
+      "maxLength": 64,
+      "pattern": "^[a-z][a-z0-9_]*$",
+      "not": { "anyOf": [{ "const": "wall_clock" }, { "pattern": "\\n$" }] }
     },
     "value": {
       "description": "One input or output value. Text, a number and a boolean are carried as themselves; a file or a folder is an object naming its path.",

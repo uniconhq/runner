@@ -1,0 +1,44 @@
+image: ghcr.io/uniconhq/primitive-interact@sha256:4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c
+title: Run programs together
+description: Runs programs side by side, linked by pipes, and records how each one ended.
+schema_version: 6
+batch: true
+network: false
+limits: {time_ms: 4000, cpu_ms: 4000, memory_mb: 512, pids: 1056, output_mb: 64, gpus: 0}
+limits_from:
+  time_ms: {max: programs.time_limit, scale: 4000, add: 6000}
+  cpu_ms: {max: programs.time_limit, scale: 4000, add: 6000}
+  memory_mb: {sum: programs.memory_limit, add: 512}
+  pids: {sum: programs.processes, scale: 1, add: 32}
+  output_mb: {sum: programs.output_limit}
+  gpus: {max: programs.gpus}
+outputs_from: programs
+inputs:
+  programs:
+    type: programs
+    description: The programs to run, by name.
+    inputs:
+      program: {type: file, runs: true}
+      files: {type: named_files, runs: false, optional: true}
+      args: {type: text, optional: true}
+      time_limit: {type: number}
+      memory_limit: {type: number}
+      processes: {type: number, optional: true}
+      output_limit: {type: number, optional: true}
+      gpus: {type: number, optional: true}
+      manifest: {type: file, runs: false, optional: true}
+      stops_others: {type: boolean, optional: true}
+    outputs:
+      time_ms: {type: number, better: lower, at_least: 0}
+      memory_kb: {type: number, better: lower, at_least: 0}
+      ended: {type: enum, options: [finished, time_limit, memory_limit, output_limit, runtime_error]}
+      signal: {type: text, optional: true}
+      ended_at: {type: number, at_least: 0}
+      stopped_by: {type: text, optional: true}
+  links: {type: links, optional: true, description: The pipes between the programs.}
+outputs:
+  facts: {type: file, description: Every program's facts and reports.}
+  outcome:
+    type: outcome
+    outcomes:
+      accepted: every program was started and measured

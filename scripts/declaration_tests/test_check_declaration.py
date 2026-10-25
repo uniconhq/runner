@@ -253,6 +253,143 @@ def test_equal_bounds_conform(schema: dict[str, Any], tmp_path: Path) -> None:
     assert check_declaration.problems(schema, _repo(tmp_path, text)) == []
 
 
+DECLARATION_PROGRAMS = """\
+schema_version: 6
+batch: true
+limits:
+  {time_ms: 4000, cpu_ms: 4000, memory_mb: 512, pids: 1056, output_mb: 64, gpus: 0}
+limits_from:
+  time_ms: {max: programs.time_limit, scale: 4000, add: 6000}
+  memory_mb: {sum: programs.memory_limit, add: 512}
+outputs_from: programs
+inputs:
+  programs:
+    type: programs
+    inputs:
+      program: {type: file, runs: true}
+      files: {type: named_files, runs: false, optional: true}
+      time_limit: {type: number}
+      memory_limit: {type: number}
+      manifest: {type: file, runs: false, optional: true}
+      stops_others: {type: boolean, optional: true}
+    outputs:
+      time_ms: {type: number, better: lower, at_least: 0, at_most: 100}
+      ended: {type: enum, options: [finished, time_limit]}
+      stopped_by: {type: text, optional: true}
+  links: {type: links, optional: true}
+outputs:
+  facts: {type: file}
+  outcome: {type: outcome}
+"""
+
+
+def test_a_declaration_with_programs_conforms(
+    schema: dict[str, Any], tmp_path: Path
+) -> None:
+    found = check_declaration.problems(schema, _repo(tmp_path, DECLARATION_PROGRAMS))
+    assert found == []
+
+
+@pytest.mark.parametrize(
+    ("old", "new"),
+    [
+        ("schema_version: 6", "schema_version: 5"),
+        ("    type: programs\n", "    type: programs\n    runs: true\n"),
+        ("    outputs:\n      time_ms", "    output:\n      time_ms"),
+        ("max: programs.time_limit", "input: programs.time_limit"),
+        ("max: programs.time_limit,", "max: programs.time_limit, input: x,"),
+        ("max: programs.time_limit", "max: time_limit"),
+        ("      program: {type: file, runs: true}", "      inner: {type: links}"),
+        (
+            "  links: {type: links, optional: true}",
+            "  links: {type: links, runs: true}",
+        ),
+        ("  facts: {type: file}", "  facts: {type: file, inputs: {}}"),
+        ("      manifest: {type: file, runs: false, optional: true}\n", ""),
+    ],
+)
+def test_a_declaration_with_programs_that_breaks_a_rule_is_refused(
+    schema: dict[str, Any], tmp_path: Path, old: str, new: str
+) -> None:
+    text = DECLARATION_PROGRAMS.replace(old, new)
+    assert text != DECLARATION_PROGRAMS
+    assert check_declaration.problems(schema, _repo(tmp_path, text)) != []
+
+
+@pytest.mark.parametrize(
+    ("old", "new", "problem"),
+    [
+        (
+            "sum: programs.memory_limit",
+            "sum: links.memory_limit",
+            "limits_from/memory_mb/sum: links is not a programs port",
+        ),
+        (
+            "max: programs.time_limit",
+            "max: programs.files",
+            "limits_from/time_ms/max: programs has no number input files",
+        ),
+        (
+            "max: programs.time_limit",
+            "max: programs.wall",
+            "limits_from/time_ms/max: programs has no number input wall",
+        ),
+        (
+            "at_least: 0, at_most: 100",
+            "at_least: 200, at_most: 100",
+            "inputs/programs/outputs/time_ms: at_least 200 is above at_most 100",
+        ),
+    ],
+)
+def test_what_a_programs_port_says_of_another_is_checked(
+    schema: dict[str, Any], tmp_path: Path, old: str, new: str, problem: str
+) -> None:
+    text = DECLARATION_PROGRAMS.replace(old, new)
+    assert text != DECLARATION_PROGRAMS
+    assert check_declaration.problems(schema, _repo(tmp_path, text)) == [problem]
+
+
+def test_two_programs_ports_are_named(schema: dict[str, Any], tmp_path: Path) -> None:
+    text = DECLARATION_PROGRAMS.replace(
+        "  links: {type: links, optional: true}",
+        "  links: {type: links, optional: true}\n  more: {type: programs, "
+        "inputs: {}, outputs: {}}",
+    )
+    found = check_declaration.problems(schema, _repo(tmp_path, text))
+    assert "inputs: programs, more are each a programs port" in found
+
+
+def test_a_programs_port_must_be_named_programs(
+    schema: dict[str, Any], tmp_path: Path
+) -> None:
+    text = DECLARATION_PROGRAMS.replace("  programs:\n", "  players:\n").replace(
+        "outputs_from: programs\n", ""
+    )
+    found = check_declaration.problems(schema, _repo(tmp_path, text))
+    assert "inputs/players: a programs port must be named programs" in found
+
+
+def test_a_programs_port_needs_outputs_from_programs(
+    schema: dict[str, Any], tmp_path: Path
+) -> None:
+    text = DECLARATION_PROGRAMS.replace("outputs_from: programs\n", "")
+    assert check_declaration.problems(schema, _repo(tmp_path, text)) == [
+        "outputs_from: a declaration with a programs port needs outputs_from: programs"
+    ]
+
+
+def test_links_without_a_programs_port_are_named(
+    schema: dict[str, Any], tmp_path: Path
+) -> None:
+    text = DECLARATION_V6.replace(
+        "  manifest: {type: file, runs: false}\n",
+        "  manifest: {type: file, runs: false}\n  links: {type: links}\n",
+    )
+    assert check_declaration.problems(schema, _repo(tmp_path, text)) == [
+        "inputs/links: links with no programs port to link"
+    ]
+
+
 def test_the_command_line_names_the_schema_and_the_repo(
     schema: dict[str, Any], tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:

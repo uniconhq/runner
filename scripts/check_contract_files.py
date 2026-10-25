@@ -40,8 +40,12 @@ CONTRACTS: dict[str, list[tuple[str, str | None]]] = {
         ("primitive-outputs-error.json", "outputs_file"),
         ("primitive-v6-inputs-batch.json", "inputs_file"),
         ("primitive-v6-outputs-batch.json", "outputs_file"),
+        ("primitive-v6-programs-inputs-batch.json", "inputs_file"),
+        ("primitive-v6-programs-outputs-batch.json", "outputs_file"),
         ("primitive.yaml", "declaration"),
         ("primitive-v6.yaml", "declaration"),
+        ("primitive-v6-programs.yaml", "declaration"),
+        ("primitive-v6-programs-limits.yaml", "declaration"),
     ],
 }
 

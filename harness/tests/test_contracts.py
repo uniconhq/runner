@@ -307,8 +307,24 @@ def test_a_declaration_speaks_version_5_or_6(declaration: dict[str, Any]) -> Non
         lambda d: d["outputs"]["time_ms"].update(at_least=0),
         lambda d: d["outputs"]["time_ms"].update(at_most=10),
         lambda d: d.update(outputs_from="manifest"),
+        lambda d: d["inputs"].update(
+            group={"type": "programs", "inputs": {}, "outputs": {}}
+        ),
+        lambda d: d["inputs"].update(links={"type": "links"}),
+        lambda d: d["limits_from"].update(gpus={"sum": "group.gpus"}),
+        lambda d: d["limits_from"].update(gpus={"max": "group.gpus"}),
     ],
-    ids=["named_files", "better", "at_least", "at_most", "outputs_from"],
+    ids=[
+        "named_files",
+        "better",
+        "at_least",
+        "at_most",
+        "outputs_from",
+        "programs",
+        "links",
+        "sum",
+        "max",
+    ],
 )
 def test_what_version_6_adds_is_refused_in_version_5(
     declaration: dict[str, Any], change: Any
@@ -431,6 +447,106 @@ def test_named_files_are_a_version_6_input_alone() -> None:
     for version in (5, 6):
         outputs = {"schema_version": version, "outputs": {"answer": value}}
         assert violation(outputs, "primitive", "outputs_file") is not None
+
+
+@pytest.fixture
+def programs_batch() -> dict[str, Any]:
+    return example("primitive-v6-programs-inputs-batch.json")
+
+
+def _programs(batch: dict[str, Any]) -> dict[str, Any]:
+    programs: dict[str, Any] = batch["batch"][0]["inputs"]["programs"]["programs"]
+    return programs
+
+
+def test_a_programs_value_holds_one_to_eight_programs(
+    programs_batch: dict[str, Any],
+) -> None:
+    programs = _programs(programs_batch)
+    entrant = programs["entrant"]
+    programs.update({f"p{number}": entrant for number in range(6)})
+    assert violation(programs_batch, "primitive", "inputs_file") is None
+    programs["p6"] = entrant
+    assert violation(programs_batch, "primitive", "inputs_file") is not None
+    programs.clear()
+    assert violation(programs_batch, "primitive", "inputs_file") is not None
+
+
+@pytest.mark.parametrize(
+    "name", ["wall_clock", "Judge", "judge\n", "a.b", "to-x", "_x", "x" * 65, ""]
+)
+def test_a_program_is_named_as_a_port_and_never_wall_clock(
+    programs_batch: dict[str, Any], name: str
+) -> None:
+    programs = _programs(programs_batch)
+    programs[name] = programs.pop("judge")
+    assert violation(programs_batch, "primitive", "inputs_file") is not None
+
+
+def test_a_programs_entry_holds_values_and_named_files_alone(
+    programs_batch: dict[str, Any],
+) -> None:
+    entrant = _programs(programs_batch)["entrant"]
+    entrant["inner"] = {"programs": {}}
+    assert violation(programs_batch, "primitive", "inputs_file") is not None
+    entrant["inner"] = ["entrant -> judge"]
+    assert violation(programs_batch, "primitive", "inputs_file") is not None
+
+
+@pytest.mark.parametrize(
+    "link",
+    ["entrant->judge", "entrant -> ", "entrant -> judge\n", "a -> b -> c", "A -> b"],
+)
+def test_a_link_is_two_program_names_and_an_arrow(
+    programs_batch: dict[str, Any], link: str
+) -> None:
+    programs_batch["batch"][0]["inputs"]["links"] = [link]
+    assert violation(programs_batch, "primitive", "inputs_file") is not None
+
+
+def test_a_link_is_given_once(programs_batch: dict[str, Any]) -> None:
+    programs_batch["batch"][0]["inputs"]["links"] = ["a -> b", "a -> b"]
+    assert violation(programs_batch, "primitive", "inputs_file") is not None
+
+
+def test_programs_and_links_are_a_version_6_input_alone(
+    programs_batch: dict[str, Any],
+) -> None:
+    v5 = example("primitive-inputs-batch.json")
+    inputs = programs_batch["batch"][0]["inputs"]
+    for name in ("programs", "links"):
+        changed = copy.deepcopy(v5)
+        changed["batch"][0]["inputs"][name] = inputs[name]
+        assert violation(changed, "primitive", "inputs_file") is not None
+
+
+def test_an_output_of_a_program_is_named_for_it_in_version_6_alone() -> None:
+    outputs = example("primitive-v6-programs-outputs-batch.json")
+    assert violation(outputs, "primitive", "outputs_file") is None
+    outputs["batch"][0]["outputs"]["judge.ended.twice"] = "finished"
+    assert violation(outputs, "primitive", "outputs_file") is not None
+    v5 = {"schema_version": 5, "outputs": {"judge.ended": "finished"}}
+    assert violation(v5, "primitive", "outputs_file") is not None
+    v5["batch"] = [{"test": "main/1", "outputs": v5.pop("outputs")}]
+    assert violation(v5, "primitive", "outputs_file") is not None
+
+
+def test_a_limit_follows_one_of_input_sum_and_max() -> None:
+    declaration = _yaml("primitive-v6-programs.yaml")
+    limit = declaration["limits_from"]["memory_mb"]
+    limit["max"] = "programs.memory_limit"
+    assert violation(declaration, "primitive", "declaration") is not None
+    del limit["max"], limit["sum"]
+    assert violation(declaration, "primitive", "declaration") is not None
+
+
+def test_outputs_from_programs_needs_a_programs_port_with_a_manifest_file() -> None:
+    declaration = _yaml("primitive-v6-programs.yaml")
+    port = declaration["inputs"]["programs"]
+    port["inputs"]["manifest"]["type"] = "folder"
+    assert violation(declaration, "primitive", "declaration") is not None
+    declaration["inputs"]["group"] = declaration["inputs"].pop("programs")
+    assert violation(declaration, "primitive", "declaration") is not None
 
 
 def test_a_batch_item_is_keyed_one_way_for_its_version() -> None:
