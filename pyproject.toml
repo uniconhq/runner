@@ -1,6 +1,6 @@
 [project]
 name = "unicon-runner"
-version = "0.9.0"
+version = "0.10.0"
 description = "The step wrapper of Unicon's primitive images, and the plan, result, primitive, submission and job contracts."
 readme = "README.md"
 license = "MIT"
