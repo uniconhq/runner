@@ -440,7 +440,8 @@ names its own program as the image's command, `CMD ["/usr/local/bin/exec"]`,
 so in a Woodpecker step the wrapper runs first and the primitive under it.
 With no `data_url` setting it runs the command in its own place, so an image
 started directly, as the harness and the primitives' own image tests start
-one, behaves as before.
+one, behaves as before; in a Woodpecker step (`CI=woodpecker`), where the
+forge gives every step of this image a link, it refuses with exit 2.
 
 Given `data_url` and `data_token`, as `PLUGIN_DATA_URL` and
 `PLUGIN_DATA_TOKEN`, it makes itself non-dumpable, so a process of its user
@@ -451,30 +452,51 @@ cannot read its `/proc/1/environ`, then:
 2. fetches every file side by side, checking each against its size and
    SHA-256, or copies it from the workspace the clone step checked out;
 3. writes `inputs.json` with each `{"secret": <setting>}` filled from the
-   step's settings;
+   step's settings, refusing a setting of the wrapper's own and a value
+   shorter than 8 characters, too short to mask;
 4. runs the command in `/work` with every `PLUGIN_` variable taken out of its
    environment and `UNICON_BOX_USERS` set from the job, prints what it prints
-   with each secret, the link and the token as `***`, and kills it and all it
-   started at the job's time limit;
-5. masks `outputs.json` the same way, numbers kept exactly as written, or
-   writes it itself, holding only `error`, when the step could not do its
-   work;
+   with each secret, the link and the token as `***`, a mask split across
+   two reads of a long line included, and kills it and all it started at the
+   job's time limit; once it ends, as the container's first process, it
+   kills every process left, so nothing changes `out/` while it is uploaded;
+5. masks `outputs.json` the same way, numbers kept exactly as written but
+   one holding a secret, which becomes the text `***`, and an `outcome`
+   never masked, or writes it itself, holding only `error`, when the step
+   could not do its work or `outputs.json` is not a plain file;
 6. asks the door for an upload link per file, `outputs.json` and every file
    under `out/`, with its SHA-256 and size, puts each, and posts to done.
+   Each file is opened once, without following a link, and hashed, measured
+   and put from that one descriptor.
 
 It exits 0, or 1 on an error or, when the job says `fail_on_non_accepted`, an
-outcome other than accepted, so Woodpecker starts no later step. The token
-goes only to the door and links under it, never to a presigned link. The
+outcome other than accepted or none at all, so Woodpecker starts no later
+step. The token goes only to the door and links under it, the same scheme,
+host and port and a path below the door's with no dot segment, escaped or
+not, never to a presigned link. It follows no redirect and uses no proxy.
+A request that finds no answer, a 429 or a 5xx, or an answer cut off midway
+is made again, up to four times; a download from its start, though not a
+write to the file that failed. An error names a file by its path, never
+its link. Done ends the token, so a done or a report whose answer was cut
+off and that, asked again, gets a 401 or 403 was taken. In a Woodpecker
+step it refuses to start, exit 2, unless it is the container's first
+process, as it must be to kill what a primitive leaves. The
 pipeline's last step runs `primitive-base` with `mode: report` and only
 posts `{}` to its own door, telling the forge the pipeline ended.
 
-A step given the org's cache volume at `/cache` fetches a task file marked
-`cached` once per machine into `/cache/objects/<sha256>`, under a lock per
-name, and hard-links it into a folder of its own under `/cache/items/`,
-reached as `/work/cache`, held by a lock for the step's life and removed at
-its end; a folder whose lock no one holds is swept. Past the cap, 10 GiB or
-the number of bytes in `/etc/unicon/cache-cap`, the least recently used
-objects no running step links go. Its tests are in `wrapper/step_tests/`,
+A step given the org's cache volume at `/cache`, a root step, as only exec
+and interact use it, fetches a task file marked `cached` once per machine
+into `/cache/objects/<sha256>`, under a lock per name, downloading into its
+own folder on the volume, and hard-links it into a folder of its own under
+`/cache/items/`, reached as `/work/cache`, held by a lock for the step's
+life and removed at its end. A step given cached files and no volume is
+refused. What killed steps left is swept: a folder whose lock no one holds,
+with any part of a download in it, and, once an hour old, a lock still being
+made or a folder without a lock, and the lock of every name no object has.
+Past the cap, 10 GiB or the number of bytes in `/etc/unicon/cache-cap`, the
+least recently used objects no running step links go; downloads in progress
+are not counted. The volume takes the image's `/cache`, root's, mode 0755.
+Its tests are in `wrapper/step_tests/`,
 against a stand-in for the forge's door.
 
 ## The contracts
@@ -762,9 +784,10 @@ first's cache must download nothing, one with a cache of its own must
 download the file again, and four started together on an empty cache must
 download it once between them, and the step wrapper in `primitive-base`
 against its stand-in door: a primitive and a compile reading the wrapper's
-environment get nothing, the org's cache volume serves a step that is not
-root, and exec built on the base image from a `primitive-exec` checkout
-beside this one runs a batch on isolate through the wrapper (the compile and
+environment get nothing, nothing a primitive leaves running outlives it,
+the org's cache volume serves the root steps that use it, and exec built on
+the base image from a `primitive-exec` checkout beside this one runs a batch
+on isolate through the wrapper, a cached file bound into its box (the compile and
 exec cases are skipped without `primitive-compile` and `primitive-exec`
 checkouts there). Everything it makes is named `unicon-lab-*`
 and removed at the end (the filter's socket directories are under

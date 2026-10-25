@@ -2,10 +2,11 @@
 stand-in for the forge's door served on this machine and reached from the
 container as host.docker.internal: a primitive reading the wrapper's
 environment from /proc gets nothing, nor does a compile that includes it,
-the org's cache volume works for a step that is not root, and exec, built on
-the base image from a primitive-exec checkout beside this one, runs a batch
-on isolate through the wrapper, in a privileged container as a grading
-machine runs it. Run with `pytest -m docker`.
+nothing a primitive leaves running outlives it, the org's cache volume
+serves the root steps that use it, and exec, built on the base image from a
+primitive-exec checkout beside this one, runs a batch on isolate through the
+wrapper, cached files bound into its boxes, in a privileged container as a
+grading machine runs it. Run with `pytest -m docker`.
 """
 
 from __future__ import annotations
@@ -75,7 +76,9 @@ def step(
     command: list[str] | None = None,
     **job: Any,
 ) -> subprocess.CompletedProcess[str]:
-    """Start the image as a Woodpecker plugin step with the stand-in's job."""
+    """Start the image as a Woodpecker plugin step with the stand-in's job,
+    the step's token fresh."""
+    server.ended = False
     server.job = {
         "schema_version": 1,
         "inputs": inputs,
@@ -153,6 +156,46 @@ def test_a_compile_including_an_environment_gets_nothing(
     assert b"***" not in server.put["outputs.json"]
 
 
+ORPHAN = f"""
+import os, time, urllib.request
+if os.fork() == 0:
+    os.setsid()
+    if os.fork() == 0:
+        time.sleep(1)
+        urllib.request.urlopen("BASE/orphan", timeout=5)
+        os._exit(0)
+    os._exit(0)
+open("outputs.json", "w").write({ACCEPTED!r})
+"""
+
+
+@pytest.mark.parametrize("init", [False, True], ids=["wrapper-first", "init-first"])
+def test_nothing_a_primitive_leaves_running_outlives_it(
+    server: StandIn, init: bool
+) -> None:
+    """A primitive that leaves a process of its own session behind, which
+    calls out a second later while the door takes three to answer done:
+    the wrapper, the container's first process, kills it as the primitive
+    ends. Under Docker's own init, the wrapper is not the first process and
+    the process lives, which shows the test sees one that does."""
+    program = a_file(
+        server, "in/orphan.py", ORPHAN.replace("BASE", server.base).encode()
+    )
+    server.done_after = 3.0
+    flags = ["--init"] if init else []
+    command = ["python3", "/work/in/orphan.py"]
+    done = step(
+        server,
+        image("primitive-base"),
+        {"schema_version": 6, "inputs": {}},
+        [program],
+        flags,
+        command,
+    )
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert (server.calls("GET", "/orphan") == 1) is init
+
+
 CACHED = f"""
 import json, os
 name = json.load(open("inputs.json"))["inputs"]["data"]["file"]
@@ -163,29 +206,28 @@ open("outputs.json", "w").write({ACCEPTED!r})
 """
 
 
-def test_the_orgs_cache_volume_serves_a_step_that_is_not_root(
+def test_the_orgs_cache_volume_serves_the_root_steps_that_use_it(
     server: StandIn,
 ) -> None:
-    """Two steps as a user other than root on one new cache volume: the
-    first fetches the cached file into it, the second only links it, and
-    each reads it through its own item folder, gone once it ends."""
+    """Two root steps, as the primitives that use the cache run, on one new
+    cache volume: the first fetches the cached file into it, the second only
+    links it, and each reads it through its own item folder, gone once it
+    ends. The volume takes the image's /cache, root's alone, so a step that
+    is not root cannot use it, and a step without the volume is refused."""
     volume = f"unicon-cache-lab-{uuid.uuid4().hex[:8]}"
     data = b"a task file\n" * 1000
+    command = ["python3", "/work/in/program.py"]
+
+    def cached_step(flags: list[str]) -> subprocess.CompletedProcess[str]:
+        program = a_file(server, "in/program.py", CACHED.encode())
+        cached = a_file(server, "cache/q7Lm2/data", data, cached=True)
+        inputs = {"schema_version": 6, "inputs": {"data": {"file": cached["path"]}}}
+        files = [program, cached]
+        return step(server, image("primitive-base"), inputs, files, flags, command)
+
     try:
         for _ in range(2):
-            program = a_file(server, "in/program.py", CACHED.encode())
-            cached = a_file(server, "cache/q7Lm2/data", data, cached=True)
-            inputs = {"schema_version": 6, "inputs": {"data": {"file": cached["path"]}}}
-            flags = ["--user=65532:65532", "--volume", f"{volume}:/cache"]
-            command = ["python3", "/work/in/program.py"]
-            done = step(
-                server,
-                image("primitive-base"),
-                inputs,
-                [program, cached],
-                flags,
-                command,
-            )
+            done = cached_step(["--volume", f"{volume}:/cache"])
             assert done.returncode == 0, done.stdout + done.stderr
             assert server.put["out/read"] == data
             where = server.put["out/where"].decode()
@@ -201,9 +243,16 @@ def test_the_orgs_cache_volume_serves_a_step_that_is_not_root(
             f"{volume}:/cache",
             image("primitive-base"),
             "-c",
-            "ls /cache/objects; ls -A /cache/items",
+            "stat -c '%U %a' /cache; ls /cache/objects; ls -A /cache/items",
         )
-        assert listing.split() == [hashlib.sha256(data).hexdigest()]
+        assert listing.split() == ["root", "755", hashlib.sha256(data).hexdigest()]
+
+        done = cached_step(["--user=65532:65532", "--volume", f"{volume}:/cache"])
+        assert done.returncode == 1, done.stdout + done.stderr
+        assert "Permission denied" in server.outputs()["error"]
+        done = cached_step([])
+        assert done.returncode == 1, done.stdout + done.stderr
+        assert "no /cache volume" in server.outputs()["error"]
     finally:
         docker("volume", "rm", "--force", volume, check=False)
 
@@ -213,6 +262,37 @@ import sys
 print(int(sys.stdin.readline()) * 2)
 """
 
+READS_DATA = """
+print(open("data").read().strip())
+for line in open("/proc/self/mountinfo"):
+    fields = line.split()
+    if fields[4] == "/cache":
+        print("mount", fields[3], fields[5])
+"""
+
+
+def zip_program(tmp_path: Path, source: str) -> bytes:
+    app = tmp_path / "app"
+    app.mkdir()
+    (app / "__main__.py").write_text(source)
+    zipapp.create_archive(app, tmp_path / "program", interpreter="/usr/bin/env python3")
+    return (tmp_path / "program").read_bytes()
+
+
+def exec_flags() -> list[str]:
+    """exec's container as a grading machine starts it, privileged, with
+    exec's own memory for a 64 MB run, entered through primitive-exec's
+    userns.py, as exec refuses root Docker's identity map."""
+    userns = SIBLINGS / "primitive-exec" / "tests" / "userns.py"
+    flags = ["--privileged", "--memory=320m", "--memory-swap=320m"]
+    flags += ["--pids-limit=160", "--cpus=1", "--ulimit=cpu=5:5"]
+    flags += ["--tmpfs=/tmp:rw,noexec,nosuid,nodev,size=64m"]
+    return [*flags, "--volume", f"{userns}:/userns.py:ro"]
+
+
+EXEC = ["python3", "/userns.py", "/usr/local/bin/exec"]
+BOX_USERS = {"first": 60000, "last": 60009}
+
 
 def test_exec_on_the_base_image_runs_a_batch_through_the_wrapper(
     server: StandIn, tmp_path: Path
@@ -221,11 +301,7 @@ def test_exec_on_the_base_image_runs_a_batch_through_the_wrapper(
     batch, as a grading machine starts it: the wrapper fetches the program and
     inputs, hands exec the job's box users, uploads every output with its
     hash and posts done, and the token goes only to the door."""
-    app = tmp_path / "app"
-    app.mkdir()
-    (app / "__main__.py").write_text(DOUBLE)
-    zipapp.create_archive(app, tmp_path / "program", interpreter="/usr/bin/env python3")
-    files = [a_file(server, "in/p/program", (tmp_path / "program").read_bytes())]
+    files = [a_file(server, "in/p/program", zip_program(tmp_path, DOUBLE))]
     batch = []
     for run, number in (("r1", 21), ("r2", 50)):
         files.append(a_file(server, f"in/{run}/stdin", f"{number}\n".encode()))
@@ -234,20 +310,14 @@ def test_exec_on_the_base_image_runs_a_batch_through_the_wrapper(
         stdin = {"stdin": {"file": f"in/{run}/stdin"}}
         batch.append({"run": run, "inputs": program | stdin | limits})
     inputs = {"schema_version": 6, "batch": batch}
-    userns = SIBLINGS / "primitive-exec" / "tests" / "userns.py"
-    flags = ["--privileged", "--memory=320m", "--memory-swap=320m"]
-    flags += ["--pids-limit=160", "--cpus=1", "--ulimit=cpu=5:5"]
-    flags += ["--tmpfs=/tmp:rw,noexec,nosuid,nodev,size=64m"]
-    flags += ["--volume", f"{userns}:/userns.py:ro"]
-    command = ["python3", "/userns.py", "/usr/local/bin/exec"]
     done = step(
         server,
         on_base("exec"),
         inputs,
         files,
-        flags,
-        command,
-        box_users={"first": 60000, "last": 60009},
+        exec_flags(),
+        EXEC,
+        box_users=BOX_USERS,
         fail_on_non_accepted=False,
     )
     assert done.returncode == 0, done.stdout + done.stderr
@@ -265,3 +335,42 @@ def test_exec_on_the_base_image_runs_a_batch_through_the_wrapper(
     for seen in server.seen:
         expected = f"Bearer {TOKEN}" if seen.path.startswith("/door") else None
         assert seen.authorization == expected, seen
+
+
+def test_exec_through_the_wrapper_binds_a_cached_file_into_its_box(
+    server: StandIn, tmp_path: Path
+) -> None:
+    """exec on the base image as root with the org's cache volume: the
+    wrapper fetches the cached file into the volume and links it into an
+    item folder, and exec binds that folder into the run's box read-only and
+    not executable. What the box's /proc/self/mountinfo shows of the
+    folder's path on the machine is printed for the record."""
+    volume = f"unicon-cache-lab-{uuid.uuid4().hex[:8]}"
+    content = b"a large task file\n"
+    program = a_file(server, "in/p/program", zip_program(tmp_path, READS_DATA))
+    cached = a_file(server, "cache/Wq81/data", content, cached=True)
+    named = {"files": {"data": {"file": cached["path"]}}}
+    limits = {"time_limit": 1, "memory_limit": 64}
+    entry = {"program": {"file": "in/p/program"}, "files": named} | limits
+    inputs = {"schema_version": 6, "batch": [{"run": "r1", "inputs": entry}]}
+    try:
+        done = step(
+            server,
+            on_base("exec"),
+            inputs,
+            [program, cached],
+            [*exec_flags(), "--volume", f"{volume}:/cache"],
+            EXEC,
+            box_users=BOX_USERS,
+        )
+        assert done.returncode == 0, done.stdout + done.stderr
+        result = json.loads(server.put["outputs.json"])
+        assert result["batch"][0]["outputs"]["outcome"] == "accepted", result
+        lines = server.put["out/1/output"].decode().splitlines()
+        print("\n".join(lines))
+        assert lines[0] == "a large task file"
+        (mount,) = [line.split() for line in lines if line.startswith("mount ")]
+        assert re.search(r"/items/step-[^/]+/Wq81$", mount[1]), mount
+        assert {"ro", "noexec"} <= set(mount[2].split(","))
+    finally:
+        docker("volume", "rm", "--force", volume, check=False)

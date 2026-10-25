@@ -28,8 +28,11 @@ SCHEMAS = REPO_ROOT / "schemas"
 EXAMPLES = REPO_ROOT / "examples"
 
 # The job is spoken by the step wrapper (wrapper/unicon_step.py), not the
-# harness, and has a version of its own.
-OWN_VERSIONS = {"job": 1}
+# harness, and has a version of its own, the wrapper's.
+sys.path.insert(0, str(REPO_ROOT / "wrapper"))
+from unicon_step import JOB_VERSION  # noqa: E402
+
+OWN_VERSIONS = {"job": JOB_VERSION}
 
 CONTRACTS: dict[str, list[tuple[str, str | None]]] = {
     "plan": [("plan.json", "plan_v5"), ("plan-v6.json", "plan_v6")],

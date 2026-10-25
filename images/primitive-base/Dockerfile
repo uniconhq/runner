@@ -18,11 +18,12 @@ LABEL org.opencontainers.image.title="primitive-base" \
 
 COPY --chmod=0755 wrapper/unicon_step.py /usr/local/bin/unicon-step
 
-# /work is where a primitive reads inputs.json and writes outputs.json, and
-# /cache is where a step given the org's cache volume mounts it. Any user may
-# write both, as a compile step runs as the grading's own user, and Docker
-# copies /cache's mode into a new, empty volume.
-RUN mkdir -p /work /cache && chmod 1777 /work /cache
+# /work is where a primitive reads inputs.json and writes outputs.json, which
+# any user may write, as a compile step runs as the grading's own user.
+# /cache is where a step given the org's cache volume mounts it, root's
+# alone: only the primitives that run as root use the cache, and Docker
+# copies /cache's owner and mode into a new, empty volume.
+RUN mkdir -p /work /cache && chmod 1777 /work && chmod 0755 /cache
 
 WORKDIR /work
 ENTRYPOINT ["/usr/local/bin/unicon-step"]

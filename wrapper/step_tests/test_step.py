@@ -47,6 +47,8 @@ def work(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setattr(unicon_step, "CACHE_CAP_FILE", tmp_path / "no-cap")
     monkeypatch.setattr(unicon_step, "undumpable", lambda: None)
     monkeypatch.setattr(unicon_step, "BACKOFF", 0.0)
+    monkeypatch.setattr(unicon_step, "mounted", lambda path: True)
+    monkeypatch.delenv("CI", raising=False)
     (tmp_path / "cache").mkdir()
     return root
 
@@ -66,6 +68,7 @@ def step(
                 shutil.rmtree(path)
             else:
                 path.unlink()
+        server.ended = False
         server.job = {
             "schema_version": 1,
             "inputs": {"schema_version": 6, "inputs": {}},
@@ -494,7 +497,7 @@ def test_the_step_folder_is_held_by_its_lock_for_the_steps_life(
                 held.append(True)
     os.makedirs("out")
     json.dump(held, open("out/held.json", "w"))
-    json.dump({{"schema_version": 6, "outputs": {{}}}}, open("outputs.json", "w"))
+    open("outputs.json", "w").write({ACCEPTED!r})
     """
 
     assert step(source, files=[entry], inputs=inputs) == 0
@@ -577,3 +580,423 @@ def test_a_machine_may_set_the_caches_cap(
     store.make_room(100)
 
     assert list((cache / "objects").iterdir()) == []
+
+
+def test_stale_leftovers_of_killed_steps_are_swept_and_fresh_ones_kept(
+    server: StandIn, tmp_path: Path, work: Path
+) -> None:
+    cache = tmp_path / "cache"
+    items, locks, objects = cache / "items", cache / "locks", cache / "objects"
+    for folder in (items, locks, objects):
+        folder.mkdir()
+    old = time.time() - unicon_step.STALE_SECONDS - 60
+    (items / "step-old.lock-new").touch()
+    (items / "step-new.lock-new").touch()
+    for name in ("step-lockless", "step-young"):
+        (items / name / ".fetching").mkdir(parents=True)
+        (items / name / ".fetching" / "part").write_bytes(b"half a download")
+    (objects / "kept").write_bytes(b"x")
+    for name in ("kept", "orphan", "held"):
+        (locks / name).touch()
+    for path in (items / "step-old.lock-new", items / "step-lockless"):
+        os.utime(path, (old, old))
+    held = unicon_step.take_lock(locks / "held")
+    try:
+        unicon_step.Cache(cache)
+    finally:
+        os.close(held)
+
+    left = sorted(p.name for p in items.iterdir())
+    assert "step-old.lock-new" not in left
+    assert "step-lockless" not in left
+    assert {"step-new.lock-new", "step-young"} <= set(left)
+    assert sorted(p.name for p in locks.iterdir()) == ["held", "kept"]
+
+
+def test_cached_files_without_a_cache_volume_are_refused(
+    step: Step, server: StandIn, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(unicon_step, "mounted", lambda path: False)
+    entry = cached(server, "train", b"x", "cache/Wq81/n")
+
+    assert step(files=[entry]) == 1
+    assert "no /cache volume" in server.outputs()["error"]
+
+
+# Fetching, the door and the links.
+
+
+@pytest.mark.parametrize("ways", [["chunked"], ["reset"], ["short"], ["reset"] * 3])
+def test_a_download_cut_off_midway_is_fetched_again_from_its_start(
+    step: Step, server: StandIn, work: Path, ways: list[str]
+) -> None:
+    content = b"0123456789" * 1000
+    server.cuts["/files/Xa9"] = list(ways)
+
+    assert step(files=[a_file(server, "Xa9", content)]) == 0
+    assert (work / "in" / "Xa9").read_bytes() == content
+    assert server.calls("GET", "/files/Xa9") == len(ways) + 1
+
+
+def test_a_download_cut_off_every_time_names_the_file_never_its_link(
+    step: Step, server: StandIn, work: Path
+) -> None:
+    server.cuts["/files/Xa9"] = ["chunked", "reset", "short", "chunked"]
+
+    assert step(files=[a_file(server, "Xa9", b"0123456789" * 1000)]) == 1
+    error = server.outputs()["error"]
+    assert error.startswith("the file for in/Xa9: ")
+    assert server.base not in error and "/files/" not in error
+    assert not (work / "in" / "Xa9").exists()
+
+
+def test_a_missing_file_names_the_file_never_its_link(
+    step: Step, server: StandIn
+) -> None:
+    entry = a_file(server, "Xa9", b"x") | {"url": server.link("gone") + "?sig=s3cr3t"}
+
+    assert step(files=[entry]) == 1
+    error = server.outputs()["error"]
+    assert error == "the file for in/Xa9: GET answered 404"
+
+
+def test_a_job_cut_off_midway_is_asked_for_again(step: Step, server: StandIn) -> None:
+    server.cuts["/door"] = ["chunked", "reset"]
+
+    assert step() == 0
+    assert server.calls("GET", "/door") == 3
+
+
+def test_the_door_is_sent_json_and_the_store_bytes(step: Step, server: StandIn) -> None:
+    assert (
+        step(WRITES_ACCEPTED + "\nimport os; os.makedirs('out'); open('out/x', 'w')")
+        == 0
+    )
+
+    kinds = {(s.method, s.path.split("?")[0], s.kind) for s in server.seen}
+    assert kinds == {
+        ("GET", "/door", None),
+        ("POST", "/door/uploads", "application/json"),
+        ("POST", "/door/done", "application/json"),
+        ("PUT", "/put/outputs.json", "application/octet-stream"),
+        ("PUT", "/put/out/x", "application/octet-stream"),
+    }
+
+
+def test_a_redirect_is_refused_and_never_followed(step: Step, server: StandIn) -> None:
+    with stand_in() as elsewhere:
+        server.moved["/files/Xa9"] = elsewhere.link("Xa9")
+        elsewhere.files["Xa9"] = b"x"
+
+        assert step(files=[a_file(server, "Xa9", b"x")]) == 1
+        assert server.outputs()["error"] == "the file for in/Xa9: GET answered 302"
+
+        server.moved = {"/door/done": f"{elsewhere.door}/done"}
+        assert step() == 2
+
+        assert elsewhere.seen == []
+
+
+def test_no_proxy_is_used(
+    step: Step, server: StandIn, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    with stand_in() as proxy:
+        for name in ("http_proxy", "HTTP_PROXY", "https_proxy", "HTTPS_PROXY"):
+            monkeypatch.setenv(name, proxy.base)
+        monkeypatch.delenv("no_proxy", raising=False)
+        monkeypatch.delenv("NO_PROXY", raising=False)
+
+        assert step() == 0
+        assert proxy.seen == []
+
+
+@pytest.mark.parametrize(
+    ("url", "under"),
+    [
+        ("http://forge:8080/step/7", True),
+        ("http://forge:8080/step/7/uploads", True),
+        ("http://FORGE:8080/step/7/done", True),
+        ("http://forge:8080/step/70", False),
+        ("http://forge:8080/step/7/../8/done", False),
+        ("http://forge:8080/step/7/./done", False),
+        ("http://forge:8080/step/7/%2e%2e/8", False),
+        ("http://forge:8080/step/7/%2E%2E%2F8", False),
+        ("http://forge:8080/step/7/..%2f8", False),
+        ("http://forge:8080/step/7/..%5c8", False),
+        ("http://forge:8080/step/7\\..\\8", False),
+        ("https://forge:8080/step/7/done", False),
+        ("http://forge:8081/step/7/done", False),
+        ("http://forge/step/7/done", False),
+        ("http://forge.evil:8080/step/7/done", False),
+        ("http://forge:8080@evil:8080/step/7/done", False),
+        ("http://user@forge:8080/step/7/done", False),
+        ("http://forge:99999/step/7", False),
+    ],
+)
+def test_the_token_goes_only_under_the_door(url: str, under: bool) -> None:
+    assert unicon_step.under("http://forge:8080/step/7", url) is under
+
+
+def test_a_door_on_the_schemes_own_port_is_matched_with_or_without_it() -> None:
+    assert unicon_step.under("https://forge/step/7", "https://forge:443/step/7/done")
+    assert unicon_step.under("http://forge:80/step/7", "http://forge/step/7/done")
+
+
+def test_in_a_woodpecker_step_without_a_data_link_it_refuses_to_run(
+    tmp_path: Path,
+) -> None:
+    environment = {k: v for k, v in os.environ.items() if not k.startswith("PLUGIN_")}
+    done = subprocess.run(
+        [sys.executable, unicon_step.__file__, "/bin/echo", "ran"],
+        capture_output=True,
+        text=True,
+        env=environment | {"CI": "woodpecker"},
+    )
+    assert done.returncode == 2
+    assert "ran" not in done.stdout
+
+
+# Secrets and masking.
+
+
+@pytest.mark.parametrize(
+    "name", ["data_token", "data_url", "mode", "Model_key", "model-key", "1key", ""]
+)
+def test_a_secret_name_that_is_not_a_secret_settings_is_refused(
+    step: Step, server: StandIn, monkeypatch: pytest.MonkeyPatch, name: str
+) -> None:
+    monkeypatch.setenv("PLUGIN_MODEL-KEY", SECRET)
+    inputs = {"schema_version": 6, "inputs": {"k": {"secret": name}}}
+
+    assert step(inputs=inputs, secrets=[name]) == 1
+    error = server.outputs()["error"]
+    assert error == f"the job names the secret setting {name!r}"
+    assert TOKEN not in json.dumps(server.put["outputs.json"].decode())
+
+
+@pytest.mark.parametrize("value", ["", "short12"])
+def test_a_secret_too_short_to_mask_is_refused(
+    step: Step, server: StandIn, monkeypatch: pytest.MonkeyPatch, value: str
+) -> None:
+    monkeypatch.setenv("PLUGIN_MODEL_KEY", value)
+
+    assert step(secrets=["model_key"]) == 1
+    assert "shorter than 8 characters" in server.outputs()["error"]
+
+
+def test_a_secret_split_across_a_long_lines_reads_is_masked(
+    step: Step,
+    server: StandIn,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setenv("PLUGIN_MODEL_KEY", SECRET)
+    source = (
+        f"""
+    import sys
+    for before in (65536 - 5, 65536 * 2 - 9, 3):
+        sys.stdout.write("é" * 2 + "a" * (before - 4) + {SECRET!r} + "b" * 70000)
+        sys.stdout.write("\\n")
+    sys.stdout.write("end " + {SECRET!r})
+    sys.stdout.flush()
+    """
+        + WRITES_ACCEPTED
+    )
+
+    assert step(source, secrets=["model_key"]) == 0
+
+    printed = capsys.readouterr().out
+    assert SECRET not in printed
+    assert printed.count("***") == 4
+    lines = printed.split("\n")
+    assert lines[0].startswith("éé") and lines[0].endswith("b" * 10)
+    assert "end ***" in printed
+
+
+def test_an_outcome_is_never_masked_and_a_number_holding_a_secret_is(
+    step: Step, server: StandIn, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("PLUGIN_WORD", "accepted")
+    monkeypatch.setenv("PLUGIN_PIN", "31415926535")
+    text = (
+        '{"schema_version": 6, "outputs": {"outcome": "accepted", '
+        '"note": "accepted", "n": 31415926535, "m": 7}}'
+    )
+
+    assert (
+        step(f"open('outputs.json', 'w').write({text!r})", secrets=["word", "pin"]) == 0
+    )
+    uploaded = server.put["outputs.json"].decode()
+    assert '"outcome":"accepted"' in uploaded
+    assert '"note":"***"' in uploaded
+    assert '"n":"***"' in uploaded
+    assert '"m":7' in uploaded
+
+
+# The outcome and the outputs.
+
+
+def test_a_missing_outcome_is_not_accepted(step: Step, server: StandIn) -> None:
+    source = (
+        "open('outputs.json', 'w').write('{\"schema_version\": 6, \"outputs\": {}}')"
+    )
+
+    assert step(source) == 1
+    assert step(source, fail_on_non_accepted=False) == 0
+    batch = (
+        "import json; json.dump({'schema_version': 6, 'batch': [{'run': 'r1', "
+        "'outputs': {'outcome': 'accepted'}}, {'run': 'r2'}]}, "
+        "open('outputs.json', 'w'))"
+    )
+    assert step(batch) == 1
+
+
+def test_outputs_written_as_a_link_are_refused_and_its_target_left_alone(
+    step: Step, server: StandIn, tmp_path: Path
+) -> None:
+    target = tmp_path / "elsewhere.json"
+    target.write_text(ACCEPTED)
+    source = f"import os; os.symlink({str(target)!r}, 'outputs.json')"
+
+    assert step(source) == 1
+    assert (
+        server.outputs()["error"] == "the primitive's outputs.json is not a plain file"
+    )
+    assert target.read_text() == ACCEPTED
+
+
+def test_only_plain_files_under_out_are_uploaded(
+    step: Step, server: StandIn, tmp_path: Path
+) -> None:
+    (tmp_path / "secret").write_text("not the primitive's")
+    source = (
+        WRITES_ACCEPTED
+        + f"""
+import os
+os.makedirs("out/d")
+open("out/d/plain", "w").write("p")
+os.symlink({str(tmp_path / "secret")!r}, "out/link")
+os.mkfifo("out/pipe")
+"""
+    )
+
+    assert step(source) == 0
+    assert set(server.put) == {"outputs.json", "out/d/plain"}
+
+
+# Done, once, and what the wrapper refuses to start without.
+
+
+@pytest.mark.parametrize("way", ["reset", "short", "chunked"])
+def test_done_taken_though_its_answer_was_cut_is_done(
+    step: Step, server: StandIn, way: str
+) -> None:
+    """The door took done, which ended the token, and the answer was cut:
+    asked again, the door answers 401, which is done taken."""
+    server.cuts["/door/done"] = [way]
+
+    assert step() == 0
+    assert server.calls("POST", "/door/done") == 2
+
+
+def test_done_refused_at_the_first_ask_is_not_done(step: Step, server: StandIn) -> None:
+    server.done_code = 401
+
+    assert step() == 2
+    assert server.calls("POST", "/door/done") == 1
+
+
+def test_the_end_of_the_pipeline_taken_though_its_answer_was_cut_is_done(
+    server: StandIn, work: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("PLUGIN_DATA_URL", f"{server.door}/ended")
+    monkeypatch.setenv("PLUGIN_DATA_TOKEN", TOKEN)
+    monkeypatch.setenv("PLUGIN_MODE", "report")
+    server.cuts["/door/ended"] = ["reset"]
+
+    assert unicon_step.main(["unicon-step"]) == 0
+    assert server.calls("POST", "/door/ended") == 2
+
+
+def test_a_file_that_cannot_be_written_is_not_fetched_again(
+    server: StandIn, tmp_path: Path
+) -> None:
+    folder = tmp_path / "in"
+    folder.mkdir()
+    folder.chmod(0o555)
+    door = unicon_step.Door(server.door, TOKEN)
+    entry = a_file(server, "Xa9", b"x")
+    try:
+        with pytest.raises(unicon_step.StepError) as raised:
+            unicon_step.download(door, entry, folder / "Xa9")
+    finally:
+        folder.chmod(0o755)
+    assert str(raised.value) == "could not write the file for in/Xa9: Permission denied"
+    assert server.calls("GET", "/files/Xa9") == 0
+
+
+def test_a_write_that_fails_midway_is_not_fetched_again(
+    server: StandIn, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    door = unicon_step.Door(server.door, TOKEN)
+    entry = a_file(server, "Xa9", b"x" * 100)
+    target = tmp_path / "Xa9"
+    real = Path.open
+
+    class Full:
+        def __init__(self, stream: Any) -> None:
+            self.stream = stream
+
+        def __getattr__(self, name: str) -> Any:
+            return getattr(self.stream, name)
+
+        def __enter__(self) -> Full:
+            return self
+
+        def __exit__(self, *exc: object) -> None:
+            self.stream.close()
+
+        def write(self, data: bytes) -> int:
+            raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(Path, "open", lambda self, *a, **k: Full(real(self, *a, **k)))
+    with pytest.raises(unicon_step.StepError) as raised:
+        unicon_step.download(door, entry, target)
+    assert str(raised.value) == (
+        "could not write the file for in/Xa9: No space left on device"
+    )
+    assert server.calls("GET", "/files/Xa9") == 1
+    assert not target.exists()
+
+
+def test_an_object_linked_while_its_lock_was_awaited_is_kept(
+    server: StandIn, tmp_path: Path, work: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """make_room listed the object unlinked; by the time it held the lock,
+    another step had linked it into an item, so it stays."""
+    cache = tmp_path / "cache"
+    store = unicon_step.Cache(cache)
+    (cache / "objects" / "taken").write_bytes(b"x" * 100)
+    real = unicon_step.take_lock
+
+    def linked_meanwhile(path: Path, wait: bool = True, create: bool = True) -> int:
+        if path.name == "taken":
+            os.link(cache / "objects" / "taken", tmp_path / "an-item-holds-it")
+        return real(path, wait, create)
+
+    monkeypatch.setattr(unicon_step, "take_lock", linked_meanwhile)
+    monkeypatch.setattr(unicon_step, "CACHE_CAP", 50)
+    store.make_room(10)
+
+    assert (cache / "objects" / "taken").exists()
+
+
+def test_in_a_woodpecker_step_it_must_be_the_first_process(
+    step: Step, server: StandIn, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Under CI=woodpecker the wrapper must be pid 1, or what a primitive
+    leaves running would outlive it unseen: it refuses before the job."""
+    monkeypatch.setenv("CI", "woodpecker")
+
+    assert step() == 2
+    assert server.seen == []

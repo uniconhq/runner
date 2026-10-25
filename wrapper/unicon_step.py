@@ -15,7 +15,8 @@ header and only to the door and the links under it. In order, the wrapper:
    linked into an item folder of this running step's own;
 4. writes /work/inputs.json with each secret's value filled in, and runs
    the primitive with no PLUGIN_ variable in its environment and its box
-   users in UNICON_BOX_USERS, killing it at the job's time limit;
+   users in UNICON_BOX_USERS, killing it at the job's time limit, and, as
+   the container's first process, everything else left once it ends;
 5. masks every secret, the link and the token in what the primitive wrote
    and printed, uploads /work/outputs.json and /work/out, and tells the
    door the step is done;
@@ -27,26 +28,36 @@ outputs.json and uploaded, so the forge reads one place. Exit 2 is the
 wrapper not reaching the forge. With the setting `mode: report` it only
 tells the door the pipeline ended. With no data link it is not in a
 grading step and runs the command in its place, as the primitives' own
-tests start an image.
+tests start an image, unless it is in a Woodpecker step, where the forge
+writes a link for every step it runs this image in.
+
+It follows no redirect and uses no proxy: every link it is given is the
+forge's or the store's, reached directly.
 """
 
+import codecs
 import concurrent.futures
 import contextlib
 import ctypes
+import errno
 import fcntl
 import functools
 import hashlib
+import http.client
 import json
 import os
 import re
+import resource
 import shutil
 import signal
+import stat
 import subprocess
 import sys
 import tempfile
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from collections.abc import Callable, Iterator
 from pathlib import Path
@@ -58,6 +69,9 @@ CACHE = Path("/cache")
 CACHE_CAP_FILE = Path("/etc/unicon/cache-cap")
 """Where a machine may set its cache's cap in bytes; else `CACHE_CAP`."""
 CACHE_CAP = 10 * 1024**3
+STALE_SECONDS = 3600
+"""How old a lock being made, or a step folder without a lock, must be
+before a sweep takes it for one a killed step left."""
 PARALLEL = 8
 TRIES = 4
 BACKOFF = 1.0
@@ -66,10 +80,32 @@ CHUNK = 1 << 20
 TIMEOUT = 60
 PR_SET_DUMPABLE = 4
 NAME = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.-]{0,254}")
+SETTING = re.compile(r"[a-z][a-z0-9_]*")
+OWN_SETTINGS = frozenset({"data_url", "data_token", "mode"})
+"""The wrapper's own settings, which no secret may be read from."""
+SHORTEST_SECRET = 8
+"""Fewer characters than this and a secret would be masked inside ordinary
+words and numbers, so a step given one fails instead."""
+JSON = "application/json"
+BYTES = "application/octet-stream"
+DEFAULT_PORTS = {"http": 80, "https": 443}
 
 
 class StepError(Exception):
     """What kept the step from doing its work, a sentence for staff."""
+
+
+class RefusedError(StepError):
+    """An answer of 4xx but 429, which no try made again would change."""
+
+    def __init__(self, method: str, code: int) -> None:
+        super().__init__(f"{method} answered {code}")
+        self.code = code
+
+
+class RetryError(Exception):
+    """A try that may pass when made again: no answer, a cut answer, a 429
+    or a 5xx. `retried` turns the last one into a `StepError`."""
 
 
 class Number(str):
@@ -79,6 +115,13 @@ class Number(str):
 def main(argv: list[str]) -> int:
     url = os.environ.get("PLUGIN_DATA_URL")
     if not url:
+        if os.environ.get("CI") == "woodpecker":
+            print(
+                "unicon-step: a Woodpecker step without the setting data_url; the "
+                "forge gives one to every step it runs this image in",
+                file=sys.stderr,
+            )
+            return 2
         if len(argv) < 2:
             print("unicon-step: no data link and no command", file=sys.stderr)
             return 2
@@ -88,15 +131,27 @@ def main(argv: list[str]) -> int:
     try:
         if not door.token:
             raise StepError("the step has a data link and no data token")
+        if os.environ.get("CI") == "woodpecker" and os.getpid() != 1:
+            raise StepError(
+                "the wrapper is not the container's first process, so it could "
+                "not kill what a primitive leaves running"
+            )
         if os.environ.get("PLUGIN_MODE") == "report":
-            door.call("POST", url, b"{}")
+            door.call("POST", url, {}, ends_token=True)
             say(door, "unicon-step: told the forge the pipeline ended")
             return 0
         job = door.call("GET", url)
         if not isinstance(job, dict) or job.get("schema_version") != JOB_VERSION:
             raise StepError(f"the job is not written against version {JOB_VERSION}")
         return grade(door, job, argv[1:])
-    except (StepError, OSError, ValueError, KeyError, TypeError) as error:
+    except (
+        StepError,
+        OSError,
+        ValueError,
+        KeyError,
+        TypeError,
+        http.client.HTTPException,
+    ) as error:
         say(door, f"unicon-step: {type(error).__name__}: {error}")
         return 2
 
@@ -105,29 +160,31 @@ def grade(door: Door, job: dict[str, Any], command: list[str]) -> int:
     """Steps 3 to 6 for one job, and the exit code."""
     outputs = WORK / "outputs.json"
     try:
-        secrets = {name: setting(name) for name in job.get("secrets", [])}
-        door.masks += [value for value in secrets.values() if value]
+        secrets = read_secrets(job.get("secrets", []))
+        door.add_masks(secrets.values())
         with Cache.for_step(job["files"]) as cache:
             place(door, job["files"], cache)
             filled = fill_secrets(job["inputs"], secrets)
             (WORK / "inputs.json").write_text(json.dumps(filled, ensure_ascii=False))
             run(door, command, job)
-        if not outputs.is_file():
-            raise StepError("the primitive ended and wrote no outputs.json")
-        document = mask(door, outputs.read_text(encoding="utf-8"))
-    except (StepError, OSError, ValueError) as error:
+        document = mask(door, read_plain(outputs))
+    except (StepError, OSError, ValueError, http.client.HTTPException) as error:
         version = job["inputs"].get("schema_version")
         document = {"schema_version": version, "error": door.masked(str(error))}
-        outputs.write_text(json.dumps(document, ensure_ascii=False))
+        write_outputs(json.dumps(document, ensure_ascii=False))
     upload(door, job)
-    door.call("POST", job["done"], b"{}")
+    door.call("POST", job["done"], {}, ends_token=True)
     if "error" in document:
         say(door, f"unicon-step: the step failed: {document['error']}")
         return 1
-    found = [document.get("outputs", {})]
-    found += [item.get("outputs", {}) for item in document.get("batch", [])]
+    if "batch" in document:
+        found = [item.get("outputs") for item in document["batch"]]
+    else:
+        found = [document.get("outputs")]
     refused = [
-        o["outcome"] for o in found if o.get("outcome", "accepted") != "accepted"
+        str(outcome or "missing")
+        for o in found
+        if (outcome := o.get("outcome") if isinstance(o, dict) else None) != "accepted"
     ]
     if job["fail_on_non_accepted"] and refused:
         say(door, f"unicon-step: the outcome is {refused[0]}; no later step runs")
@@ -142,9 +199,33 @@ def undumpable() -> None:
         raise SystemExit("unicon-step: could not make itself non-dumpable")
 
 
+def read_secrets(names: Any) -> dict[str, str]:
+    """The value of each secret setting the job names, refusing a name that
+    is not a setting's or is one of the wrapper's own, so no job can have
+    the token written into inputs.json, and a value too short to mask."""
+    if not isinstance(names, list):
+        raise StepError("the job's secrets are not a list of setting names")
+    secrets = {}
+    for name in names:
+        if (
+            not isinstance(name, str)
+            or not SETTING.fullmatch(name)
+            or name in OWN_SETTINGS
+        ):
+            raise StepError(f"the job names the secret setting {name!r}")
+        value = setting(name)
+        if len(value) < SHORTEST_SECRET:
+            raise StepError(
+                f"the secret setting {name} is shorter than {SHORTEST_SECRET} "
+                "characters, too short to mask in what the step prints"
+            )
+        secrets[name] = value
+    return secrets
+
+
 def setting(name: str) -> str:
     """A setting's value, as Woodpecker hands it to a plugin step."""
-    variable = "PLUGIN_" + name.upper().replace("-", "_").replace(".", "_")
+    variable = "PLUGIN_" + name.upper()
     if variable not in os.environ:
         raise StepError(f"the secret setting {name} was not given to the step")
     return os.environ[variable]
@@ -154,74 +235,195 @@ def say(door: Door, text: str) -> None:
     print(door.masked(text), flush=True)
 
 
+def under(door: str, url: str) -> bool:
+    """Whether `url` is the door or a link under it: the same scheme, host
+    and port, its path the door's or below it, with no dot segment and no
+    escaped dot, slash or backslash a server might read as one."""
+    try:
+        base, found = urllib.parse.urlsplit(door), urllib.parse.urlsplit(url)
+        places = [
+            (part.scheme, part.hostname, part.port or DEFAULT_PORTS.get(part.scheme))
+            for part in (base, found)
+        ]
+    except ValueError:
+        return False
+    if places[0] != places[1] or found.username is not None or found.password:
+        return False
+    path = found.path
+    if re.search(r"%(2e|2f|5c)|\\", path, re.IGNORECASE) or any(
+        segment in (".", "..") for segment in path.split("/")
+    ):
+        return False
+    return path == base.path or path.startswith(base.path.rstrip("/") + "/")
+
+
+class Refuse(urllib.request.HTTPRedirectHandler):
+    """Follow no redirect: a 3xx is an answer the step refuses, so the token
+    never goes where the door did not send it and a POST never turns into a
+    GET that seems to succeed."""
+
+    def redirect_request(self, *args: Any) -> None:
+        return None
+
+
+class Body:
+    """`size` bytes of an open file from its start, read by position, so the
+    bytes put are the ones hashed and a retry reads them again."""
+
+    def __init__(self, descriptor: int, size: int) -> None:
+        self.descriptor, self.left, self.offset = descriptor, size, 0
+
+    def read(self, wanted: int = -1) -> bytes:
+        wanted = self.left if wanted < 0 else min(wanted, self.left)
+        chunk = os.pread(self.descriptor, wanted, self.offset)
+        self.offset += len(chunk)
+        self.left -= len(chunk)
+        return chunk
+
+
+def retried(attempt: Callable[[], Any], what: str = "") -> Any:
+    """`attempt`'s answer, made again after each `RetryError` up to `TRIES`."""
+    for number in range(TRIES):
+        try:
+            return attempt()
+        except RetryError as error:
+            if number == TRIES - 1:
+                raise StepError(f"{what}{error}") from None
+        time.sleep(BACKOFF * 2**number)
+    raise AssertionError("unreachable")
+
+
 class Door:
-    """The step's door at the forge: its link and token, and every value the
-    wrapper masks."""
+    """The step's door at the forge: its link and token, every value the
+    wrapper masks, and the one opener every request goes through."""
 
     def __init__(self, url: str, token: str) -> None:
         self.url, self.token = url, token
-        self.masks = [value for value in (url, token) if value]
+        self.masks: list[str] = []
+        self.pattern = re.compile("(?!)")
+        self.add_masks([url, token])
+        self.opener = urllib.request.build_opener(
+            urllib.request.ProxyHandler({}), Refuse()
+        )
+
+    def add_masks(self, values: Any) -> None:
+        self.masks = sorted(
+            {*self.masks, *(value for value in values if value)}, key=len, reverse=True
+        )
+        if self.masks:
+            self.pattern = re.compile("|".join(map(re.escape, self.masks)))
 
     def masked(self, text: str) -> str:
-        for value in sorted(self.masks, key=len, reverse=True):
-            text = text.replace(value, "***")
-        return text
+        return self.pattern.sub("***", text)
 
-    def request(self, method: str, url: str, data: bytes | Path | None = None) -> Any:
-        """Open `url`, with the token only when it is the door or under it,
-        retrying what may pass: no answer, a 429 or a 5xx. A file is sent
-        as it is read."""
+    def attempt(
+        self,
+        method: str,
+        url: str,
+        data: bytes | Body | None = None,
+        kind: str | None = None,
+    ) -> Any:
+        """One try at `url`, with the token only when it is the door or a
+        link under it; a `RetryError` for what may pass when tried again."""
         headers = {}
-        if url == self.url or url.startswith(self.url.rstrip("/") + "/"):
+        if under(self.url, url):
             headers["Authorization"] = f"Bearer {self.token}"
-        if data is not None:
-            headers["Content-Type"] = "application/octet-stream"
-        for attempt in range(TRIES):
-            try:
-                with contextlib.ExitStack() as stack:
-                    body: Any = data
-                    if isinstance(data, Path):
-                        body = stack.enter_context(data.open("rb"))
-                        headers["Content-Length"] = str(data.stat().st_size)
-                    request = urllib.request.Request(url, body, headers, method=method)
-                    return urllib.request.urlopen(request, timeout=TIMEOUT)
-            except urllib.error.HTTPError as error:
-                if (error.code != 429 and error.code < 500) or attempt == TRIES - 1:
-                    raise StepError(f"{method} answered {error.code}") from None
-            except (urllib.error.URLError, TimeoutError) as error:
-                if attempt == TRIES - 1:
-                    raise StepError(f"{method} found no answer: {error}") from None
-            time.sleep(BACKOFF * 2**attempt)
-        raise AssertionError("unreachable")
+        if kind is not None:
+            headers["Content-Type"] = kind
+        if isinstance(data, Body):
+            headers["Content-Length"] = str(data.left)
+        try:
+            request = urllib.request.Request(url, data, headers, method=method)
+            return self.opener.open(request, timeout=TIMEOUT)
+        except urllib.error.HTTPError as error:
+            error.close()
+            if error.code == 429 or error.code >= 500:
+                raise RetryError(f"{method} answered {error.code}") from None
+            raise RefusedError(method, error.code) from None
+        except ValueError, http.client.InvalidURL:
+            raise StepError(f"{method} was given a link it cannot open") from None
+        except (OSError, http.client.HTTPException) as error:
+            reason = getattr(error, "reason", error)
+            raise RetryError(f"{method} found no answer: {reason}") from None
 
-    def call(self, method: str, url: str, data: bytes | None = None) -> Any:
-        with self.request(method, url, data) as answer:
-            text = answer.read()
+    def call(
+        self, method: str, url: str, document: Any = None, ends_token: bool = False
+    ) -> Any:
+        """Ask the door, sending `document` as JSON, and read its answer. A
+        request that `ends_token`, done or the end of the pipeline, may have
+        been taken by the door though its answer was cut off: tried again,
+        a 401 or 403, the token ended, is that request done."""
+        data = None if document is None else json.dumps(document).encode()
+        tries = 0
+
+        def once() -> bytes:
+            nonlocal tries
+            tries += 1
+            kind = None if data is None else JSON
+            try:
+                answer = self.attempt(method, url, data, kind)
+            except RefusedError as error:
+                if ends_token and tries > 1 and error.code in (401, 403):
+                    return b""
+                raise
+            with answer:
+                try:
+                    text: bytes = answer.read()
+                except (OSError, http.client.HTTPException) as error:
+                    raise RetryError(
+                        f"{method}'s answer was cut off: {error}"
+                    ) from None
+            return text
+
+        text = retried(once)
         return json.loads(text) if text.strip() else None
+
+    def put(self, url: str, descriptor: int, size: int, path: str) -> None:
+        def once() -> None:
+            with self.attempt("PUT", url, Body(descriptor, size), BYTES) as answer:
+                try:
+                    answer.read()
+                except (OSError, http.client.HTTPException) as error:
+                    raise RetryError(f"PUT's answer was cut off: {error}") from None
+
+        retried(once, f"the upload of {path}: ")
+
+
+def mounted(path: Path) -> bool:
+    return os.path.ismount(path)
 
 
 class Cache:
-    """The machine's cache, /cache, one Docker volume per org: each task file
-    once in objects/, named by its SHA-256, with a lock per name in locks/
-    held while it is fetched or linked, the least recently used removed
-    first past the cap; and in items/ this running step's folder, made by
-    mkdtemp with a lock beside it held for the step's life, whose item
-    folders hold hard links to the objects each item reads. /work/cache is
-    a link to the step's folder, so the job names a cached file
-    cache/<item>/<name> before the folder exists."""
+    """The machine's cache, /cache, one Docker volume per org, used by steps
+    that run as root: each task file once in objects/, named by its SHA-256,
+    with a lock per name in locks/ held while it is fetched or linked, the
+    least recently used removed first past the cap; and in items/ this
+    running step's folder, with a lock beside it held for the step's life,
+    whose item folders hold hard links to the objects each item reads and
+    whose .fetching folder holds downloads in progress. /work/cache is a
+    link to the step's folder, so the job names a cached file
+    cache/<item>/<name> before the folder exists. The lock is made under a
+    name of its own, held, and only then named <folder>.lock, and the
+    folder made after it, so a step folder never stands without a held
+    lock but in a step that is dying."""
 
     def __init__(self, root: Path) -> None:
         self.root = root
-        for name in ("objects", "locks", "tmp", "items"):
+        for name in ("objects", "locks", "items"):
             (root / name).mkdir(exist_ok=True)
-            with contextlib.suppress(PermissionError):
-                (root / name).chmod(0o1777)
-        sweep(root / "items")
-        self.folder = Path(tempfile.mkdtemp(prefix="step-", dir=root / "items"))
-        self.lock = self.folder.with_name(self.folder.name + ".lock")
-        fresh = self.folder.with_name(self.folder.name + ".lock-new")
-        self.held = take_lock(fresh)
+        sweep(root)
+        descriptor, made = tempfile.mkstemp(
+            prefix="step-", suffix=".lock-new", dir=root / "items"
+        )
+        os.close(descriptor)
+        fresh = Path(made)
+        self.held = take_lock(fresh, create=False)
+        self.lock = fresh.with_name(fresh.name.removesuffix("-new"))
         fresh.rename(self.lock)
+        self.folder = self.lock.with_suffix("")
+        self.folder.mkdir()
+        self.fetching = self.folder / ".fetching"
+        self.fetching.mkdir()
         (WORK / "cache").symlink_to(self.folder)
 
     @classmethod
@@ -232,6 +434,10 @@ class Cache:
         if not any(entry.get("cached") for entry in files):
             yield None
             return
+        if not mounted(CACHE):
+            raise StepError(
+                "the job has cached files and the step has no /cache volume"
+            )
         cache = cls(CACHE)
         try:
             yield cache
@@ -249,7 +455,7 @@ class Cache:
             found = self.root / "objects" / digest
             if not found.is_file():
                 self.make_room(entry["size"])
-                descriptor, name = tempfile.mkstemp(dir=self.root / "tmp")
+                descriptor, name = tempfile.mkstemp(dir=self.fetching)
                 os.close(descriptor)
                 try:
                     download(door, entry, Path(name))
@@ -266,45 +472,70 @@ class Cache:
 
     def make_room(self, size: int) -> None:
         """Remove the least recently used objects that no item holds and no
-        step is fetching or linking, until `size` more bytes fit the cap."""
+        step is fetching or linking, and their locks, until `size` more
+        bytes fit the cap. A download in progress is not counted."""
         cap = CACHE_CAP
         if CACHE_CAP_FILE.is_file():
             cap = int(CACHE_CAP_FILE.read_text())
         evicting = take_lock(self.root / "locks" / "evict")
         try:
             found = [(path, path.stat()) for path in (self.root / "objects").iterdir()]
-            used = sum(stat.st_size for _, stat in found)
-            for path, stat in sorted(found, key=lambda pair: pair[1].st_mtime):
+            used = sum(seen.st_size for _, seen in found)
+            for path, seen in sorted(found, key=lambda pair: pair[1].st_mtime):
                 if used + size <= cap:
                     break
-                if stat.st_nlink > 1:
+                if seen.st_nlink > 1:
                     continue
-                with contextlib.suppress(BlockingIOError):
-                    held = take_lock(self.root / "locks" / path.name, wait=False)
-                    path.unlink(missing_ok=True)
+                lock = self.root / "locks" / path.name
+                try:
+                    held = take_lock(lock, wait=False)
+                except BlockingIOError:
+                    continue
+                try:
+                    # Linked since it was listed, or removed, by a step that
+                    # held the lock in between.
+                    now = path.lstat()
+                    if now.st_nlink > 1:
+                        continue
+                    path.unlink()
+                    lock.unlink(missing_ok=True)
+                    used -= now.st_size
+                except FileNotFoundError:
+                    used -= seen.st_size
+                finally:
                     os.close(held)
-                    used -= stat.st_size
         finally:
             os.close(evicting)
 
 
 def take_lock(path: Path, wait: bool = True, create: bool = True) -> int:
-    """An flock on `path`, held until the descriptor it returns is closed."""
+    """An flock on `path`, held until the descriptor it returns is closed.
+    The lock holds only while `path` still names the file locked, so one
+    removed by a holder, as a sweep removes a lock, is taken again under
+    its new file."""
     flags = os.O_RDONLY | os.O_NOFOLLOW | (os.O_CREAT if create else 0)
-    held = os.open(path, flags, 0o444)
-    try:
-        fcntl.flock(held, fcntl.LOCK_EX | (0 if wait else fcntl.LOCK_NB))
-    except BaseException:
+    while True:
+        held = os.open(path, flags, 0o444)
+        try:
+            fcntl.flock(held, fcntl.LOCK_EX | (0 if wait else fcntl.LOCK_NB))
+            with contextlib.suppress(FileNotFoundError):
+                if os.path.samestat(os.fstat(held), os.lstat(path)):
+                    return held
+        except BaseException:
+            os.close(held)
+            raise
         os.close(held)
-        raise
-    return held
+        if not create:
+            raise FileNotFoundError(path)
 
 
-def sweep(items: Path) -> None:
-    """Remove every step folder whose lock no one holds: what a step killed
-    before its end left, whose links would keep objects past the cap. A
-    lock is taken under its final name only once held, so one being made
-    is never swept."""
+def sweep(root: Path) -> None:
+    """Remove what killed steps left: each step folder whose lock no one
+    holds, whose links would keep objects past the cap and whose .fetching
+    folder holds a part of a download; a lock still being made, or a step
+    folder without one, once older than `STALE_SECONDS`; and the lock of
+    every name no object has and no step holds."""
+    items = root / "items"
     for lock in items.glob("*.lock"):
         try:
             held = take_lock(lock, wait=False, create=False)
@@ -313,6 +544,26 @@ def sweep(items: Path) -> None:
         remove(items / lock.stem)
         lock.unlink(missing_ok=True)
         os.close(held)
+    now = time.time()
+    for path in items.iterdir():
+        with contextlib.suppress(FileNotFoundError):
+            if path.suffix == ".lock" or now - path.lstat().st_mtime < STALE_SECONDS:
+                continue
+            if path.name.endswith(".lock-new"):
+                with contextlib.suppress(BlockingIOError, FileNotFoundError):
+                    held = take_lock(path, wait=False, create=False)
+                    path.unlink(missing_ok=True)
+                    os.close(held)
+            elif path.is_dir() and not path.with_name(path.name + ".lock").exists():
+                remove(path)
+    for lock in (root / "locks").iterdir():
+        if lock.name == "evict" or (root / "objects" / lock.name).exists():
+            continue
+        with contextlib.suppress(BlockingIOError, FileNotFoundError):
+            held = take_lock(lock, wait=False, create=False)
+            if not (root / "objects" / lock.name).exists():
+                lock.unlink(missing_ok=True)
+            os.close(held)
 
 
 def remove(folder: Path) -> None:
@@ -350,26 +601,65 @@ def place(door: Door, files: list[dict[str, Any]], cache: Cache | None) -> None:
         for fetched in [pool.submit(fetch) for fetch in fetches]:
             fetched.result()
     if cache is not None:
+        remove(cache.fetching)
         for item in cache.folder.iterdir():
             item.chmod(0o555)
 
 
 def download(door: Door, entry: dict[str, Any], target: Path) -> None:
     """Fetch one file to `target`, refusing it unless it is exactly the
-    length and SHA-256 the job names."""
-    digest, size = hashlib.sha256(), 0
-    with door.request("GET", entry["url"]) as answer, target.open("wb") as out:
-        while chunk := answer.read(CHUNK):
-            size += len(chunk)
-            if size > entry["size"]:
-                break
-            digest.update(chunk)
-            out.write(chunk)
-    if size != entry["size"] or digest.hexdigest() != entry["sha256"]:
-        target.unlink()
-        raise StepError(
-            f"the file for {entry['path']} is not the length and SHA-256 the job names"
-        )
+    length and SHA-256 the job names, and fetching it again from its start
+    when the answer is cut off or does not come. An error names the file's
+    path, never its link."""
+    path, size = entry["path"], entry["size"]
+    wrong = f"the file for {path} is not the length and SHA-256 the job names"
+
+    def written(write: Callable[..., object], *args: Any) -> None:
+        """A write to the file, failing the step as one, never retried."""
+        try:
+            write(*args)
+        except OSError as error:
+            reason = error.strerror or error
+            raise StepError(f"could not write the file for {path}: {reason}") from None
+
+    def once(out: Any) -> None:
+        try:
+            answer = door.attempt("GET", entry["url"])
+        except StepError as error:
+            raise StepError(f"the file for {path}: {error}") from None
+        digest, got = hashlib.sha256(), 0
+        with answer:
+            written(out.seek, 0)
+            written(out.truncate)
+            while True:
+                try:
+                    chunk = answer.read(CHUNK)
+                except (OSError, http.client.HTTPException) as error:
+                    raise RetryError(f"the answer was cut off: {error}") from None
+                if not chunk:
+                    break
+                got += len(chunk)
+                if got > size:
+                    raise StepError(wrong)
+                digest.update(chunk)
+                written(out.write, chunk)
+        if got < size:
+            raise RetryError(f"the answer ended after {got} of {size} bytes")
+        if digest.hexdigest() != entry["sha256"]:
+            raise StepError(wrong)
+
+    try:
+        try:
+            out = target.open("wb")
+        except OSError as error:
+            reason = error.strerror or error
+            raise StepError(f"could not write the file for {path}: {reason}") from None
+        with out:
+            retried(functools.partial(once, out), f"the file for {path}: ")
+            written(out.flush)
+    except BaseException:
+        target.unlink(missing_ok=True)
+        raise
 
 
 def from_workspace(source: str, target: Path) -> None:
@@ -411,7 +701,9 @@ def fill_secrets(value: Any, secrets: dict[str, str]) -> Any:
 
 def run(door: Door, command: list[str], job: dict[str, Any]) -> None:
     """Run the primitive in /work, what it prints masked into the step's log,
-    and kill it and all it started at the job's time limit."""
+    and kill it and all it started at the job's time limit; as the
+    container's first process, kill whatever is left once it ends, so
+    nothing changes /work/out while it is uploaded."""
     if not command:
         raise StepError("the image names no primitive to run")
     environment = {k: v for k, v in os.environ.items() if not k.startswith("PLUGIN_")}
@@ -428,12 +720,7 @@ def run(door: Door, command: list[str], job: dict[str, Any]) -> None:
     )
     printed = process.stdout
     assert printed is not None
-
-    def relay() -> None:
-        for line in iter(lambda: printed.readline(1 << 16), b""):
-            say(door, line.decode("utf-8", "replace").rstrip("\n"))
-
-    relaying = threading.Thread(target=relay, daemon=True)
+    relaying = threading.Thread(target=relay, args=(door, printed), daemon=True)
     relaying.start()
     try:
         process.wait(timeout=job["time_limit"])
@@ -445,7 +732,75 @@ def run(door: Door, command: list[str], job: dict[str, Any]) -> None:
             f"{job['time_limit']} s, and was killed"
         ) from None
     finally:
+        kill_the_rest()
         relaying.join(timeout=10)
+
+
+def kill_the_rest() -> None:
+    """As the container's first process, kill every other process in it and
+    reap them. Elsewhere, in the tests, there is no such set to kill."""
+    if os.getpid() != 1:
+        return
+    with contextlib.suppress(ProcessLookupError):
+        os.kill(-1, signal.SIGKILL)
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline:
+        try:
+            if os.waitpid(-1, os.WNOHANG) == (0, 0):
+                time.sleep(0.05)
+        except ChildProcessError:
+            return
+
+
+def relay(door: Door, printed: Any) -> None:
+    """Copy what the primitive prints into the step's log, masked. A line
+    longer than one read is written in parts, each but the last keeping
+    back as many characters as the longest mask has, less one, so no mask
+    is split across two parts."""
+    decoder = codecs.getincrementaldecoder("utf-8")("replace")
+    keep = max(map(len, door.masks), default=1) - 1
+    carried = ""
+    while piece := printed.readline(1 << 16):
+        text = carried + decoder.decode(piece)
+        if text.endswith("\n"):
+            write(door.masked(text[:-1]) + "\n")
+            carried = ""
+            continue
+        cut = max(0, len(text) - keep)
+        for found in door.pattern.finditer(text):
+            if found.start() < cut < found.end():
+                cut = found.end()
+        write(door.masked(text[:cut]))
+        carried = text[cut:]
+    text = carried + decoder.decode(b"", final=True)
+    if text:
+        write(door.masked(text) + "\n")
+
+
+def write(text: str) -> None:
+    sys.stdout.write(text)
+    sys.stdout.flush()
+
+
+def read_plain(path: Path) -> str:
+    """A file the primitive wrote, refused unless it is a plain file."""
+    name = path.relative_to(WORK)
+    try:
+        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except FileNotFoundError:
+        raise StepError(f"the primitive ended and wrote no {name}") from None
+    except OSError:
+        raise StepError(f"the primitive's {name} is not a plain file") from None
+    with os.fdopen(descriptor, "rb") as stream:
+        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+            raise StepError(f"the primitive's {name} is not a plain file")
+        return stream.read().decode("utf-8")
+
+
+def write_outputs(text: str) -> None:
+    """Write outputs.json anew, never through a link the primitive left."""
+    (WORK / "outputs.json").unlink(missing_ok=True)
+    (WORK / "outputs.json").write_text(text, encoding="utf-8")
 
 
 def mask(door: Door, text: str) -> dict[str, Any]:
@@ -456,15 +811,20 @@ def mask(door: Door, text: str) -> dict[str, Any]:
         raise StepError("the primitive's outputs.json is not a JSON object")
     masked: dict[str, Any] = masked_value(door, document)
     if (written := exact(masked)) != exact(document):
-        (WORK / "outputs.json").write_text(written, encoding="utf-8")
+        write_outputs(written)
     return masked
 
 
-def masked_value(door: Door, value: Any) -> Any:
-    if isinstance(value, str) and not isinstance(value, Number):
-        return door.masked(value)
+def masked_value(door: Door, value: Any, key: object = None) -> Any:
+    """`value` masked: each text, but an `outcome`, which is a word of the
+    contract's, and each number that holds a masked value, which becomes
+    the text `***`, so it can pass as no number."""
+    if isinstance(value, Number):
+        return "***" if door.masked(value) != value else value
+    if isinstance(value, str):
+        return value if key == "outcome" else door.masked(value)
     if isinstance(value, dict):
-        return {key: masked_value(door, item) for key, item in value.items()}
+        return {name: masked_value(door, item, name) for name, item in value.items()}
     if isinstance(value, list):
         return [masked_value(door, item) for item in value]
     return value
@@ -484,33 +844,53 @@ def exact(value: Any) -> str:
 
 def upload(door: Door, job: dict[str, Any]) -> None:
     """Upload outputs.json and every plain file under /work/out by the links
-    the door gives for them, side by side."""
+    the door gives for them, side by side, each hashed, measured and put
+    from one descriptor, opened without following a link."""
     paths = [WORK / "outputs.json"]
     for parent, _, names in os.walk(WORK / "out"):
         paths += [Path(parent) / name for name in names]
-    listing: list[dict[str, Any]] = [
-        {
-            "path": str(p.relative_to(WORK)),
-            "sha256": sha256(p),
-            "size": p.stat().st_size,
-        }
-        for p in paths
-        if p.is_file() and not p.is_symlink()
-    ]
-    asked = json.dumps({"files": listing}).encode()
-    links = door.call("POST", job["uploads"], asked)["files"]
-    with concurrent.futures.ThreadPoolExecutor(PARALLEL) as pool:
-        puts = [
-            pool.submit(door.request, "PUT", links[entry["path"]], WORK / entry["path"])
-            for entry in listing
+    _, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+    with contextlib.suppress(ValueError, OSError):
+        resource.setrlimit(resource.RLIMIT_NOFILE, (hard, hard))
+    opened: list[tuple[str, int, int]] = []
+    try:
+        for path in paths:
+            flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
+            try:
+                descriptor = os.open(path, flags)
+            except OSError as error:
+                if error.errno in (errno.ELOOP, errno.ENOENT, errno.ENXIO):
+                    continue
+                raise StepError(
+                    f"could not open {path.relative_to(WORK)}: {error}"
+                ) from None
+            found = os.fstat(descriptor)
+            if not stat.S_ISREG(found.st_mode):
+                os.close(descriptor)
+                continue
+            opened.append((str(path.relative_to(WORK)), descriptor, found.st_size))
+        listing = [
+            {"path": name, "sha256": digest_of(descriptor, size), "size": size}
+            for name, descriptor, size in opened
         ]
-        for put in puts:
-            put.result().close()
+        links = door.call("POST", job["uploads"], {"files": listing})["files"]
+        with concurrent.futures.ThreadPoolExecutor(PARALLEL) as pool:
+            puts = [
+                pool.submit(door.put, links[name], descriptor, size, name)
+                for name, descriptor, size in opened
+            ]
+            for put in puts:
+                put.result()
+    finally:
+        for _, descriptor, _ in opened:
+            os.close(descriptor)
 
 
-def sha256(path: Path) -> str:
-    with path.open("rb") as stream:
-        return hashlib.file_digest(stream, "sha256").hexdigest()
+def digest_of(descriptor: int, size: int) -> str:
+    digest, body = hashlib.sha256(), Body(descriptor, size)
+    while chunk := body.read(CHUNK):
+        digest.update(chunk)
+    return digest.hexdigest()
 
 
 if __name__ == "__main__":
