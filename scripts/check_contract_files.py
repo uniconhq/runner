@@ -38,7 +38,10 @@ CONTRACTS: dict[str, list[tuple[str, str | None]]] = {
         ("primitive-outputs.json", "outputs_file"),
         ("primitive-outputs-batch.json", "outputs_file"),
         ("primitive-outputs-error.json", "outputs_file"),
+        ("primitive-v6-inputs-batch.json", "inputs_file"),
+        ("primitive-v6-outputs-batch.json", "outputs_file"),
         ("primitive.yaml", "declaration"),
+        ("primitive-v6.yaml", "declaration"),
     ],
 }
 
@@ -102,27 +105,33 @@ def _branch_mismatch(
 
 
 def _version_pinned(name: str, schema: Any) -> list[str]:
-    """Every contract file pins the schema_version the harness speaks."""
-    declared = _schema_version_const(schema, schema)
-    if declared != SCHEMA_VERSION:
+    """Every contract file accepts the schema_version the harness speaks. The
+    primitive contract accepts the versions primitives speak, the harness's
+    among them, since a primitive keeps its version until it moves to a new one.
+    """
+    declared = _schema_versions(schema, schema)
+    if declared is None or SCHEMA_VERSION not in declared:
         return [
-            f"schemas/{name}.schema.json pins schema_version {declared}, "
+            f"schemas/{name}.schema.json accepts schema_version "
+            f"{sorted(declared) if declared else None}, "
             f"but the harness speaks {SCHEMA_VERSION}"
         ]
     return []
 
 
-def _schema_version_const(node: Any, root: Any) -> Any:
-    """The `const` on schema_version, at the root or in every root branch that
-    carries one. The primitive declaration is a YAML file a person writes and
-    has no version of its own; the release it is validated against is its
-    version.
+def _schema_versions(node: Any, root: Any) -> frozenset[int] | None:
+    """The versions schema_version may be, by its `const` or `enum`, at the root
+    or the same in every root branch that carries one. A primitive declaration
+    without a version speaks version 5.
     """
     properties = node.get("properties", {})
     if "schema_version" in properties:
-        return properties["schema_version"].get("const")
+        version = properties["schema_version"]
+        if "const" in version:
+            return frozenset([version["const"]])
+        return frozenset(version.get("enum", []))
     found = {
-        _schema_version_const(_resolved(branch, root), root)
+        _schema_versions(_resolved(branch, root), root)
         for branch in node.get("oneOf", [])
         if "schema_version" in _resolved(branch, root).get("properties", {})
     }

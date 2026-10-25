@@ -10,34 +10,38 @@
   ],
   "$defs": {
     "inputs_file": {
-      "description": "inputs.json, written by the harness before the container starts. inputs for a step that runs once or for one test; batch for a primitive that takes many tests in one run.",
+      "description": "inputs.json, written by the harness before the container starts. inputs for a step that runs once or for one test; batch for a primitive that takes many runs in one container.",
       "type": "object",
       "required": ["schema_version"],
       "additionalProperties": false,
       "properties": {
         "schema_version": {
-          "description": "The contract version this file is written against. A primitive refuses a version it does not speak.",
+          "description": "The contract version this file is written against, the one the primitive's declaration names. A primitive refuses a version it does not speak.",
           "type": "integer",
-          "const": 5
+          "enum": [5, 6]
         },
         "inputs": {
           "description": "One entry per input given, keyed by the input name. An optional input the task left out is absent.",
-          "$ref": "#/$defs/values"
+          "$ref": "#/$defs/input_values"
         },
         "batch": {
-          "description": "One item per test, in test order, each with the inputs for that test.",
+          "description": "One item per run, in the order the primitive runs them, each with the inputs for that run. Version 5 keys an item by test, version 6 by run.",
           "type": "array",
           "minItems": 1,
           "items": {
             "type": "object",
-            "required": ["test", "inputs"],
+            "required": ["inputs"],
             "additionalProperties": false,
             "properties": {
               "test": {
-                "description": "The test this item is for, <group>/<test>. outputs.json answers with the same test in the same position. The id holds a /, so a primitive that writes a file per test does not name the file after it as it is.",
+                "description": "Version 5: the test this item is for, <group>/<test>. outputs.json answers with the same test in the same position. The id holds a /, so a primitive that writes a file per test does not name the file after it as it is.",
                 "$ref": "#/$defs/test_id"
               },
-              "inputs": { "$ref": "#/$defs/values" }
+              "run": {
+                "description": "Version 6, in place of test: an id for this run that only the forge knows the meaning of. outputs.json answers with the same run in the same position.",
+                "$ref": "#/$defs/run_id"
+              },
+              "inputs": { "$ref": "#/$defs/input_values" }
             }
           }
         }
@@ -45,7 +49,8 @@
       "oneOf": [
         { "required": ["inputs"], "not": { "required": ["batch"] } },
         { "required": ["batch"], "not": { "required": ["inputs"] } }
-      ]
+      ],
+      "$ref": "#/$defs/batch_key"
     },
     "outputs_file": {
       "description": "outputs.json, written by the primitive before it exits. The harness checks it against this contract and against the outputs the plan declares for the step before any later step sees it. outputs for a single run, batch for a batch, one entry per item in the same order; or error alone when the primitive could not work at all. Numbers are read as the decimals they are written as.",
@@ -56,21 +61,22 @@
         "schema_version": {
           "description": "The contract version this file is written against, the same number as in inputs.json.",
           "type": "integer",
-          "const": 5
+          "enum": [5, 6]
         },
         "outputs": {
           "description": "One entry per output written, keyed by the output name, outcome always among them. A file output names a path under out/, a folder output a folder under out/. On accepted every output the declaration does not mark optional is written; on any other outcome only outcome need be.",
           "$ref": "#/$defs/values"
         },
         "batch": {
-          "description": "One entry per item of inputs.json's batch, in the same order and with the same tests.",
+          "description": "One entry per item of inputs.json's batch, in the same order and with the same tests or runs.",
           "type": "array",
           "items": {
             "type": "object",
-            "required": ["test", "outputs"],
+            "required": ["outputs"],
             "additionalProperties": false,
             "properties": {
               "test": { "$ref": "#/$defs/test_id" },
+              "run": { "$ref": "#/$defs/run_id" },
               "outputs": { "$ref": "#/$defs/values" }
             }
           }
@@ -85,7 +91,25 @@
         { "required": ["outputs"], "not": { "required": ["batch"] } },
         { "required": ["batch"], "not": { "required": ["outputs"] } },
         { "required": ["error"], "not": { "anyOf": [{ "required": ["outputs"] }, { "required": ["batch"] }] } }
-      ]
+      ],
+      "$ref": "#/$defs/batch_key"
+    },
+    "batch_key": {
+      "description": "What a batch item is keyed by: test in version 5, run in version 6, never both. Only version 6 carries named_files values.",
+      "if": { "properties": { "schema_version": { "const": 6 } } },
+      "then": { "properties": { "batch": { "items": { "required": ["run"], "not": { "required": ["test"] } } } } },
+      "else": {
+        "properties": {
+          "inputs": { "$ref": "#/$defs/values" },
+          "batch": {
+            "items": {
+              "required": ["test"],
+              "not": { "required": ["run"] },
+              "properties": { "inputs": { "$ref": "#/$defs/values" } }
+            }
+          }
+        }
+      }
     },
     "declaration": {
       "description": "primitive.yaml, what the forge compiler reads for one version of a primitive. The repo at the forge is the name and its tag the version, so the file names neither. In the primitive's own GitHub repo the file has no image line; bootstrap writes the image by digest from the release manifest into the version it creates at the forge, so a repo's CI validates its file with a placeholder digest filled in.",
@@ -100,6 +124,11 @@
         "description": {
           "description": "One sentence for the workflow editor saying what the primitive does. It changes nothing that grades.",
           "$ref": "#/$defs/line"
+        },
+        "schema_version": {
+          "description": "The contract version the primitive speaks: the schema_version of every inputs.json it is given and outputs.json it writes. 5 when left out. Only version 6 has named_files inputs, better and bounds on a number output, and outputs_from.",
+          "type": "integer",
+          "enum": [5, 6]
         },
         "image": {
           "description": "The image this version runs from, by digest.",
@@ -130,6 +159,10 @@
             "output_mb": { "$ref": "#/$defs/limit_from" },
             "gpus": { "$ref": "#/$defs/limit_from" }
           }
+        },
+        "outputs_from": {
+          "description": "manifest: the primitive's outputs are those listed here and also the reports of the program.yaml given on its manifest input, a file input it must declare. It reads them from what the program it runs reports, and the forge checks a step's wiring against both.",
+          "const": "manifest"
         },
         "inputs": {
           "description": "What the primitive takes, by name. Every file or folder input says whether the primitive runs what arrives there as a program.",
@@ -164,7 +197,31 @@
           },
           "additionalProperties": { "$ref": "#/$defs/output_port" }
         }
-      }
+      },
+      "allOf": [
+        {
+          "if": { "required": ["outputs_from"] },
+          "then": {
+            "required": ["inputs"],
+            "properties": {
+              "inputs": {
+                "required": ["manifest"],
+                "properties": { "manifest": { "properties": { "type": { "const": "file" } } } }
+              }
+            }
+          }
+        },
+        {
+          "if": { "required": ["schema_version"], "properties": { "schema_version": { "const": 6 } } },
+          "else": {
+            "not": { "required": ["outputs_from"] },
+            "properties": {
+              "inputs": { "additionalProperties": { "properties": { "type": { "not": { "const": "named_files" } } } } },
+              "outputs": { "additionalProperties": { "not": { "$ref": "#/$defs/number_meaning" } } }
+            }
+          }
+        }
+      ]
     },
     "limits": {
       "type": "object",
@@ -197,7 +254,8 @@
     "line": {
       "description": "One line of text: not empty, not only spaces, no line break.",
       "type": "string",
-      "pattern": "^[^\\r\\n]*[^\\s][^\\r\\n]*$"
+      "pattern": "^[^\\r\\n]*[^\\s][^\\r\\n]*$",
+      "not": { "type": "string", "pattern": "\\n$" }
     },
     "options": {
       "type": "array",
@@ -206,16 +264,23 @@
       "items": { "type": "string", "minLength": 1 }
     },
     "input_port": {
-      "description": "One declared input. options on an enum and nowhere else. runs on every file or folder port and nowhere else: whether the primitive runs what arrives there as a program. secret: the image keeps what arrives there from any program it runs from another port. optional: the port may be left without a value. description: what the port takes, for the workflow editor.",
+      "description": "One declared input. options on an enum and nowhere else. runs on every file, folder or named_files port and nowhere else: whether the primitive runs what arrives there as a program. names on a named_files port and nowhere else: the names its files must have, when the primitive fixes them. secret: the image keeps what arrives there from any program it runs from another port. optional: the port may be left without a value. description: what the port takes, for the workflow editor.",
       "type": "object",
       "required": ["type"],
       "additionalProperties": false,
       "properties": {
         "type": {
           "type": "string",
-          "enum": ["text", "number", "boolean", "enum", "file", "folder"]
+          "enum": ["text", "number", "boolean", "enum", "file", "folder", "named_files"]
         },
         "options": { "$ref": "#/$defs/options" },
+        "names": {
+          "description": "The names a value must give its files, each of them; any names when left out.",
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/file_name" }
+        },
         "optional": { "type": "boolean" },
         "runs": { "type": "boolean" },
         "secret": { "type": "boolean" },
@@ -231,14 +296,18 @@
           "else": { "not": { "required": ["options"] } }
         },
         {
-          "if": { "properties": { "type": { "enum": ["file", "folder"] } } },
+          "if": { "properties": { "type": { "enum": ["file", "folder", "named_files"] } } },
           "then": { "required": ["runs"] },
           "else": { "not": { "required": ["runs"] } }
+        },
+        {
+          "if": { "properties": { "type": { "const": "named_files" } } },
+          "else": { "not": { "required": ["names"] } }
         }
       ]
     },
     "output_port": {
-      "description": "One declared output. optional: the primitive may leave it out of an accepted result. description: what the port gives back, for the workflow editor.",
+      "description": "One declared output. optional: the primitive may leave it out of an accepted result. better, at_least and at_most on a number and nowhere else: which way is better, and the bounds every value lies within, both inclusive; check_declaration.py also refuses an at_least above at_most. description: what the port gives back, for the workflow editor.",
       "type": "object",
       "required": ["type"],
       "additionalProperties": false,
@@ -249,24 +318,60 @@
         },
         "options": { "$ref": "#/$defs/options" },
         "optional": { "type": "boolean" },
+        "better": { "type": "string", "enum": ["higher", "lower"] },
+        "at_least": { "type": "number" },
+        "at_most": { "type": "number" },
         "description": {
           "description": "One sentence for the workflow editor saying what the port gives back. It changes nothing that grades.",
           "$ref": "#/$defs/line"
         }
       },
-      "if": { "properties": { "type": { "const": "enum" } } },
-      "then": { "required": ["options"] },
-      "else": { "not": { "required": ["options"] } }
+      "allOf": [
+        {
+          "if": { "properties": { "type": { "const": "enum" } } },
+          "then": { "required": ["options"] },
+          "else": { "not": { "required": ["options"] } }
+        },
+        {
+          "if": { "properties": { "type": { "const": "number" } } },
+          "else": { "not": { "$ref": "#/$defs/number_meaning" } }
+        }
+      ]
+    },
+    "number_meaning": {
+      "description": "A port that says which way is better or where its values lie.",
+      "anyOf": [{ "required": ["better"] }, { "required": ["at_least"] }, { "required": ["at_most"] }]
     },
     "test_id": {
       "type": "string",
       "maxLength": 255,
       "pattern": "^[A-Za-z0-9_-]+/[A-Za-z0-9_-]+$"
     },
+    "run_id": {
+      "description": "One run of a version 6 batch: letters, digits, _ and -, so a primitive may name a file after it. The not refuses a trailing newline, which $ lets through in some regular expression engines.",
+      "type": "string",
+      "maxLength": 255,
+      "pattern": "^[A-Za-z0-9_-]+$",
+      "not": { "type": "string", "pattern": "\\n$" }
+    },
+    "file_name": {
+      "description": "A name a program sees a file under: letters, digits, _, . and -, not starting with a ., so never . or .. and never a path.",
+      "type": "string",
+      "maxLength": 255,
+      "pattern": "^[A-Za-z0-9_][A-Za-z0-9_.-]*$",
+      "not": { "type": "string", "pattern": "\\n$" }
+    },
     "values": {
+      "description": "Values by port name: every output, and every input of version 5.",
       "type": "object",
       "propertyNames": { "pattern": "^[a-z][a-z0-9_]*$" },
       "additionalProperties": { "$ref": "#/$defs/value" }
+    },
+    "input_values": {
+      "description": "Inputs by port name, which in version 6 may also be named_files values.",
+      "type": "object",
+      "propertyNames": { "pattern": "^[a-z][a-z0-9_]*$" },
+      "additionalProperties": { "oneOf": [{ "$ref": "#/$defs/value" }, { "$ref": "#/$defs/named_files" }] }
     },
     "value": {
       "description": "One input or output value. Text, a number and a boolean are carried as themselves; a file or a folder is an object naming its path.",
@@ -277,6 +382,19 @@
         { "$ref": "#/$defs/file" },
         { "$ref": "#/$defs/folder" }
       ]
+    },
+    "named_files": {
+      "description": "A named_files value, version 6: files by the names the program sees them under, each a file under in/ or out/.",
+      "type": "object",
+      "required": ["files"],
+      "additionalProperties": false,
+      "properties": {
+        "files": {
+          "type": "object",
+          "propertyNames": { "$ref": "#/$defs/file_name" },
+          "additionalProperties": { "$ref": "#/$defs/file" }
+        }
+      }
     },
     "file": {
       "description": "A file in the working directory, by a path relative to /work: under in/ for an input, under out/ for an output, with no empty, . or .. segment.",

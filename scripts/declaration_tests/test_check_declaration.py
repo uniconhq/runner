@@ -189,6 +189,70 @@ def test_a_field_the_contract_does_not_know_is_refused(
     assert "entrypoint" in found[0]
 
 
+DECLARATION_V6 = """\
+schema_version: 6
+batch: true
+limits:
+  {time_ms: 5000, cpu_ms: 5000, memory_mb: 256, pids: 128, output_mb: 64, gpus: 0}
+outputs_from: manifest
+inputs:
+  program: {type: file, runs: true}
+  files: {type: named_files, runs: false, optional: true, names: [output, answer]}
+  manifest: {type: file, runs: false}
+outputs:
+  time_ms: {type: number, better: lower, at_least: 0}
+  score: {type: number, better: higher, at_least: 0, at_most: 1}
+  outcome: {type: outcome}
+"""
+
+
+def test_a_version_6_declaration_with_each_new_key_conforms(
+    schema: dict[str, Any], tmp_path: Path
+) -> None:
+    assert check_declaration.problems(schema, _repo(tmp_path, DECLARATION_V6)) == []
+
+
+@pytest.mark.parametrize(
+    ("old", "new"),
+    [
+        ("better: lower", "better: faster"),
+        ("at_least: 0, at_most: 1", "at_least: 2, at_most: 1"),
+        ("names: [output, answer]", "names: [../x]"),
+        ("schema_version: 6", "schema_version: 5"),
+    ],
+)
+def test_a_version_6_declaration_that_breaks_a_rule_is_refused(
+    schema: dict[str, Any], tmp_path: Path, old: str, new: str
+) -> None:
+    text = DECLARATION_V6.replace(old, new)
+    assert text != DECLARATION_V6
+    assert check_declaration.problems(schema, _repo(tmp_path, text)) != []
+
+
+def test_bounds_that_cross_are_named(schema: dict[str, Any], tmp_path: Path) -> None:
+    text = DECLARATION_V6.replace(
+        "at_least: 0, at_most: 1", "at_least: 2.5, at_most: 1"
+    )
+    assert check_declaration.problems(schema, _repo(tmp_path, text)) == [
+        "outputs/score: at_least 2.5 is above at_most 1"
+    ]
+
+
+@pytest.mark.parametrize("bound", [".inf", "-.inf", ".nan"])
+def test_a_bound_that_is_not_finite_is_named(
+    schema: dict[str, Any], tmp_path: Path, bound: str
+) -> None:
+    text = DECLARATION_V6.replace("at_most: 1", f"at_most: {bound}")
+    [found] = check_declaration.problems(schema, _repo(tmp_path, text))
+    assert found.startswith("outputs/score/at_most: ")
+    assert found.endswith(" is not a finite number")
+
+
+def test_equal_bounds_conform(schema: dict[str, Any], tmp_path: Path) -> None:
+    text = DECLARATION_V6.replace("at_least: 0, at_most: 1", "at_least: 1, at_most: 1")
+    assert check_declaration.problems(schema, _repo(tmp_path, text)) == []
+
+
 def test_the_command_line_names_the_schema_and_the_repo(
     schema: dict[str, Any], tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:

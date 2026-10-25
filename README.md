@@ -433,8 +433,10 @@ CI's trusted-clone list beside plugin-git.
 
 The five share one `schema_version`, 5, the one a runner release publishes them
 at. A release that changes the shape of any of them raises it, and the harness
-refuses a file written for another. `scripts/check_contract_files.py` fails CI
-when a file pins another version, when an example under `examples/` does not
+refuses a file written for another. The primitive contract also has version 6,
+for the primitives the simpler core runs on; a primitive says which it speaks,
+so today's stay on 5. `scripts/check_contract_files.py` fails CI when a file
+does not accept the harness's version, when an example under `examples/` does not
 validate, or when a schema field is one no example sets.
 
 **`plan.schema.json`.** Written by the `forge` repo's compiler at every valid
@@ -493,7 +495,8 @@ shown, the platform works out from the rows.
 
 **`primitive.schema.json`.** How the harness and a primitive image talk, and
 the `primitive.yaml` declaration the forge compiler reads; a document is
-exactly one of the three.
+exactly one of the three. The shapes below are version 5's; version 6's
+changes follow the table.
 
 | File | Shape |
 |---|---|
@@ -516,6 +519,21 @@ own `ENTRYPOINT`, so a primitive's Dockerfile sets one in exec form and its
 declaration names no program. A primitive repo validates its
 `primitive.yaml` against the release's schema with a placeholder image
 filled in, since bootstrap writes the image (below).
+
+Version 6, which a declaration asks for with `schema_version: 6` (5 when left
+out), changes four things, and only it allows them:
+
+- **A batch item is keyed by `run`,** an id of letters, digits, `_` and `-`
+  that only the forge knows the meaning of, in place of `test`.
+- **A `named_files` input,** with `runs` as a file has, whose value is
+  `{"files": {"<name>": {"file": "in/..."}}}`: files by the names the program
+  sees them under. A name is letters, digits, `_`, `.` and `-`, not starting
+  with a `.`. A port may fix the names with `names: [output, answer]`.
+- **A `number` output may say `better`,** `higher` or `lower`, and its bounds
+  `at_least` and `at_most`, both inclusive. `check_declaration.py` refuses
+  bounds that cross or aren't finite, which a schema can't compare.
+- **`outputs_from: manifest`** says the primitive also gives back the reports
+  of the `program.yaml` on its `manifest` input, a file input it must declare.
 
 **`submission.schema.json`.** `submission.json` at the root of a submission
 commit: `{"schema_version": 5, "inputs": {id: entry}}`, one entry per

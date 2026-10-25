@@ -169,9 +169,12 @@ def test_every_primitive_example_is_accepted() -> None:
         "primitive-outputs.json",
         "primitive-outputs-batch.json",
         "primitive-outputs-error.json",
+        "primitive-v6-inputs-batch.json",
+        "primitive-v6-outputs-batch.json",
     ):
         assert violation(example(name), "primitive") is None, name
     assert violation(_yaml("primitive.yaml"), "primitive") is None
+    assert violation(_yaml("primitive-v6.yaml"), "primitive") is None
 
 
 def test_a_primitive_that_writes_no_outputs_fails_the_check() -> None:
@@ -213,7 +216,7 @@ def test_a_declaration_without_an_image_is_refused(
     assert violation(declaration, "primitive", "declaration") is not None
 
 
-@pytest.mark.parametrize("field", ["name", "version", "schema_version"])
+@pytest.mark.parametrize("field", ["name", "version"])
 def test_a_declaration_names_neither_itself_nor_its_version(
     declaration: dict[str, Any], field: str
 ) -> None:
@@ -280,6 +283,170 @@ def test_the_compile_declaration_of_the_spec_is_accepted() -> None:
         "  outcome: {type: outcome}\n"
     )
     assert violation(core_yaml.load(text), "primitive", "declaration") is None
+
+
+@pytest.fixture
+def declaration_v6() -> dict[str, Any]:
+    return _yaml("primitive-v6.yaml")
+
+
+def test_a_declaration_speaks_version_5_or_6(declaration: dict[str, Any]) -> None:
+    for version in (5, 6):
+        declaration["schema_version"] = version
+        assert violation(declaration, "primitive", "declaration") is None
+    for refused in (4, 7, "6"):
+        declaration["schema_version"] = refused
+        assert violation(declaration, "primitive", "declaration") is not None
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        lambda d: d["inputs"].update(files={"type": "named_files", "runs": False}),
+        lambda d: d["outputs"]["time_ms"].update(better="lower"),
+        lambda d: d["outputs"]["time_ms"].update(at_least=0),
+        lambda d: d["outputs"]["time_ms"].update(at_most=10),
+        lambda d: d.update(outputs_from="manifest"),
+    ],
+    ids=["named_files", "better", "at_least", "at_most", "outputs_from"],
+)
+def test_what_version_6_adds_is_refused_in_version_5(
+    declaration: dict[str, Any], change: Any
+) -> None:
+    declaration["inputs"]["manifest"] = {"type": "file", "runs": False}
+    assert violation(declaration, "primitive", "declaration") is None
+    change(declaration)
+    assert violation(declaration, "primitive", "declaration") is not None
+    declaration["schema_version"] = 6
+    assert violation(declaration, "primitive", "declaration") is None
+
+
+def test_better_is_higher_or_lower(declaration_v6: dict[str, Any]) -> None:
+    declaration_v6["outputs"]["time_ms"]["better"] = "faster"
+    assert violation(declaration_v6, "primitive", "declaration") is not None
+
+
+@pytest.mark.parametrize("key", ["better", "at_least", "at_most"])
+def test_only_a_number_says_which_way_is_better_or_its_bounds(
+    declaration_v6: dict[str, Any], key: str
+) -> None:
+    declaration_v6["outputs"]["message"][key] = "higher" if key == "better" else 0
+    assert violation(declaration_v6, "primitive", "declaration") is not None
+
+
+def test_a_bound_is_a_number(declaration_v6: dict[str, Any]) -> None:
+    declaration_v6["outputs"]["score"]["at_most"] = "1"
+    assert violation(declaration_v6, "primitive", "declaration") is not None
+
+
+def test_outputs_from_a_manifest_needs_a_manifest_file(
+    declaration_v6: dict[str, Any],
+) -> None:
+    del declaration_v6["inputs"]["manifest"]
+    assert violation(declaration_v6, "primitive", "declaration") is not None
+    declaration_v6["inputs"]["manifest"] = {"type": "folder", "runs": False}
+    assert violation(declaration_v6, "primitive", "declaration") is not None
+    declaration_v6["outputs_from"] = "program"
+    declaration_v6["inputs"]["manifest"] = {"type": "file", "runs": False}
+    assert violation(declaration_v6, "primitive", "declaration") is not None
+
+
+def test_a_named_files_input_says_whether_it_runs_and_only_it_names(
+    declaration_v6: dict[str, Any],
+) -> None:
+    unmarked = copy.deepcopy(declaration_v6)
+    del unmarked["inputs"]["files"]["runs"]
+    assert violation(unmarked, "primitive", "declaration") is not None
+    named = copy.deepcopy(declaration_v6)
+    named["inputs"]["stdin"]["names"] = ["input"]
+    assert violation(named, "primitive", "declaration") is not None
+
+
+@pytest.mark.parametrize("names", [[], ["answer", "answer"], ["../x"], ["a/b"], ["."]])
+def test_a_port_fixes_names_a_file_can_have(
+    declaration_v6: dict[str, Any], names: list[str]
+) -> None:
+    declaration_v6["inputs"]["pair"]["names"] = names
+    assert violation(declaration_v6, "primitive", "declaration") is not None
+
+
+def _named(files: dict[str, Any]) -> dict[str, Any]:
+    return {"schema_version": 6, "inputs": {"files": {"files": files}}}
+
+
+@pytest.mark.parametrize(
+    "name", ["../x", "..", ".", ".hidden", "a/b", "", "a\x00b", "x" * 256, "a\n"]
+)
+def test_a_named_file_is_a_plain_name(name: str) -> None:
+    assert violation(_named({name: {"file": "in/1/x"}}), "primitive") is not None
+
+
+@pytest.mark.parametrize("name", ["answer", "input.txt", "grid_2-b.in", "_x", "9"])
+def test_a_named_file_may_be_any_plain_name(name: str) -> None:
+    assert violation(_named({name: {"file": "in/1/x"}}), "primitive") is None
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        {"answer": {"folder": "in/1"}},
+        {"answer": "in/1/x"},
+        {"answer": {"file": "in/../x"}},
+    ],
+)
+def test_a_named_file_is_a_file_in_the_directory(value: dict[str, Any]) -> None:
+    assert violation(_named(value), "primitive") is not None
+
+
+def test_a_version_6_batch_item_is_keyed_by_its_run() -> None:
+    batch = example("primitive-v6-inputs-batch.json")
+    batch["batch"][0]["run"] = "main/1"
+    assert violation(batch, "primitive", "inputs_file") is not None
+    batch["batch"][0]["test"] = batch["batch"][0].pop("run")
+    assert violation(batch, "primitive", "inputs_file") is not None
+    del batch["batch"][0]["test"]
+    assert violation(batch, "primitive", "inputs_file") is not None
+
+
+def test_a_line_does_not_end_in_a_newline(declaration: dict[str, Any]) -> None:
+    declaration["title"] = "Run program\n"
+    assert violation(declaration, "primitive", "declaration") is not None
+
+
+def test_a_run_id_does_not_end_in_a_newline() -> None:
+    batch = example("primitive-v6-inputs-batch.json")
+    batch["batch"][0]["run"] += "\n"
+    assert violation(batch, "primitive", "inputs_file") is not None
+
+
+def test_named_files_are_a_version_6_input_alone() -> None:
+    """Version 5 carried no named_files value, in or out, and version 6
+    carries one only as an input."""
+    value = {"files": {"answer": {"file": "in/1/x"}}}
+    single = {"schema_version": 5, "inputs": {"answer": value}}
+    assert violation(single, "primitive", "inputs_file") is not None
+    v5 = example("primitive-inputs-batch.json")
+    v5["batch"][0]["inputs"]["answer"] = value
+    assert violation(v5, "primitive", "inputs_file") is not None
+    for version in (5, 6):
+        outputs = {"schema_version": version, "outputs": {"answer": value}}
+        assert violation(outputs, "primitive", "outputs_file") is not None
+
+
+def test_a_batch_item_is_keyed_one_way_for_its_version() -> None:
+    v5 = example("primitive-inputs-batch.json")
+    v5["batch"][0]["run"] = "r1"
+    assert violation(v5, "primitive", "inputs_file") is not None
+    del v5["batch"][0]["test"]
+    assert violation(v5, "primitive", "inputs_file") is not None
+    outputs = example("primitive-v6-outputs-batch.json")
+    outputs["batch"][0]["test"] = "main/1"
+    assert violation(outputs, "primitive", "outputs_file") is not None
+    outputs["schema_version"] = 5
+    del outputs["batch"][0]["run"]
+    del outputs["batch"][1]["run"]
+    outputs["batch"][1]["test"] = "main/2"
+    assert violation(outputs, "primitive", "outputs_file") is None
 
 
 def test_the_example_submission_is_accepted() -> None:

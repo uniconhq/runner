@@ -13,10 +13,15 @@ repository at the forge is the name and its tag the version. The file is read
 as the forge reads it, YAML 1.2's core schema with exact numbers
 (core_yaml.py), so an option `no` is the text `no` here as there. Exits 1 and
 lists every problem when there is one.
+
+A number output's bounds are compared here too, at_least no more than at_most,
+since a JSON schema can't compare two values.
 """
 
 import json
+import math
 import sys
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
@@ -65,6 +70,34 @@ def problems(schema: dict[str, Any], root: Path) -> list[str]:
     for error in validator.iter_errors(with_placeholder_image(declaration)):
         where = "/".join(str(part) for part in error.absolute_path) or "(top)"
         found.append(f"{where}: {error.message}")
+    return found + crossed_bounds(declaration)
+
+
+def crossed_bounds(declaration: dict[str, Any]) -> list[str]:
+    """Each number output whose bound is not a finite number, or whose at_least
+    is above its at_most, so no value fits.
+    """
+    outputs = declaration.get("outputs")
+    if not isinstance(outputs, dict):
+        return []
+    found = []
+    for name, port in outputs.items():
+        if not isinstance(port, dict):
+            continue
+        bounds: dict[str, int | Decimal] = {}
+        for key in ("at_least", "at_most"):
+            value = port.get(key)
+            if not isinstance(value, (int, Decimal)) or isinstance(value, bool):
+                continue
+            if math.isfinite(value):
+                bounds[key] = value
+            else:
+                found.append(f"outputs/{name}/{key}: {value} is not a finite number")
+        if len(bounds) == 2 and bounds["at_least"] > bounds["at_most"]:
+            found.append(
+                f"outputs/{name}: at_least {bounds['at_least']} "
+                f"is above at_most {bounds['at_most']}"
+            )
     return found
 
 

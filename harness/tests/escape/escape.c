@@ -1,9 +1,10 @@
 // The escape fixtures: one C program, built by the compile primitive as a
 // contestant's program would be, that tries the attack named on its standard
-// input and prints one line per thing it tried,
+// input, or as its first argument, and prints one line per thing it tried,
 // "<check> REFUSED|ESCAPED|INFO <detail>". harness/tests/test_escape.py runs
-// it through sandbox-run, as the container's own process under the harness's
-// flags, and with each of those flags taken away in turn.
+// it through sandbox-run or exec, as the container's own process under the
+// harness's flags, and with each of those flags taken away in turn. As
+// `partner` it is interact's partner, and its entrant's attack is on it.
 //
 // The resource attacks are capped (512 MB of memory, 3,000 processes or
 // threads, 1 GB of disk per directory), so a run with a limit taken away
@@ -27,12 +28,19 @@
 #include <sys/mount.h>
 #include <sys/prctl.h>
 #include <sys/ptrace.h>
+#include <sys/shm.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/syscall.h>
 #include <sys/types.h>
 #include <sys/wait.h>
+#include <sys/xattr.h>
 #include <unistd.h>
+
+#define LEFT_KEY 0x5EED0001
+/* The key of the System V segment one item leaves for the next. */
+#define LEFT_MARK "user.escape"
+/* The attribute one item sets on the program for the next. */
 
 static void say(const char *check, int escaped, const char *fmt, ...) {
     char buf[512];
@@ -72,6 +80,12 @@ static void try_read(const char *check, const char *path) {
     say(check, n > 0, "read %zd bytes of %s", n, path);
 }
 
+static void try_open(const char *check, const char *path) {
+    int fd = open(path, O_RDONLY);
+    if (fd >= 0) close(fd);
+    say(check, fd >= 0, "%s: %s", path, fd >= 0 ? "opened" : strerror(errno));
+}
+
 static void list_dir(const char *check, const char *path) {
     DIR *d = opendir(path);
     if (!d) { info(check, "%s: %s", path, strerror(errno)); return; }
@@ -82,6 +96,31 @@ static void list_dir(const char *check, const char *path) {
 }
 
 static void *spin(void *a) { pause(); return a; }
+
+/* The process of interact's partner: the one whose command line runs a file
+   named partner and is not its sandbox-exec, or 0. */
+static pid_t find_partner(void) {
+    DIR *d = opendir("/proc"); struct dirent *e; pid_t found = 0;
+    while (d && (e = readdir(d)) && !found) {
+        if (e->d_name[0] < '0' || e->d_name[0] > '9' || atoi(e->d_name) == getpid()) continue;
+        char p[300], b[4096] = ""; snprintf(p, sizeof p, "/proc/%s/comm", e->d_name);
+        FILE *f = fopen(p, "r"); if (!f) continue;
+        int helper = fgets(b, sizeof b, f) && !strncmp(b, "sandbox-exec", 12); fclose(f);
+        snprintf(p, sizeof p, "/proc/%s/cmdline", e->d_name);
+        int fd = open(p, O_RDONLY); if (fd < 0) continue;
+        ssize_t n = read(fd, b, sizeof b - 1); close(fd);
+        for (ssize_t i = 0, start = 0; i < n; i++)
+            if (!b[i]) { size_t len = i - start; if (len >= 8 && !strcmp(b + i - 8, "/partner") && !helper) found = atoi(e->d_name); start = i + 1; }
+    }
+    if (d) closedir(d);
+    return found;
+}
+
+/* The Landlock ABI the kernel offers, or 0. */
+static long landlock_abi(void) {
+    long r = syscall(444, 0, 0, 1);
+    return r < 0 ? 0 : r;
+}
 
 static int scan_for_secrets(const char *path, char *found, size_t n) {
     int fd = open(path, O_RDONLY); if (fd < 0) return 0;
@@ -95,9 +134,10 @@ static int scan_for_secrets(const char *path, char *found, size_t n) {
     return hit;
 }
 
-int main(void) {
+int main(int argc, char **argv) {
     char mode[64] = "";
-    if (scanf("%63s", mode) != 1) return 2;
+    if (argc > 1) snprintf(mode, sizeof mode, "%s", argv[1]);
+    else if (scanf("%63s", mode) != 1) return 2;
     signal(SIGPIPE, SIG_IGN);
 
     // -- resources: the outcome is the verdict
@@ -150,14 +190,29 @@ int main(void) {
         try_connect("machine-loopback-ssh", "127.0.0.1", 22);
         struct addrinfo *res; int r = getaddrinfo("example.com", "80", 0, &res);
         say("dns", r == 0, "getaddrinfo example.com: %s", r == 0 ? "resolved" : gai_strerror(r));
-        // Any interface but loopback is a network to use, whether or not this
-        // machine can reach the internet through it.
+        // Any interface but loopback that is not down is a network to use,
+        // whether or not this machine can reach the internet through it. A
+        // kernel with the tunnel modules loaded gives every network namespace
+        // its fallback tunnels (sit0, gre0, ...), down, which only
+        // CAP_NET_ADMIN could raise. An interface is a link under
+        // /sys/class/net, and one whose operstate cannot be read is counted;
+        // bonding_masters is a plain file, no interface.
         DIR *d = opendir("/sys/class/net");
         char names[512] = ""; struct dirent *e; int others = 0;
         while (d && (e = readdir(d))) {
             if (e->d_name[0] == '.') continue;
-            if (strlen(names) < 400) { strcat(names, e->d_name); strcat(names, " "); }
-            if (strcmp(e->d_name, "lo")) others++;
+            char p[300], state[32] = "";
+            snprintf(p, sizeof p, "/sys/class/net/%s/operstate", e->d_name);
+            if (e->d_type != DT_LNK) continue;
+            FILE *f = fopen(p, "r");
+            if (!f) snprintf(state, sizeof state, "unreadable");
+            else {
+                if (!fgets(state, sizeof state, f)) state[0] = 0;
+                fclose(f);
+            }
+            state[strcspn(state, "\n")] = 0;
+            if (strlen(names) < 400) { strcat(names, e->d_name); strcat(names, ":"); strcat(names, state); strcat(names, " "); }
+            if (strcmp(e->d_name, "lo") && strcmp(state, "down")) others++;
         }
         if (d) closedir(d);
         say("network-interfaces", others > 0, "%s", names);
@@ -268,6 +323,95 @@ int main(void) {
         hit |= scan_for_secrets("/work/inputs.json", found, sizeof found);
         say("secrets", hit, "%s", hit ? found : "no token, password or signed URL in any environment, command line, mount table or inputs.json in reach");
         list_dir("processes", "/proc");
+        return 0;
+    }
+    // -- what exec keeps from a run: sockets, rings, and marks for the next item
+    if (!strcmp(mode, "sockets")) {
+        int s = socket(AF_INET, SOCK_STREAM, 0);
+        say("inet-socket", s >= 0, "socket(AF_INET): %s", s >= 0 ? "made" : strerror(errno));
+        if (s >= 0) close(s);
+        s = socket(AF_INET6, SOCK_DGRAM, 0);
+        say("inet6-socket", s >= 0, "socket(AF_INET6): %s", s >= 0 ? "made" : strerror(errno));
+        if (s >= 0) close(s);
+        char params[120] = {0};
+        long r = syscall(425 /* io_uring_setup */, 8, params);
+        say("io-uring", r >= 0, "io_uring_setup: %s", r >= 0 ? "ring made" : strerror(errno));
+        return 0;
+    }
+    if (!strcmp(mode, "leave-sysv")) {
+        int id = shmget(LEFT_KEY, 4096, IPC_CREAT | 0600);
+        char *p = id >= 0 ? shmat(id, 0, 0) : (char *)-1;
+        if (p != (char *)-1) { strcpy(p, "the hidden input"); shmdt(p); }
+        info("sysv-made", "%s", id >= 0 ? "a segment left for the next item" : strerror(errno));
+        return 0;
+    }
+    if (!strcmp(mode, "find-sysv")) {
+        int id = shmget(LEFT_KEY, 0, 0);
+        say("sysv-left", id >= 0, "%s", id >= 0 ? "found the segment an earlier item left" : strerror(errno));
+        return 0;
+    }
+    if (!strcmp(mode, "mark") || !strcmp(mode, "read-mark")) {
+        const char *paths[] = {"/proc/self/exe", "/work/in/binary", 0};
+        for (int i = 0; paths[i]; i++) {
+            char b[64] = "";
+            if (!strcmp(mode, "mark")) {
+                int r = setxattr(paths[i], LEFT_MARK, "the hidden input", 16, 0);
+                info("mark", "%s: %s", paths[i], r == 0 ? "marked" : strerror(errno));
+            } else {
+                ssize_t n = getxattr(paths[i], LEFT_MARK, b, sizeof b - 1);
+                say("mark-left", n > 0, "%s: %s", paths[i], n > 0 ? "found an earlier item's mark" : strerror(errno));
+            }
+        }
+        return 0;
+    }
+
+    // -- interact: the partner holds the hidden input; the entrant reaches for it
+    if (!strcmp(mode, "partner")) {
+        int held = open("secret", O_RDONLY); if (held < 0) return 3;
+        char cwd[256] = ""; if (!getcwd(cwd, sizeof cwd)) return 3;
+        printf("partner-files %s\n", cwd); fflush(stdout);
+        const char *report = getenv("UNICON_REPORT"); if (!report) return 3;
+        char p[512]; snprintf(p, sizeof p, "%s/message", report);
+        FILE *out = fopen(p, "w"); if (!out) return 3;
+        static char b[1 << 16]; size_t n;
+        while ((n = fread(b, 1, sizeof b, stdin)) > 0) fwrite(b, 1, n, out);
+        fclose(out);
+        snprintf(p, sizeof p, "%s/verdict", report);
+        FILE *verdict = fopen(p, "w"); if (!verdict) return 3;
+        fputs("0\n", verdict); fclose(verdict);
+        close(held);
+        return 0;
+    }
+    if (!strcmp(mode, "partner-files")) {
+        char cwd[256] = "", p[600];
+        if (scanf("%255s", cwd) != 1) return 2;
+        pid_t partner = find_partner();
+        info("partner", "%d", partner);
+        if (partner <= 0) return 2;
+        snprintf(p, sizeof p, "%s/secret", cwd); try_read("partner-secret", p);
+        // Landlock does not cover stat, so a path the entrant can name
+        // tells it the file's size: known, written down, and only a
+        // guessed or told path reaches it.
+        struct stat st;
+        if (stat(p, &st) == 0) info("partner-size", "%s: %lld bytes", p, (long long)st.st_size);
+        else info("partner-size", "%s: %s", p, strerror(errno));
+        DIR *d = opendir(cwd); say("partner-folder", d != 0, "%s: %s", cwd, d ? "listed" : strerror(errno)); if (d) closedir(d);
+        d = opendir("/tmp"); say("partner-tmp", d != 0, "/tmp: %s", d ? "listed" : strerror(errno)); if (d) closedir(d);
+        snprintf(p, sizeof p, "/proc/%d/cwd/secret", partner); try_read("partner-cwd", p);
+        snprintf(p, sizeof p, "/proc/%d/root%s/secret", partner, cwd); try_read("partner-root", p);
+        snprintf(p, sizeof p, "/proc/%d/environ", partner); try_read("partner-environ", p);
+        snprintf(p, sizeof p, "/proc/%d/mem", partner); try_open("partner-mem", p);
+        for (int fd = 0; fd < 16; fd++) {
+            snprintf(p, sizeof p, "/proc/%d/fd/%d", partner, fd);
+            int f = open(p, O_RDONLY);
+            if (f >= 0) { close(f); say("partner-fd", 1, "opened %s", p); }
+            else if (errno != ENOENT) say("partner-fd", 0, "%s: %s", p, strerror(errno));
+        }
+        long r = ptrace(PTRACE_ATTACH, partner, 0, 0);
+        say("partner-ptrace", r == 0, "%s", r == 0 ? "attached" : strerror(errno));
+        r = kill(partner, 0);
+        if (landlock_abi() >= 6) say("partner-signal", r == 0, "%s", r == 0 ? "may signal it" : strerror(errno));
+        else info("partner-signal", "Landlock ABI %ld scopes no signals: %s", landlock_abi(), r == 0 ? "may signal it" : strerror(errno));
         return 0;
     }
     printf("unknown mode %s\n", mode);

@@ -2,33 +2,45 @@
 sandbox's results of 2026-10-04 (experiment A5) cannot quietly regress: a
 protection nobody tests disappears the day someone edits a flag.
 
-The fixture program is built by the compile primitive and run three ways,
+The fixture program is built by the compile primitive and run these ways,
 each time in a container made from exactly the body the harness sends
 (`sandbox.create_body`), straight to the daemon's own socket:
 
-1. through sandbox-run, as a contestant's program is run: one batch, one test
-   per attack. Every attack is refused.
-2. as the container's own process, without sandbox-run in front, so the
+1. through the run primitive, sandbox-run or exec, as a contestant's program
+   is run: one batch, one item per attack. Every attack is refused. Against
+   exec, which speaks contract 6, the batch also holds the attacks exec
+   itself refuses: an internet socket and an io_uring ring, refused again
+   with the container's network left on, and a System V segment and an
+   attribute on the program left for the next item.
+2. as the container's own process, without the primitive in front, so the
    container's protections are tested alone. Every attack is refused except
    what belongs to the step: its own `/work`, which it may write and read.
 3. as the container's own process with one protection taken away at a time.
    Each removal lets a named attack through; if one ever does not, the
    protection is no longer covered and the fixture set is missing a case.
+   exec's own protections, its seccomp filter and its System V sweep, are
+   taken away in an image made from exec's with that one part left out.
+4. through interact, when INTERACT_IMAGE names one, as the entrant of a
+   partner that holds a hidden file: the entrant reaches none of it.
 
 The primitives are the released images by digest, the ones the platform's
-image manifest pins; COMPILE_IMAGE and SANDBOX_RUN_IMAGE name others, which is
-how sandbox-run's own CI runs these against the image it just built. The
-fixtures speak the contract the image speaks: each image is asked in
-contract version 5 first, and one that answers with an error about the
-contract version is asked again in version 4, the version the pinned
-releases speak. In 5 a batch item is keyed `test`, a test id
-`escape/<attack>`, and compile's `source` is a folder holding the one file;
-in 4 an item is keyed `id`, the attack's name, and `source` is the file.
-Every output is read at the path the primitive reports. The inputs.json
+image manifest pins; COMPILE_IMAGE and EXEC_IMAGE (or SANDBOX_RUN_IMAGE)
+name others, which is how a primitive's own CI runs these against the image
+it just built. EXEC_SOURCE names a primitive-exec checkout, or one beside
+this repo is used, to build the image without the filter. The fixtures speak
+the contract the image speaks: each image is asked in contract version 6
+first, then 5, and one that answers with an error about the contract
+version is asked again in the next, down to version 4, the version the
+pinned releases speak. In 6 a batch item is keyed `run`, the attack's name,
+its program is `program` and its input `stdin`, and compile answers with
+`program`; in 5 an item is keyed `test`, a test id `escape/<attack>`, and
+compile's `source` is a folder holding the one file; in 4 an item is keyed
+`id`, the attack's name, and `source` is the file. Every output is read at
+the path the primitive reports. The inputs.json
 files are written here, not by the harness: the escape fixtures test the
 container the harness builds, not the files it writes.
-sandbox-run refuses to run anything on a kernel without Landlock, so on such
-a kernel the first test fails rather than passing on nothing. Run with
+sandbox-run and exec refuse to run anything on a kernel without Landlock, so
+on such a kernel the first test fails rather than passing on nothing. Run with
 `pytest -m docker harness/tests/test_escape.py`; it needs the daemon's unix
 socket on this machine (DOCKER_HOST, or /var/run/docker.sock).
 """
@@ -39,6 +51,7 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
@@ -58,11 +71,23 @@ COMPILE_IMAGE = os.environ.get("COMPILE_IMAGE") or (
     "f66e9ae767e19e95ed5fa2c60386cf1444b0a62ea3f66a73f9b94d1d8f26e0de"
 )
 """primitive-compile v1.1.1."""
-SANDBOX_RUN_IMAGE = os.environ.get("SANDBOX_RUN_IMAGE") or (
-    "ghcr.io/uniconhq/primitive-sandbox-run@sha256:"
-    "bd4f45b3dc02647b6cf1168fb5e4dc14877be48983ff73b4daf864a3cffe0943"
+RUN_IMAGE = (
+    os.environ.get("EXEC_IMAGE")
+    or os.environ.get("SANDBOX_RUN_IMAGE")
+    or (
+        "ghcr.io/uniconhq/primitive-sandbox-run@sha256:"
+        "bd4f45b3dc02647b6cf1168fb5e4dc14877be48983ff73b4daf864a3cffe0943"
+    )
 )
-"""primitive-sandbox-run v1.3.0."""
+"""The run primitive: primitive-sandbox-run v1.3.0, unless exec is named."""
+INTERACT_IMAGE = os.environ.get("INTERACT_IMAGE", "")
+"""interact, which has no release to pin yet; its test is skipped without."""
+EXEC_SOURCE = Path(
+    os.environ.get("EXEC_SOURCE")
+    or Path(__file__).resolve().parents[3] / "primitive-exec"
+)
+"""A primitive-exec checkout, whose `sandbox-exec.c` is built without its
+filter for the removal that shows the filter matters."""
 
 SOURCE = (Path(__file__).parent / "escape" / "escape.c").read_text(encoding="utf-8")
 MOUNT = Path("/w")
@@ -100,6 +125,34 @@ ATTACKS = {
 """Each attack, and the checks it must print, so that a fixture that crashed
 before trying anything does not pass as refused. The resource attacks that
 print nothing are judged by their outcome."""
+
+EXEC_ATTACKS = {
+    "sockets": {"inet-socket", "inet6-socket", "io-uring"},
+    "leave-sysv": {"sysv-made"},
+    "find-sysv": {"sysv-left"},
+    "mark": {"mark"},
+    "read-mark": {"mark-left"},
+}
+"""The attacks exec refuses itself, from contract 6: its seccomp filter
+refuses the sockets and the ring, and what one item leaves, a System V
+segment or an attribute on the program, is gone for the next, which runs
+right after it. The container alone does not refuse them: they are exec's."""
+
+PARTNER_CHECKS = {
+    "partner-secret",
+    "partner-folder",
+    "partner-tmp",
+    "partner-cwd",
+    "partner-root",
+    "partner-environ",
+    "partner-mem",
+    "partner-ptrace",
+    "partner-signal",
+}
+"""What interact's entrant tries on its partner, each of which must be
+refused: the hidden file by the partner's path, its folder, /tmp, the
+partner's directory, root, environment, memory and open files through
+/proc, tracing it and, from Landlock ABI 6, signalling it."""
 
 STEPS_OWN = {
     "write-work-root",
@@ -198,6 +251,11 @@ def without_ulimit(name: str) -> Callable[[dict[str, Any]], None]:
     return change
 
 
+def attacks(version: int) -> dict[str, set[str]]:
+    """The attacks a batch in `version` holds: exec's own from 6."""
+    return ATTACKS | EXEC_ATTACKS if version >= 6 else dict(ATTACKS)
+
+
 REMOVALS: dict[str, tuple[Callable[[dict[str, Any]], None], str, str]] = {
     "network none": (without_network, "network", "network-interfaces"),
     "read-only root": (without_read_only, "files", "write-var-tmp"),
@@ -245,10 +303,56 @@ CPU share, the mounts and the log's size, `Init: false`, which only
 differs from leaving it out on a daemon configured to add an init, and the
 private cgroup namespace, which is for measuring memory)."""
 
+NO_FILTER = """\
+FROM {compile} AS helper
+USER 0
+COPY sandbox-exec.c /src/
+RUN grep -q 'install_filter() != 0' /src/sandbox-exec.c \\
+    && sed -i 's/install_filter() != 0/0/' /src/sandbox-exec.c \\
+    && gcc -O2 -static -o /sandbox-exec /src/sandbox-exec.c
+FROM {image}
+COPY --from=helper --chmod=0755 /sandbox-exec /usr/local/bin/sandbox-exec
+"""
+"""exec's image with a `sandbox-exec` that installs no seccomp filter, built
+from exec's source with the compile image's static C toolchain."""
 
-VERSIONS = (5, 4)
+NO_SWEEP = """\
+FROM {image}
+USER 0
+RUN python3 -c "import pathlib; p = pathlib.Path('/usr/local/bin/exec'); \\
+t = p.read_text(); a = 'def sweep_sysv() -> None:\\n'; assert t.count(a) == 1; \\
+p.write_text(t.replace(a, a + '    return\\n'))"
+USER 65532:65532
+"""
+"""exec's image with a System V sweep that removes nothing."""
+
+NO_CLEAR = """\
+FROM {image}
+USER 0
+RUN python3 -c "import pathlib; p = pathlib.Path('/usr/local/bin/exec'); \\
+t = p.read_text(); a = 'def clear_attributes(top: Path) -> None:\\n'; \\
+assert t.count(a) == 1; p.write_text(t.replace(a, a + '    return\\n'))"
+USER 65532:65532
+"""
+"""exec's image that removes no extended attribute after a run."""
+
+EXEC_REMOVALS: dict[
+    str, tuple[str, Callable[[dict[str, Any]], None] | None, tuple[str, ...], str]
+] = {
+    "seccomp filter": (NO_FILTER, without_network, ("sockets",), "inet-socket"),
+    "System V sweep": (NO_SWEEP, None, ("leave-sysv", "find-sysv"), "sysv-left"),
+    "attribute clearing": (NO_CLEAR, None, ("mark", "read-mark"), "mark-left"),
+}
+"""REMOVALS' rows for the protections exec gives itself: the image made
+without one, the change to the harness's body the attack needs (the
+network left on, so a socket has somewhere to go), the attacks run as one
+batch, and the check that then escapes."""
+
+
+VERSIONS = (6, 5, 4)
 """The contract versions the fixtures speak, in the order an image is asked:
-the harness's own first, then the one the pinned releases speak."""
+exec's and compile@v3's first, then the harness's own, then the one the
+pinned releases speak."""
 SOURCE_FOLDER = "in/source"
 """Where compile finds the fixture's source, `escape.c`."""
 
@@ -265,36 +369,65 @@ def compile_inputs(version: int) -> dict[str, Any]:
     return {"schema_version": version, "inputs": {"source": source, "language": "c"}}
 
 
+def batch_key(version: int) -> str:
+    """What a batch item is keyed by: `run` in 6, `test` in 5 and `id` in 4."""
+    return {6: "run", 5: "test"}.get(version, "id")
+
+
 def item_key(attack: str, version: int) -> str:
-    """The batch key of an attack: a test id, `<group>/<test>`, in 5."""
-    return f"escape/{attack}" if version >= 5 else attack
+    """The batch key of an attack: a test id, `<group>/<test>`, in 5, and
+    the attack's name, a run id, in 6 and 4."""
+    return f"escape/{attack}" if version == 5 else attack
 
 
-def batch_inputs(version: int) -> dict[str, Any]:
-    """sandbox-run's inputs.json in `version`: one item per attack, keyed
-    `test` in 5 and `id` in 4.
+def batch_inputs(version: int, only: tuple[str, ...] = ()) -> dict[str, Any]:
+    """The run primitive's inputs.json in `version`: one item per attack,
+    or per attack of `only`, in order. From 6 the program is `program` and
+    its input `stdin`; before, `binary` and `input`.
     """
-    key = "test" if version >= 5 else "id"
+    program, stdin = ("program", "stdin") if version >= 6 else ("binary", "input")
     return {
         "schema_version": version,
         "batch": [
             {
-                key: item_key(attack, version),
+                batch_key(version): item_key(attack, version),
                 "inputs": {
-                    "binary": {"file": "in/binary"},
-                    "input": {"file": f"in/{attack}"},
+                    program: {"file": "in/binary"},
+                    stdin: {"file": f"in/{attack}"},
                     "time_limit": 1,
                     "memory_limit": DISK_MEMORY_MB if attack == "disk" else 64,
                 },
             }
-            for attack in ATTACKS
+            for attack in (only or attacks(version))
+        ],
+    }
+
+
+def interact_inputs() -> dict[str, Any]:
+    """interact's inputs.json: the fixture as both the entrant and its
+    partner, the partner holding `secret`."""
+    return {
+        "schema_version": 6,
+        "batch": [
+            {
+                "run": "partner-files",
+                "inputs": {
+                    "program": {"file": "in/binary"},
+                    "partner": {"file": "in/binary"},
+                    "partner_args": "partner",
+                    "partner_files": {"files": {"secret": {"file": "in/secret"}}},
+                    "manifest": {"file": "in/manifest.json"},
+                    "time_limit": 1,
+                    "memory_limit": 64,
+                },
+            }
         ],
     }
 
 
 def by_attack(outputs: dict[str, Any], version: int) -> dict[str, dict[str, Any]]:
     """A batch's outputs by the attack each item answers for."""
-    key = "test" if version >= 5 else "id"
+    key = batch_key(version)
     found: dict[str, dict[str, Any]] = {}
     for item in outputs["batch"]:
         attack = str(item[key]).rpartition("/")[2]
@@ -318,6 +451,20 @@ def another_version(outputs: dict[str, Any]) -> bool:
     return "contract version" in str(outputs.get("error", ""))
 
 
+BATCHES = {
+    "batch": (),
+    "network-on": ("network", "sockets"),
+    **{removed: only for removed, (_, _, only, _) in EXEC_REMOVALS.items()},
+}
+"""The run primitive's step directories, each with the attacks of its batch:
+every attack, or those named."""
+
+
+def step_directory(name: str) -> str:
+    """The step directory of a batch, a plain name."""
+    return name.replace(" ", "-").lower()
+
+
 class Fixtures:
     """The fixture binary, built once, and the means to run it: a volume of
     the test's own whose `unicon-steps/` directories are mounted the way the
@@ -331,19 +478,27 @@ class Fixtures:
         self.made = made
         self.client = client
         self.versions: dict[str, int] = {}
+        self.variants: dict[str, str] = {}
         files: dict[str, bytes | str] = {
             f"unicon-steps/compile/{SOURCE_FOLDER}/escape.c": SOURCE,
             "unicon-steps/direct/in/1.ans": "the answer\n",
+            "unicon-steps/interact/inputs-6.json": json.dumps(interact_inputs()),
+            "unicon-steps/interact/in/secret": "the hidden input\n",
+            "unicon-steps/interact/in/manifest.json": json.dumps({"reports": {}}),
         }
         for version in VERSIONS:
             files[f"unicon-steps/compile/inputs-{version}.json"] = json.dumps(
                 compile_inputs(version)
             )
-            files[f"unicon-steps/batch/inputs-{version}.json"] = json.dumps(
-                batch_inputs(version)
-            )
-        for attack in ATTACKS:
-            files[f"unicon-steps/batch/in/{attack}"] = f"{attack}\n"
+            for name, only in BATCHES.items():
+                directory = step_directory(name)
+                files[f"unicon-steps/{directory}/inputs-{version}.json"] = json.dumps(
+                    batch_inputs(version, only)
+                )
+        for name in BATCHES:
+            for attack in ATTACKS | EXEC_ATTACKS:
+                path = f"unicon-steps/{step_directory(name)}/in/{attack}"
+                files[path] = f"{attack}\n"
         self.volume = made.volume("escape", files)
         self.workspace = Workspace(
             volume=self.volume, mount=MOUNT, user=f"{STEP_UID}:{STEP_UID}"
@@ -356,29 +511,88 @@ class Fixtures:
             printed,
             outputs,
         )
-        binary = outputs["outputs"]["binary"]["file"]
+        made = outputs["outputs"]
+        binary = (made["program"] if "program" in made else made["binary"])["file"]
+        copies = [f"{step_directory(name)}/in/binary" for name in BATCHES]
+        copies += ["interact/in/binary", "direct/escape"]
         self._in_volume(
             "cd /v/unicon-steps"
-            f" && cp compile/{binary} batch/in/binary"
-            f" && cp compile/{binary} direct/escape"
-            " && chmod 0755 batch/in/binary direct/escape"
-            f" && chown {STEP_UID}:{STEP_UID} batch/in/binary direct/escape"
+            + "".join(f" && cp compile/{binary} {copy}" for copy in copies)
+            + f" && chmod 0755 {' '.join(copies)}"
+            + f" && chown {STEP_UID}:{STEP_UID} {' '.join(copies)}"
         )
 
-    def through_sandbox_run(self) -> tuple[dict[str, dict[str, Any]], dict[str, str]]:
-        """sandbox-run's outputs for the batch by attack, and what each attack
-        printed, read at the path sandbox-run reports for it.
+    def version_of(self, image: str) -> int:
+        """The contract version the run image speaks, asked once."""
+        if "batch" not in self.versions:
+            self._speaking(image, "batch")
+        return self.versions["batch"]
+
+    def through_run(
+        self,
+        name: str = "batch",
+        image: str = RUN_IMAGE,
+        change: Callable[[dict[str, Any]], None] | None = None,
+    ) -> tuple[dict[str, dict[str, Any]], dict[str, str]]:
+        """The run primitive's outputs for batch `name` by attack, and what
+        each attack printed, read at the path the primitive reports for it,
+        under the harness's body changed by `change`.
         """
-        code, printed, outputs = self._speaking(SANDBOX_RUN_IMAGE, "batch")
+        directory = step_directory(name)
+        code, printed, outputs = self._speaking(image, directory, change)
         assert code == 0 and "batch" in outputs, (printed, outputs)
-        found = by_attack(outputs, self.versions["batch"])
+        found = by_attack(outputs, self.versions[directory])
         paths = {attack: item["output"]["file"] for attack, item in found.items()}
         texts: dict[str, str] = json.loads(
             self._in_volume(
-                READ_OUTPUTS, "/v/unicon-steps/batch", json.dumps(paths), python=True
+                READ_OUTPUTS,
+                f"/v/unicon-steps/{directory}",
+                json.dumps(paths),
+                python=True,
             )
         )
         return found, texts
+
+    def through_interact(self) -> dict[str, Any]:
+        """interact's outputs for its one item."""
+        code, printed, outputs = self._speaking(
+            INTERACT_IMAGE, "interact", versions=(6,)
+        )
+        assert code == 0 and "batch" in outputs, (printed, outputs)
+        found: dict[str, Any] = outputs["batch"][0]["outputs"]
+        return found
+
+    def without(self, removed: str) -> str:
+        """exec's image with the protection `removed` left out, built once."""
+        if removed not in self.variants:
+            dockerfile, _, _, _ = EXEC_REMOVALS[removed]
+            source = EXEC_SOURCE / "src"
+            needs_source = "sandbox-exec.c" in dockerfile
+            if needs_source and not (source / "sandbox-exec.c").is_file():
+                pytest.skip(
+                    f"no primitive-exec checkout at {EXEC_SOURCE}; set EXEC_SOURCE"
+                )
+            tag = f"unicon-escape-{step_directory(removed)}:{self.made.suffix}"
+            text = dockerfile.format(image=RUN_IMAGE, compile=COMPILE_IMAGE)
+            with tempfile.TemporaryDirectory() as empty:
+                context = source if needs_source else Path(empty)
+                docker(
+                    "build",
+                    "-q",
+                    "-t",
+                    tag,
+                    "-f",
+                    "-",
+                    str(context),
+                    stdin=text.encode(),
+                )
+            self.variants[removed] = tag
+        return self.variants[removed]
+
+    def close(self) -> None:
+        """Remove the images made without a protection."""
+        for tag in self.variants.values():
+            docker("image", "rm", "-f", tag, check=False)
 
     def alone(
         self,
@@ -388,7 +602,7 @@ class Fixtures:
         """The fixture as the container's own process, under the harness's body
         changed by `change`, killed by the test after DIRECT_SECONDS.
         """
-        body = self._body(SANDBOX_RUN_IMAGE, "direct")
+        body = self._body(RUN_IMAGE, "direct")
         body["Entrypoint"] = ["sh", "-c", f"echo {attack} | /work/escape"]
         if change is not None:
             change(body)
@@ -412,19 +626,27 @@ class Fixtures:
         return found
 
     def _speaking(
-        self, image: str, directory: str
+        self,
+        image: str,
+        directory: str,
+        change: Callable[[dict[str, Any]], None] | None = None,
+        versions: tuple[int, ...] = VERSIONS,
     ) -> tuple[int | None, str, dict[str, Any]]:
-        """Run `image` over a step directory in the first version it does not
-        refuse as another contract version, and remember that version.
+        """Run `image` over a step directory, under the harness's body changed
+        by `change`, in the first version it does not refuse as another
+        contract version, and remember that version.
         """
-        for version in VERSIONS:
+        for version in versions:
             self._in_volume(
                 f"cd /v/unicon-steps/{directory}"
                 f" && cp inputs-{version}.json inputs.json"
                 " && rm -f outputs.json"
                 f" && chown {STEP_UID}:{STEP_UID} inputs.json"
             )
-            code, printed = self._run(self._body(image, directory), 300)
+            body = self._body(image, directory)
+            if change is not None:
+                change(body)
+            code, printed = self._run(body, 300)
             outputs = self.read_json(f"{directory}/outputs.json")
             if not another_version(outputs):
                 break
@@ -495,36 +717,64 @@ def fixtures() -> Iterator[Fixtures]:
     if not Path(daemon_socket()).exists():
         pytest.skip("needs the daemon's unix socket on this machine")
     _have(COMPILE_IMAGE)
-    _have(SANDBOX_RUN_IMAGE)
+    _have(RUN_IMAGE)
     client = DockerClient(daemon_socket())
     try:
         with lab() as made:
             ready = Fixtures(made, client)
-            ready.build()
-            yield ready
+            try:
+                ready.build()
+                yield ready
+            finally:
+                ready.close()
     finally:
         client.close()
 
 
 @pytest.mark.docker
 @pytest.mark.skipif(not docker_ready(), reason="needs a Docker daemon")
-def test_through_sandbox_run_every_attack_is_refused(fixtures: Fixtures) -> None:
-    outputs, printed = fixtures.through_sandbox_run()
+def test_through_the_run_primitive_every_attack_is_refused(
+    fixtures: Fixtures,
+) -> None:
+    outputs, printed = fixtures.through_run()
     outcomes = {attack: item["outcome"] for attack, item in outputs.items()}
 
     assert outcomes["memory"] == "memory_limit"
     assert outcomes["spin"] == "time_limit"
     assert outcomes["sleep"] == "time_limit"
     assert outcomes["output"] == "output_limit"
-    for attack, expected in ATTACKS.items():
+    for attack, expected in attacks(fixtures.versions["batch"]).items():
         checks = checks_of(printed.get(attack, ""))
         escaped = {n for n, (verdict, _) in checks.items() if verdict == "ESCAPED"}
         assert escaped == set(), (attack, {n: checks[n] for n in escaped})
         assert expected <= checks.keys(), (attack, outcomes[attack], sorted(checks))
+    # The mark attack tests something only if the run could set the mark.
+    if "mark" in printed:
+        assert "mark INFO /work/in/binary: marked" in printed["mark"], printed["mark"]
     # Landlock keeps the program out of /work: not even the step's own
     # directory is written.
     files = checks_of(printed["files"])
     assert files["write-work-root"][0] == "REFUSED"
+
+
+@pytest.mark.docker
+@pytest.mark.skipif(not docker_ready(), reason="needs a Docker daemon")
+def test_through_exec_with_the_network_on_no_socket_is_made(
+    fixtures: Fixtures,
+) -> None:
+    """exec's filter, not the container's network, keeps a run off the
+    network: with the network left on, as a Woodpecker step may have it, no
+    internet socket and no ring is made. The interfaces are there to see."""
+    if fixtures.version_of(RUN_IMAGE) < 6:
+        pytest.skip("the run image is not exec")
+    _, printed = fixtures.through_run("network-on", change=without_network)
+    for attack in ("network", "sockets"):
+        checks = checks_of(printed[attack])
+        escaped = {n for n, (verdict, _) in checks.items() if verdict == "ESCAPED"}
+        assert escaped <= {"network-interfaces"}, (attack, checks)
+        assert (ATTACKS | EXEC_ATTACKS)[attack] <= checks.keys(), (attack, checks)
+    interfaces = checks_of(printed["network"])["network-interfaces"]
+    assert interfaces[0] == "ESCAPED", f"the network was not on: {interfaces}"
 
 
 @pytest.mark.docker
@@ -536,6 +786,7 @@ def test_the_container_alone_refuses_every_attack_but_its_own_work(
     # writable place is the step's /work, which nothing limits yet, so they
     # would only write the fixture's cap. The endless sleep is left out
     # because only the caller's clock stops it, as the harness's does.
+    # exec's own attacks are left out too: what refuses them is exec's.
     for attack, expected in ATTACKS.items():
         if attack in ("disk", "output", "sleep"):
             continue
@@ -562,6 +813,46 @@ def test_taking_away_one_protection_lets_an_attack_through(
         assert ran.exit_code is None, f"without the {removed} the loop still ended"
 
 
+@pytest.mark.docker
+@pytest.mark.skipif(not docker_ready(), reason="needs a Docker daemon")
+@pytest.mark.parametrize("removed", list(EXEC_REMOVALS))
+def test_taking_away_one_of_execs_protections_lets_an_attack_through(
+    fixtures: Fixtures, removed: str
+) -> None:
+    if fixtures.version_of(RUN_IMAGE) < 6:
+        pytest.skip("the run image is not exec")
+    _, change, attacks_run, check = EXEC_REMOVALS[removed]
+    image = fixtures.without(removed)
+    _, printed = fixtures.through_run(removed, image=image, change=change)
+    escaped = {
+        name.rstrip("+")
+        for attack in attacks_run
+        for name, (verdict, _) in checks_of(printed[attack]).items()
+        if verdict == "ESCAPED"
+    }
+    assert check in escaped, (removed, printed)
+
+
+@pytest.mark.docker
+@pytest.mark.skipif(not docker_ready(), reason="needs a Docker daemon")
+def test_through_interact_the_entrant_reaches_none_of_its_partner(
+    fixtures: Fixtures,
+) -> None:
+    """The partner holds a hidden file open in its own directory and tells
+    the entrant where it is; the entrant reaches it by none of those ways,
+    and its partner reports what it tried."""
+    if not INTERACT_IMAGE:
+        pytest.skip("no interact image; set INTERACT_IMAGE")
+    _have(INTERACT_IMAGE)
+    outputs = fixtures.through_interact()
+    assert outputs["outcome"] == "accepted", outputs
+    checks = checks_of(outputs["message"])
+    escaped = {n for n, (verdict, _) in checks.items() if verdict == "ESCAPED"}
+    assert escaped == set(), {n: checks[n] for n in escaped}
+    assert PARTNER_CHECKS <= checks.keys(), sorted(checks)
+    assert checks["partner"][1] != "0", "the partner was not found to attack"
+
+
 def test_every_field_of_the_create_body_is_accounted_for() -> None:
     """A field added to the harness's create body is either a protection, and
     gets a removal above with an attack that shows it gone, or is said here
@@ -584,6 +875,28 @@ def test_a_step_has_a_cgroup_namespace_of_its_own_whatever_the_daemon_default() 
     workspace = Workspace(volume="v", mount=MOUNT, user="10001:10001")
     body = create_body(step, workspace, MOUNT / "unicon-steps" / "x", "g")
     assert body["HostConfig"]["CgroupnsMode"] == "private"
+
+
+def test_the_version_6_documents_keep_the_primitive_contract() -> None:
+    assert violation(compile_inputs(6), "primitive", "inputs_file") is None
+    assert violation(batch_inputs(6), "primitive", "inputs_file") is None
+    assert violation(interact_inputs(), "primitive", "inputs_file") is None
+    items = batch_inputs(6)["batch"]
+    assert [item["run"] for item in items] == list(ATTACKS | EXEC_ATTACKS)
+    assert set(items[0]["inputs"]) == {"program", "stdin", "time_limit", "memory_limit"}
+    for name, only in BATCHES.items():
+        assert violation(batch_inputs(6, only), "primitive", "inputs_file") is None, (
+            name
+        )
+
+
+def test_exec_s_attacks_leave_before_the_next_item_finds() -> None:
+    """Each attack that leaves something runs just before the one that looks
+    for it."""
+    order = list(attacks(6))
+    assert order.index("find-sysv") == order.index("leave-sysv") + 1
+    assert order.index("read-mark") == order.index("mark") + 1
+    assert list(attacks(5)) == list(ATTACKS)
 
 
 def test_the_version_5_documents_keep_the_primitive_contract() -> None:
@@ -610,7 +923,7 @@ def test_the_version_4_documents_are_the_ones_the_released_images_take() -> None
 def test_a_batch_answer_is_read_by_attack_at_the_paths_it_reports(
     version: int, tmp_path: Path
 ) -> None:
-    key = "test" if version >= 5 else "id"
+    key = batch_key(version)
     answer = {
         "schema_version": version,
         "batch": [
@@ -625,7 +938,7 @@ def test_a_batch_answer_is_read_by_attack_at_the_paths_it_reports(
         ],
     }
     found = by_attack(answer, version)
-    assert list(found) == list(ATTACKS)
+    assert list(found) == list(attacks(version))
     paths = {attack: item["output"]["file"] for attack, item in found.items()}
     for attack, path in paths.items():
         (tmp_path / path).parent.mkdir(parents=True)
@@ -638,7 +951,9 @@ def test_a_batch_answer_is_read_by_attack_at_the_paths_it_reports(
         text=True,
     ).stdout
 
-    assert json.loads(printed) == {attack: f"{attack} said\n" for attack in ATTACKS}
+    assert json.loads(printed) == {
+        attack: f"{attack} said\n" for attack in attacks(version)
+    }
 
 
 def test_an_image_of_another_contract_version_is_told_apart() -> None:
