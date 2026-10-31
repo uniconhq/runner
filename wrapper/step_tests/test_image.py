@@ -1,12 +1,12 @@
 """The wrapper in its image, primitive-base, on a real Docker, against the
 stand-in for the forge's door served on this machine and reached from the
 container as host.docker.internal: a primitive reading the wrapper's
-environment from /proc gets nothing, nor does a compile that includes it,
-nothing a primitive leaves running outlives it, the org's cache volume
-serves the root steps that use it, and exec, built on the base image from a
-primitive-exec checkout beside this one, runs a batch on isolate through the
-wrapper, cached files bound into its boxes, in a privileged container as a
-grading machine runs it. Run with `pytest -m docker`.
+environment from /proc gets nothing, nothing a primitive leaves running
+outlives it, the org's cache volume serves the root steps that use it and
+keeps its compiled programs from a step that is not root, and exec, built
+on the base image from a primitive-exec checkout beside this one, runs a
+batch on isolate through the wrapper, cached files bound into its boxes, in
+a privileged container as a grading machine runs it. Run with `pytest -m docker`.
 """
 
 from __future__ import annotations
@@ -16,7 +16,6 @@ import json
 import re
 import subprocess
 import uuid
-import zipapp
 from collections.abc import Iterator
 from functools import cache
 from pathlib import Path
@@ -110,7 +109,7 @@ open("outputs.json", "w").write({ACCEPTED!r})
 
 
 def test_a_primitive_does_not_see_the_wrappers_environment(server: StandIn) -> None:
-    """A primitive that is not root, as compile is, reading the wrapper's
+    """A primitive that is not root reading the wrapper's
     /proc/1/environ is refused, its own environment holds neither the link
     nor the token, and the wrapper is small beside it."""
     probe = a_file(server, "in/probe.py", PROBE.encode())
@@ -126,34 +125,6 @@ def test_a_primitive_does_not_see_the_wrappers_environment(server: StandIn) -> N
     assert server.door not in json.dumps(seen["own"])
     print(f"the wrapper's peak resident memory: {seen['peak_kb']} kB")
     assert seen["peak_kb"] < 48 * 1024
-
-
-@pytest.mark.parametrize("environ", ["/proc/1/environ", "/proc/self/environ"])
-def test_a_compile_including_an_environment_gets_nothing(
-    server: StandIn, environ: str
-) -> None:
-    """compile@v3 on the base image, given a source that includes the
-    wrapper's environment or its own: the first is refused, a compile error
-    saying so, and no file the step uploads, the program among them, holds
-    the link or the token, nor needed masking."""
-    source = f'#include "{environ}"\nint main(void) {{ return 0; }}\n'.encode()
-    files = [a_file(server, "in/1/source/main.c", source)]
-    inputs = {
-        "schema_version": 6,
-        "inputs": {"source": {"folder": "in/1/source"}, "language": "c"},
-    }
-    flags = ["--cap-drop=ALL", "--security-opt=no-new-privileges"]
-    done = step(server, on_base("compile"), inputs, files, flags)
-    if environ == "/proc/1/environ":
-        assert done.returncode == 1, done.stdout + done.stderr
-        written = json.loads(server.put["outputs.json"])
-        assert written["outputs"]["outcome"] == "compile_error"
-        assert "Permission denied" in json.dumps(written)
-    assert server.put
-    for content in [*server.put.values(), (done.stdout + done.stderr).encode()]:
-        assert TOKEN.encode() not in content and b"PLUGIN_" not in content
-        assert server.door.encode() not in content
-    assert b"***" not in server.put["outputs.json"]
 
 
 ORPHAN = f"""
@@ -257,6 +228,63 @@ def test_the_orgs_cache_volume_serves_the_root_steps_that_use_it(
         docker("volume", "rm", "--force", volume, check=False)
 
 
+WRITES_PROGRAMS = f"""
+import json, os
+tried = {{}}
+for path in ("/cache/programs/{"0" * 64}", "/cache/programs/{"0" * 64}.new"):
+    try:
+        os.mkdir(path)
+        tried[path] = "made"
+    except OSError as error:
+        tried[path] = type(error).__name__
+os.makedirs("out", exist_ok=True)
+json.dump(tried, open("out/tried.json", "w"))
+open("outputs.json", "w").write({ACCEPTED!r})
+"""
+
+
+def test_a_step_that_is_not_root_cannot_write_compiled_programs(
+    server: StandIn,
+) -> None:
+    """A root step given the volume and no cached files, as an exec step
+    that only compiles, lays out the cache, programs/ among it, root's; a
+    step that is not root, given the same volume, cannot store a program
+    there, nor start compiling one, and the wrapper, not root either,
+    leaves the cache as it is and does its work."""
+    volume = f"unicon-cache-lab-{uuid.uuid4().hex[:8]}"
+    command = ["python3", "/work/in/program.py"]
+    inputs = {"schema_version": 6, "inputs": {}}
+
+    def writing_step(flags: list[str]) -> subprocess.CompletedProcess[str]:
+        program = a_file(server, "in/program.py", WRITES_PROGRAMS.encode())
+        files = [program]
+        return step(server, image("primitive-base"), inputs, files, flags, command)
+
+    try:
+        done = writing_step(["--volume", f"{volume}:/cache"])
+        assert done.returncode == 0, done.stdout + done.stderr
+        assert set(json.loads(server.put["out/tried.json"]).values()) == {"made"}
+        listing = docker(
+            "run",
+            "--rm",
+            "--entrypoint",
+            "sh",
+            "--volume",
+            f"{volume}:/cache",
+            image("primitive-base"),
+            "-c",
+            "rm -r /cache/programs/*; stat -c '%U %a' /cache/programs",
+        )
+        assert listing.split() == ["root", "755"]
+
+        done = writing_step(["--user=65532:65532", "--volume", f"{volume}:/cache"])
+        assert done.returncode == 0, done.stdout + done.stderr
+        tried = json.loads(server.put["out/tried.json"])
+        assert set(tried.values()) == {"PermissionError"}, tried
+    finally:
+        docker("volume", "rm", "--force", volume, check=False)
+
+
 DOUBLE = """
 import sys
 print(int(sys.stdin.readline()) * 2)
@@ -271,20 +299,18 @@ for line in open("/proc/self/mountinfo"):
 """
 
 
-def zip_program(tmp_path: Path, source: str) -> bytes:
-    app = tmp_path / "app"
-    app.mkdir()
-    (app / "__main__.py").write_text(source)
-    zipapp.create_archive(app, tmp_path / "program", interpreter="/usr/bin/env python3")
-    return (tmp_path / "program").read_bytes()
+SOURCE = {"source": {"folder": "in/p/source"}, "language": "python"}
+"""A program's inputs for exec@v2: its source folder, which holds the one
+file `in/p/source/main.py`, and its language; exec compiles it."""
 
 
 def exec_flags() -> list[str]:
     """exec's container as a grading machine starts it, privileged, with
-    exec's own memory for a 64 MB run, entered through primitive-exec's
-    userns.py, as exec refuses root Docker's identity map."""
+    the memory exec@v2 declares, which holds its compile box and a 64 MB
+    run, entered through primitive-exec's userns.py, as exec refuses root
+    Docker's identity map."""
     userns = SIBLINGS / "primitive-exec" / "tests" / "userns.py"
-    flags = ["--privileged", "--memory=320m", "--memory-swap=320m"]
+    flags = ["--privileged", "--memory=1136m", "--memory-swap=1136m"]
     flags += ["--pids-limit=160", "--cpus=1", "--ulimit=cpu=5:5"]
     flags += ["--tmpfs=/tmp:rw,noexec,nosuid,nodev,size=64m"]
     return [*flags, "--volume", f"{userns}:/userns.py:ro"]
@@ -295,20 +321,20 @@ BOX_USERS = {"first": 60000, "last": 60009}
 
 
 def test_exec_on_the_base_image_runs_a_batch_through_the_wrapper(
-    server: StandIn, tmp_path: Path
+    server: StandIn,
 ) -> None:
     """exec on the base image, privileged and with exec's own memory for the
-    batch, as a grading machine starts it: the wrapper fetches the program and
-    inputs, hands exec the job's box users, uploads every output with its
-    hash and posts done, and the token goes only to the door."""
-    files = [a_file(server, "in/p/program", zip_program(tmp_path, DOUBLE))]
+    batch, as a grading machine starts it: the wrapper fetches the source and
+    inputs, hands exec the job's box users, exec compiles the source and
+    runs it, the wrapper uploads every output with its hash and posts done,
+    and the token goes only to the door."""
+    files = [a_file(server, "in/p/source/main.py", DOUBLE.encode())]
     batch = []
     for run, number in (("r1", 21), ("r2", 50)):
         files.append(a_file(server, f"in/{run}/stdin", f"{number}\n".encode()))
-        program = {"program": {"file": "in/p/program"}}
         limits = {"time_limit": 1, "memory_limit": 64}
         stdin = {"stdin": {"file": f"in/{run}/stdin"}}
-        batch.append({"run": run, "inputs": program | stdin | limits})
+        batch.append({"run": run, "inputs": SOURCE | stdin | limits})
     inputs = {"schema_version": 6, "batch": batch}
     done = step(
         server,
@@ -318,7 +344,7 @@ def test_exec_on_the_base_image_runs_a_batch_through_the_wrapper(
         exec_flags(),
         EXEC,
         box_users=BOX_USERS,
-        step_memory_mb=320,
+        step_memory_mb=1136,
         fail_on_non_accepted=False,
     )
     assert done.returncode == 0, done.stdout + done.stderr
@@ -339,7 +365,7 @@ def test_exec_on_the_base_image_runs_a_batch_through_the_wrapper(
 
 
 def test_exec_through_the_wrapper_binds_a_cached_file_into_its_box(
-    server: StandIn, tmp_path: Path
+    server: StandIn,
 ) -> None:
     """exec on the base image as root with the org's cache volume: the
     wrapper fetches the cached file into the volume and links it into an
@@ -348,11 +374,11 @@ def test_exec_through_the_wrapper_binds_a_cached_file_into_its_box(
     folder's path on the machine is printed for the record."""
     volume = f"unicon-cache-lab-{uuid.uuid4().hex[:8]}"
     content = b"a large task file\n"
-    program = a_file(server, "in/p/program", zip_program(tmp_path, READS_DATA))
+    program = a_file(server, "in/p/source/main.py", READS_DATA.encode())
     cached = a_file(server, "cache/Wq81/data", content, cached=True)
     named = {"files": {"data": {"file": cached["path"]}}}
     limits = {"time_limit": 1, "memory_limit": 64}
-    entry = {"program": {"file": "in/p/program"}, "files": named} | limits
+    entry = SOURCE | {"files": named} | limits
     inputs = {"schema_version": 6, "batch": [{"run": "r1", "inputs": entry}]}
     try:
         done = step(
@@ -363,7 +389,7 @@ def test_exec_through_the_wrapper_binds_a_cached_file_into_its_box(
             [*exec_flags(), "--volume", f"{volume}:/cache"],
             EXEC,
             box_users=BOX_USERS,
-            step_memory_mb=320,
+            step_memory_mb=1136,
         )
         assert done.returncode == 0, done.stdout + done.stderr
         result = json.loads(server.put["outputs.json"])

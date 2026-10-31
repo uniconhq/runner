@@ -86,18 +86,25 @@ lock, removing and fetching it anew unless it is still the length and
 SHA-256 its name says, and hard-links it into a folder of its own under
 `/cache/items/`, reached as `/work/cache`, held by a lock for the step's
 life and removed at its end. A step given cached files and no volume is
-refused. What killed steps left is swept: a folder whose lock no one holds,
+refused. exec keeps each program it compiles in
+`/cache/programs/<key>/`, under the lock `/cache/locks/programs-<key>.lock`
+while it compiles or reads one, compiling into `<key>.<anything>` beside it
+first. What killed steps left is swept: a folder whose lock no one holds,
 with any part of a download in it, and, once an hour old, a lock still being
-made or a folder without a lock, and the lock of every name no object has.
+made, a folder without a lock, or a folder a program was being compiled
+into whose lock no one holds, and the lock of every name no object has.
 Past the cap, 10 GiB or the number of bytes in `/etc/unicon/cache-cap`, the
-least recently used objects no running step links go; downloads in progress
-are not counted. The volume takes the image's `/cache`, root's, mode 0755.
+least recently used objects no running step links and compiled programs no
+step holds go, a program's last use the time of its folder; downloads and
+compiles in progress are not counted. A root step with the volume does
+both at its start, with cached files or without, so what exec stored is
+held to the cap. The volume takes the image's `/cache`, root's, mode 0755.
 Its tests are in `wrapper/step_tests/`,
 against a stand-in for the forge's door.
 
 ## The escape fixtures
 
-`escape/escape.c` is one C program, built by the compile primitive as an
+`escape/escape.c` is one C program, compiled by the exec primitive as an
 entrant's program would be, that tries every way out: memory, processes,
 threads, CPU, sleeping, output and disk; the network, the cloud metadata
 address and name lookup; writing outside its directory and reading other
@@ -106,7 +113,7 @@ runs' files, the task's answers and the sockets; `ptrace`, `mount`,
 capabilities, NoNewPrivs, seccomp mode and uid; and any secret in reach.
 
 It is the escape fixture of a run task, graded through a pipeline the forge
-builds on a grading machine (`escape/`). `workflow.yaml` builds it as an
+builds on a grading machine (`escape/`). `workflow.yaml` compiles it as an
 entrant's code and runs it in exec, one attack a run, the attack's name as
 its input, and the task's check (`task/check/`) reads what it printed: a run
 is accepted when no check escaped but those a box may pass
@@ -136,10 +143,13 @@ names, pinned to a commit, and each workflow a box expanded; every task and
 workflow file a step is given, by path, size and SHA-256; the entrant's
 inputs; every run, with its id, its key and whether it is early; each
 workflow step bound to the task's values and placed by how often it runs
-(`save_once`, `save_per_run`, `grading_once`, `grading_per_run`); the
-Woodpecker steps of the `save`, `early` and `late` pipelines, and the split
-a grading takes while the task's results are released; the workflow's
-reports; the save's notes; and the columns the entrant could set.
+(`save_once`, `save_per_run`, `grading_once`, `grading_per_run`), a
+batch step with what its declaration says it gives once for the whole
+batch (`once_outputs`, `once_outcomes`) and whether its compile error is
+the entrant's (`compiled`); the Woodpecker steps of the `save`, `early`
+and `late` pipelines, and the split a grading takes while the task's
+results are released; the workflow's reports; the save's notes; and the
+columns the entrant could set.
 
 **`result.schema.json`.** Built by the forge once a grading's pipeline has
 ended, from what each step's `outputs.json` held, and kept whole on the
@@ -190,8 +200,8 @@ Beyond those:
 - **A `programs` input,** named `programs`, takes programs the step names,
   one to eight, which exec's programs form runs side by side.
   The port declares `inputs`, what each program takes, as the primitive's
-  own inputs are declared, `program` among them, a `file` with `runs:
-  true`, and `outputs`, what it gives of each. The value
+  own inputs are declared, `source` among them, a `folder` with `runs:
+  true` that exec compiles, and `outputs`, what it gives of each. The value
   is `{"programs": {"<name>": {<that program's inputs>}}}`; a name is a port
   name of at most 64 characters, never `wall_clock`. A declaration has at
   most one programs port, named `programs`, and needs `outputs_from:
@@ -211,12 +221,20 @@ Beyond those:
   named `programs` and comes with `outputs_from: programs`.
 - **`cache: true`** says the primitive reads the task's files through the
   machine's cache, so its step is given the cache; `false` when left out,
-  and the step's files are copied in. `exec` says it;
-  `compile` doesn't.
+  and the step's files are copied in. `exec` says it, and also keeps the
+  programs it compiles there, in `programs/` (below).
+- **`once`** says what a batch step gives alike for every item, such as a
+  log of compiling the source it was given once: `once: true` on an
+  output, and on the `outcome` output a list, `once: [compile_error]`,
+  each among its `outcomes` when it lists them (`check_declaration.py`
+  checks that). **`limits.once_time_ms`**, optional, is the time for that
+  work, which the forge adds once to the step's `time_ms`, otherwise
+  summed over its items.
 - **`forms`,** one to four ways to use the primitive, each with its own
   ports, limits and `outputs_from`, in place of those at the top. A step
-  names no form: the save picks the one whose inputs the step gives, and
-  `check_declaration.py` refuses a form with no required input of its own.
+  names no form: the save picks the one whose required inputs the step
+  gives and which declares every input it gives, and
+  `check_declaration.py` refuses two forms one step's inputs could fit.
 
 **`submission.schema.json`.** `submission.json` at the root of a submission
 commit: `{"schema_version": 6, "inputs": {id: entry}}`, one entry per entrant
@@ -278,11 +296,6 @@ is `ghcr.io/uniconhq/primitive-<name>`.
   shape as this repo's, and `primitive.yaml`, and the forge version in the
   notes. The caller grants
   `contents: write` and `packages: write`, and each job takes only its part.
-
-`compile-image: true` is for a primitive that runs what the compile
-primitive builds, such as exec and interact: both workflows build
-`primitive-compile` from its `main` branch and hand it to the image tests as
-`COMPILE_IMAGE`.
 
 A primitive builds on `primitive-base`, named in its Dockerfile as `ARG
 BASE_IMAGE`. CI builds that image from the `runner/` checkout and passes it,
@@ -348,12 +361,13 @@ uv run python scripts/check_contract_files.py
 
 `uv run pytest` runs the unit tests. `uv run pytest -m docker` needs a Docker
 daemon: it builds `primitive-base` and runs the step wrapper in it against
-its stand-in door: a primitive and a compile reading the wrapper's environment get nothing,
+its stand-in door: a primitive reading the wrapper's environment gets nothing,
 nothing a primitive leaves running outlives it, the org's cache volume serves
 the root steps that use it, and exec built on the base image from a
 `primitive-exec` checkout beside this one runs a batch on isolate through the
-wrapper, a cached file bound into its box (the compile and exec cases are
-skipped without `primitive-compile` and `primitive-exec` checkouts there).
+wrapper, a cached file bound into its box (the exec cases are skipped
+without a `primitive-exec` checkout there). That a compile reads nothing of
+the step's environment is exec's own test, in its compile box.
 
 CI runs those commands, checks that the Dockerfiles on the python base share
 one digest, builds the two images, and starts each once: the worker to see
