@@ -18,9 +18,12 @@ A number output's bounds are compared here too, at_least no more than at_most,
 since a JSON schema can't compare two values, and so are a programs port's
 outputs. So is what one port says of another: at most one programs port, a
 links port only beside one, and a limit from sum or max naming a programs
-port and one of its number inputs. A declaration with forms is checked
-per form, as the shared keys plus that form's keys, and a form with no
-required input of its own is refused.
+port and one of its number inputs. An outcome said to be once must be one
+of the outcomes the port lists, when it lists them. A declaration with
+forms is checked per form, as the shared keys plus that form's keys, and
+two forms a step's inputs could both fit are refused, since the forge picks
+the one form whose required inputs a step gives and which declares all it
+gives.
 """
 
 import json
@@ -90,13 +93,17 @@ _SHARED = (
 
 
 def _form_problems(declaration: dict[str, Any]) -> list[str]:
-    """`crossed_bounds` and `programs_problems` for a formless declaration,
-    or for each form as the shared keys plus that form's keys. A form must
-    have a required input no other form declares.
+    """`crossed_bounds`, `programs_problems` and `once_problems` for a
+    formless declaration, or for each form as the shared keys plus that
+    form's keys, and `fitting_both` over the forms.
     """
     forms = declaration.get("forms")
     if not isinstance(forms, dict) or not forms:
-        return crossed_bounds(declaration) + programs_problems(declaration)
+        return (
+            crossed_bounds(declaration)
+            + programs_problems(declaration)
+            + once_problems(declaration)
+        )
     found = []
     views: list[tuple[str, dict[str, Any]]] = []
     shared = {key: declaration[key] for key in _SHARED if key in declaration}
@@ -105,38 +112,43 @@ def _form_problems(declaration: dict[str, Any]) -> list[str]:
             continue
         view = {**shared, **form}
         views.append((str(name), form))
-        for problem in crossed_bounds(view) + programs_problems(view):
+        for problem in (
+            crossed_bounds(view) + programs_problems(view) + once_problems(view)
+        ):
             found.append(f"forms/{name}/{problem}")
-    found += _own_required(views)
+    found += fitting_both(views)
     return found
 
 
-def _own_required(forms: list[tuple[str, dict[str, Any]]]) -> list[str]:
-    """Each form that has no required input no other form declares."""
+def fitting_both(forms: list[tuple[str, dict[str, Any]]]) -> list[str]:
+    """Each two forms some step's inputs fit both of: a step fits a form
+    when it gives every input the form requires and none it does not
+    declare, so two forms clash when each declares every input either
+    requires. A form whose inputs are a part of another's, as a build form
+    of only the source, is told apart by an input the other requires.
+    """
     declared: dict[str, set[str]] = {}
     required: dict[str, set[str]] = {}
     for name, form in forms:
         inputs = form.get("inputs")
         if not isinstance(inputs, dict):
-            declared[name] = set()
-            required[name] = set()
-            continue
+            inputs = {}
         declared[name] = set(inputs)
         required[name] = {
             key
             for key, port in inputs.items()
             if not (isinstance(port, dict) and port.get("optional") is True)
         }
+    names = list(declared)
     found = []
-    for name, needed in required.items():
-        others: set[str] = set()
-        for other, keys in declared.items():
-            if other != name:
-                others |= keys
-        if not needed - others:
-            found.append(
-                f"forms/{name}: a form needs a required input no other form declares"
-            )
+    for at, first in enumerate(names):
+        for second in names[at + 1 :]:
+            given = required[first] | required[second]
+            if given <= declared[first] & declared[second]:
+                inputs = ", ".join(sorted(given)) or "no inputs"
+                found.append(
+                    f"forms/{first}, forms/{second}: a step giving {inputs} fits both"
+                )
     return found
 
 
@@ -233,6 +245,24 @@ def programs_problems(declaration: dict[str, Any]) -> list[str]:
                     f"limits_from/{limit}/{over}: {port} has no number input {number}"
                 )
     return found
+
+
+def once_problems(declaration: dict[str, Any]) -> list[str]:
+    """Each outcome the outcome port says is once that is not among the
+    outcomes it lists, when it lists them.
+    """
+    outputs = declaration.get("outputs")
+    port = outputs.get("outcome") if isinstance(outputs, dict) else None
+    if not isinstance(port, dict):
+        return []
+    once, listed = port.get("once"), port.get("outcomes")
+    if not isinstance(once, list) or not isinstance(listed, dict):
+        return []
+    return [
+        f"outputs/outcome/once: {outcome} is not among its outcomes"
+        for outcome in once
+        if isinstance(outcome, str) and outcome not in listed
+    ]
 
 
 def main(argv: list[str]) -> int:

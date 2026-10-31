@@ -76,8 +76,11 @@ CACHE_CAP_FILE = Path("/etc/unicon/cache-cap")
 """Where a machine may set its cache's cap in bytes; else `CACHE_CAP`."""
 CACHE_CAP = 10 * 1024**3
 STALE_SECONDS = 3600
-"""How old a lock being made, or a step folder without a lock, must be
-before a sweep takes it for one a killed step left."""
+"""How old a lock being made, a step folder without a lock, or a folder a
+program was being compiled into, must be before a sweep takes it for one a
+killed step left."""
+PROGRAM_KEY = re.compile(r"[0-9a-f]{64}")
+"""The name of a compiled program's folder in /cache/programs, its key."""
 PARALLEL = 8
 TRIES = 4
 BACKOFF = 1.0
@@ -437,8 +440,10 @@ def mounted(path: Path) -> bool:
 class Cache:
     """The machine's cache, /cache, one Docker volume per org, used by steps
     that run as root: each task file once in objects/, named by its SHA-256,
-    with a lock per name in locks/ held while it is fetched or linked, the
-    least recently used removed first past the cap; and in items/ this
+    with a lock per name in locks/ held while it is fetched or linked; each
+    program a primitive compiled in programs/<key>/, with the lock
+    locks/programs-<key>.lock held while it is compiled or read; the least
+    recently used of both removed first past the cap; and in items/ this
     running step's folder, with a lock beside it held for the step's life,
     whose item folders hold hard links to the objects each item reads and
     whose .fetching folder holds downloads in progress. /work/cache is a
@@ -450,9 +455,7 @@ class Cache:
 
     def __init__(self, root: Path) -> None:
         self.root = root
-        for name in ("objects", "locks", "items"):
-            (root / name).mkdir(exist_ok=True)
-        sweep(root)
+        tidy(root)
         descriptor, made = tempfile.mkstemp(
             prefix="step-", suffix=".lock-new", dir=root / "items"
         )
@@ -471,8 +474,13 @@ class Cache:
     @contextlib.contextmanager
     def for_step(cls, files: list[dict[str, Any]]) -> Iterator[Cache | None]:
         """The cache, for a job with cached files, given back at the step's
-        end: its folder removed, then its lock."""
+        end: its folder removed, then its lock. A step given /cache with no
+        cached files, as an exec step that only compiles into programs/,
+        has none, but tidies the cache first when it runs as root, so what
+        earlier steps compiled is held to the cap."""
         if not any(entry.get("cached") for entry in files):
+            if mounted(CACHE) and os.geteuid() == 0:
+                tidy(CACHE)
             yield None
             return
         if not mounted(CACHE):
@@ -500,7 +508,7 @@ class Cache:
             if found.is_file() and not holds(found, entry["size"], digest):
                 found.unlink()
             if not found.is_file():
-                self.make_room(entry["size"])
+                make_room(self.root, entry["size"])
                 descriptor, name = tempfile.mkstemp(dir=self.fetching)
                 os.close(descriptor)
                 try:
@@ -516,42 +524,112 @@ class Cache:
         finally:
             os.close(held)
 
-    def make_room(self, size: int) -> None:
-        """Remove the least recently used objects that no item holds and no
-        step is fetching or linking, and their locks, until `size` more
-        bytes fit the cap. A download in progress is not counted."""
-        cap = CACHE_CAP
-        if CACHE_CAP_FILE.is_file():
-            cap = int(CACHE_CAP_FILE.read_text())
-        evicting = take_lock(self.root / "locks" / "evict")
-        try:
-            found = [(path, path.stat()) for path in (self.root / "objects").iterdir()]
-            used = sum(seen.st_size for _, seen in found)
-            for path, seen in sorted(found, key=lambda pair: pair[1].st_mtime):
-                if used + size <= cap:
-                    break
-                if seen.st_nlink > 1:
-                    continue
-                lock = self.root / "locks" / path.name
-                try:
-                    held = take_lock(lock, wait=False)
-                except BlockingIOError:
-                    continue
-                try:
-                    # Linked since it was listed, or removed, by a step that
-                    # held the lock in between.
-                    now = path.lstat()
-                    if now.st_nlink > 1:
-                        continue
-                    path.unlink()
-                    lock.unlink(missing_ok=True)
-                    used -= now.st_size
-                except FileNotFoundError:
-                    used -= seen.st_size
-                finally:
-                    os.close(held)
-        finally:
-            os.close(evicting)
+
+def tidy(root: Path) -> None:
+    """Make the cache's folders that are not there yet, sweep it, and bring
+    it within its cap, which a primitive's compiled programs, stored
+    without the wrapper, may have passed."""
+    for name in ("objects", "programs", "locks", "items"):
+        (root / name).mkdir(exist_ok=True)
+    sweep(root)
+    make_room(root, 0)
+
+
+def make_room(root: Path, size: int) -> None:
+    """Remove the least recently used objects that no item holds and no
+    step is fetching or linking, and compiled programs no step is
+    compiling or reading, with their locks, until `size` more bytes fit the
+    cap. A download or a compile in progress is not counted."""
+    cap = CACHE_CAP
+    if CACHE_CAP_FILE.is_file():
+        cap = int(CACHE_CAP_FILE.read_text())
+    evicting = take_lock(root / "locks" / "evict")
+    try:
+        found = stored(root)
+        used = sum(entry[1] for entry in found)
+        for _, _, evict in sorted(found, key=lambda entry: entry[0]):
+            if used + size <= cap:
+                break
+            used -= evict()
+    finally:
+        os.close(evicting)
+
+
+def stored(root: Path) -> list[tuple[float, int, Callable[[], int]]]:
+    """Each object and each compiled program in the cache: when it was last
+    used, its size, and what removes it, giving back the bytes it freed, 0
+    when it is in use."""
+    found: list[tuple[float, int, Callable[[], int]]] = []
+    for path in (root / "objects").iterdir():
+        seen = path.stat()
+        evict = functools.partial(evict_object, root, path, seen)
+        found.append((seen.st_mtime, seen.st_size, evict))
+    for path in (root / "programs").iterdir():
+        if not PROGRAM_KEY.fullmatch(path.name):
+            continue
+        with contextlib.suppress(FileNotFoundError):
+            seen = path.lstat()
+            if not stat.S_ISDIR(seen.st_mode):
+                continue
+            size = folder_size(path)
+            evict = functools.partial(evict_program, root, path, size)
+            found.append((seen.st_mtime, size, evict))
+    return found
+
+
+def evict_object(root: Path, path: Path, seen: os.stat_result) -> int:
+    """Remove the object at `path`, listed as `seen`, and its lock, unless
+    an item holds it or a step is fetching or linking it."""
+    if seen.st_nlink > 1:
+        return 0
+    lock = root / "locks" / path.name
+    try:
+        held = take_lock(lock, wait=False)
+    except BlockingIOError:
+        return 0
+    try:
+        # Linked since it was listed, or removed, by a step that held the
+        # lock in between.
+        now = path.lstat()
+        if now.st_nlink > 1:
+            return 0
+        path.unlink()
+        lock.unlink(missing_ok=True)
+        return now.st_size
+    except FileNotFoundError:
+        return seen.st_size
+    finally:
+        os.close(held)
+
+
+def evict_program(root: Path, path: Path, size: int) -> int:
+    """Remove the compiled program's folder at `path`, of `size` bytes, and
+    its lock, unless a step is compiling or reading it."""
+    lock = root / "locks" / f"programs-{path.name}.lock"
+    try:
+        held = take_lock(lock, wait=False)
+    except BlockingIOError:
+        return 0
+    try:
+        remove(path)
+        lock.unlink(missing_ok=True)
+        return size
+    finally:
+        os.close(held)
+
+
+def folder_size(folder: Path) -> int:
+    """The bytes of the plain files directly in `folder`, as a compiled
+    program's folder holds them."""
+    size = 0
+    with contextlib.suppress(FileNotFoundError, NotADirectoryError):
+        with os.scandir(folder) as entries:
+            for entry in entries:
+                with contextlib.suppress(FileNotFoundError):
+                    found = entry.stat(follow_symlinks=False)
+                    if stat.S_ISREG(found.st_mode):
+                        size += found.st_size
+    return size
 
 
 def holds(path: Path, size: int, digest: str) -> bool:
@@ -595,9 +673,11 @@ def take_lock(path: Path, wait: bool = True, create: bool = True) -> int:
 def sweep(root: Path) -> None:
     """Remove what killed steps left: each step folder whose lock no one
     holds, whose links would keep objects past the cap and whose .fetching
-    folder holds a part of a download; a lock still being made, or a step
-    folder without one, once older than `STALE_SECONDS`; and the lock of
-    every name no object has and no step holds."""
+    folder holds a part of a download; a lock still being made, a step
+    folder without one, or a folder in programs/ a program was being
+    compiled into, `<key>.<anything>`, whose lock no one holds, once older
+    than `STALE_SECONDS`; and the lock of every name no object has and no
+    step holds."""
     items = root / "items"
     for lock in items.glob("*.lock"):
         try:
@@ -619,6 +699,23 @@ def sweep(root: Path) -> None:
                     os.close(held)
             elif path.is_dir() and not path.with_name(path.name + ".lock").exists():
                 remove(path)
+    for path in (root / "programs").iterdir():
+        with contextlib.suppress(FileNotFoundError):
+            if (
+                PROGRAM_KEY.fullmatch(path.name)
+                or now - path.lstat().st_mtime < STALE_SECONDS
+            ):
+                continue
+            key = path.name.partition(".")[0]
+            if not PROGRAM_KEY.fullmatch(key):
+                discard(path)
+                continue
+            with contextlib.suppress(BlockingIOError):
+                held = take_lock(root / "locks" / f"programs-{key}.lock", wait=False)
+                try:
+                    discard(path)
+                finally:
+                    os.close(held)
     for lock in (root / "locks").iterdir():
         if lock.name == "evict" or (root / "objects" / lock.name).exists():
             continue
@@ -629,8 +726,17 @@ def sweep(root: Path) -> None:
             os.close(held)
 
 
+def discard(path: Path) -> None:
+    """Remove `path`, a folder as `remove` does, or any other file."""
+    if path.is_dir() and not path.is_symlink():
+        remove(path)
+    else:
+        path.unlink(missing_ok=True)
+
+
 def remove(folder: Path) -> None:
-    """Remove a step folder, whose item folders are read-only."""
+    """Remove a step folder, whose item folders are read-only, or a compiled
+    program's."""
     for parent, _, _ in os.walk(folder):
         with contextlib.suppress(OSError):
             Path(parent).chmod(0o700)

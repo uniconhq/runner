@@ -1,6 +1,6 @@
 image: ghcr.io/uniconhq/primitive-exec@sha256:3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2b
 title: Run programs
-description: Runs one program, or several linked by pipes, under limits, and records how each ended.
+description: Compiles and runs one program, or several linked by pipes, under limits, and records how each ended.
 schema_version: 6
 batch: true
 network: false
@@ -14,7 +14,8 @@ forms:
       time_ms: {input: time_limit, scale: 2000, add: 3000}
       memory_mb: {input: memory_limit, add: 256}
     inputs:
-      program: {type: file, runs: true, description: The program to run.}
+      source: {type: folder, runs: true, description: The program's source files.}
+      language: {type: enum, options: [c, cpp, java, python, ipynb]}
       manifest: {type: file, runs: false}
       time_limit: {type: number}
       memory_limit: {type: number}
@@ -34,7 +35,8 @@ forms:
         type: programs
         description: The programs to run, by name.
         inputs:
-          program: {type: file, runs: true}
+          source: {type: folder, runs: true}
+          language: {type: enum, options: [c, cpp, java, python, ipynb]}
           time_limit: {type: number}
           memory_limit: {type: number}
           manifest: {type: file, runs: false}
@@ -43,4 +45,18 @@ forms:
       links: {type: links, optional: true, description: The pipes between the programs.}
     outputs:
       facts: {type: file, optional: true}
-      outcome: {type: outcome}
+      outcome: {type: outcome, once: [compile_error]}
+  build:
+    description: Compiles a program and runs nothing, so a save can check that it compiles.
+    limits: {time_ms: 1, cpu_ms: 1, memory_mb: 1136, pids: 128, output_mb: 64, gpus: 0, once_time_ms: 40000}
+    inputs:
+      source: {type: folder, runs: true}
+      language: {type: enum, options: [c, cpp, java, python, ipynb]}
+      entry: {type: text, optional: true}
+    outputs:
+      log: {type: text}
+      outcome:
+        type: outcome
+        outcomes:
+          accepted: the source compiles
+          compile_error: it does not

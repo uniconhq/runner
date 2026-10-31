@@ -1,4 +1,4 @@
-// The escape fixtures: one C program, built by the compile primitive as a
+// The escape fixtures: one C program, compiled by the exec primitive as a
 // contestant's program would be, that tries the attack named on its standard
 // input, or as its first argument, and prints one line per thing it tried,
 // "<check> REFUSED|ESCAPED|INFO <detail>". The task beside it (task/, on

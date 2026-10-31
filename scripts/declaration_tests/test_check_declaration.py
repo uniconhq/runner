@@ -174,6 +174,94 @@ def test_outcomes_are_only_on_the_outcome_port(
     assert "compile_log" in found[0]
 
 
+ONCE = (
+    DECLARATION.replace("batch: false", "batch: true")
+    .replace("gpus: 0}", "gpus: 0, once_time_ms: 40000}")
+    .replace(
+        "compile_log: {type: text}\n  outcome: {type: outcome}",
+        "compile_log: {type: text, once: true}\n"
+        "  outcome:\n"
+        "    type: outcome\n"
+        "    once: [compile_error]\n"
+        "    outcomes:\n"
+        "      accepted: the program ran and passed\n"
+        "      compile_error: the source does not compile\n",
+    )
+)
+
+
+def test_a_batch_step_may_say_what_it_gives_once_for_every_item(
+    schema: dict[str, Any], tmp_path: Path
+) -> None:
+    """A log and an outcome that are the same for every item, and the time
+    to make them, added once to the step's.
+    """
+    assert ONCE != DECLARATION
+    assert check_declaration.problems(schema, _repo(tmp_path, ONCE)) == []
+
+
+def test_once_outcomes_may_be_given_without_a_list_of_outcomes(
+    schema: dict[str, Any], tmp_path: Path
+) -> None:
+    text = ONCE.split("    outcomes:\n")[0]
+    assert check_declaration.problems(schema, _repo(tmp_path, text)) == []
+
+
+@pytest.mark.parametrize(
+    ("old", "new", "where"),
+    [
+        ("once: [compile_error]", "once: [skipped]", "outcome"),
+        ("once: [compile_error]", "once: []", "outcome"),
+        ("once: [compile_error]", "once: [compile_error, compile_error]", "outcome"),
+        ("once: [compile_error]", "once: true", "outcome"),
+        ("{type: text, once: true}", "{type: text, once: [log]}", "compile_log"),
+        ("once_time_ms: 40000", "once_time_ms: 0", "limits"),
+        ("once_time_ms: 40000", "once_time_ms: 1.5", "limits"),
+    ],
+)
+def test_a_once_key_that_breaks_a_rule_is_refused(
+    schema: dict[str, Any], tmp_path: Path, old: str, new: str, where: str
+) -> None:
+    text = ONCE.replace(old, new)
+    assert text != ONCE
+    found = check_declaration.problems(schema, _repo(tmp_path, text))
+    assert found
+    assert all(where in problem for problem in found)
+
+
+def test_a_once_outcome_the_port_does_not_list_is_named(
+    schema: dict[str, Any], tmp_path: Path
+) -> None:
+    text = ONCE.replace("once: [compile_error]", "once: [compile_error, runtime_error]")
+    assert check_declaration.problems(schema, _repo(tmp_path, text)) == [
+        "outputs/outcome/once: runtime_error is not among its outcomes"
+    ]
+
+
+def test_a_once_outcome_is_checked_in_each_form(
+    schema: dict[str, Any], tmp_path: Path
+) -> None:
+    text = FORMS.replace(
+        "      program: {type: file, runs: true}\n"
+        "      manifest: {type: file, runs: false}\n"
+        "      time_limit: {type: number}\n"
+        "    outputs:\n"
+        "      outcome: {type: outcome}",
+        "      program: {type: file, runs: true}\n"
+        "      manifest: {type: file, runs: false}\n"
+        "      time_limit: {type: number}\n"
+        "    outputs:\n"
+        "      outcome:\n"
+        "        type: outcome\n"
+        "        once: [compile_error]\n"
+        "        outcomes: {accepted: it passed}",
+    )
+    assert text != FORMS
+    assert check_declaration.problems(schema, _repo(tmp_path, text)) == [
+        "forms/one/outputs/outcome/once: compile_error is not among its outcomes"
+    ]
+
+
 def test_a_file_input_without_its_runs_mark_is_refused(
     schema: dict[str, Any], tmp_path: Path
 ) -> None:
@@ -270,7 +358,7 @@ inputs:
   programs:
     type: programs
     inputs:
-      program: {type: file, runs: true}
+      source: {type: folder, runs: true}
       files: {type: named_files, runs: false, optional: true}
       time_limit: {type: number}
       memory_limit: {type: number}
@@ -303,17 +391,21 @@ def test_a_declaration_with_programs_conforms(
         ("max: programs.time_limit", "input: programs.time_limit"),
         ("max: programs.time_limit,", "max: programs.time_limit, input: x,"),
         ("max: programs.time_limit", "max: time_limit"),
-        ("      program: {type: file, runs: true}", "      inner: {type: links}"),
+        ("      source: {type: folder, runs: true}", "      inner: {type: links}"),
         (
             "  links: {type: links, optional: true}",
             "  links: {type: links, runs: true}",
         ),
         ("  facts: {type: file}", "  facts: {type: file, inputs: {}}"),
         ("      manifest: {type: file, runs: false, optional: true}\n", ""),
-        ("      program: {type: file, runs: true}\n", ""),
+        ("      source: {type: folder, runs: true}\n", ""),
         (
-            "      program: {type: file, runs: true}",
-            "      program: {type: file, runs: false}",
+            "      source: {type: folder, runs: true}",
+            "      source: {type: folder, runs: false}",
+        ),
+        (
+            "      source: {type: folder, runs: true}",
+            "      source: {type: file, runs: true}",
         ),
     ],
 )
@@ -362,7 +454,7 @@ def test_two_programs_ports_are_named(schema: dict[str, Any], tmp_path: Path) ->
     text = DECLARATION_PROGRAMS.replace(
         "  links: {type: links, optional: true}",
         "  links: {type: links, optional: true}\n  more: {type: programs, "
-        "inputs: {program: {type: file, runs: true}}, outputs: {}}",
+        "inputs: {source: {type: folder, runs: true}}, outputs: {}}",
     )
     found = check_declaration.problems(schema, _repo(tmp_path, text))
     assert "inputs: programs, more are each a programs port" in found
@@ -442,7 +534,7 @@ forms:
       programs:
         type: programs
         inputs:
-          program: {type: file, runs: true}
+          source: {type: folder, runs: true}
           time_limit: {type: number}
           manifest: {type: file, runs: false}
         outputs:
@@ -466,34 +558,46 @@ def test_a_form_key_at_the_top_beside_forms_is_refused(
     assert any("limits" in problem for problem in found)
 
 
-def test_a_form_whose_required_inputs_another_form_declares_is_refused(
+def test_two_forms_a_step_could_fit_both_of_are_refused(
     schema: dict[str, Any], tmp_path: Path
 ) -> None:
+    """A step giving `shared` gives every input each form requires and none
+    either lacks, so the forge could not pick one."""
     text = """\
 schema_version: 6
 forms:
   one:
-    outputs_from: manifest
     limits: {time_ms: 1, cpu_ms: 1, memory_mb: 1, pids: 1, output_mb: 1, gpus: 0}
     inputs:
       shared: {type: text}
-      manifest: {type: file, runs: false, optional: true}
+      extra: {type: text, optional: true}
     outputs:
       outcome: {type: outcome}
-  programs:
-    outputs_from: programs
+  other:
     limits: {time_ms: 1, cpu_ms: 1, memory_mb: 1, pids: 1, output_mb: 1, gpus: 0}
     inputs:
       shared: {type: text, optional: true}
-      programs:
-        type: programs
-        inputs:
-          program: {type: file, runs: true}
-          manifest: {type: file, runs: false}
-        outputs:
-          time_ms: {type: number, better: lower, at_least: 0}
+      extra: {type: text, optional: true}
     outputs:
       outcome: {type: outcome}
 """
     found = check_declaration.problems(schema, _repo(tmp_path, text))
-    assert found == ["forms/one: a form needs a required input no other form declares"]
+    assert found == ["forms/one, forms/other: a step giving shared fits both"]
+
+
+def test_a_form_whose_inputs_are_a_part_of_anothers_is_told_apart(
+    schema: dict[str, Any], tmp_path: Path
+) -> None:
+    """A build form takes only the program, which the one form takes too;
+    a step giving the one form's time limit fits only it, and one giving
+    the program alone fits only the build form."""
+    text = FORMS + (
+        "  build:\n"
+        "    limits: {time_ms: 1, cpu_ms: 1, memory_mb: 1, pids: 1, output_mb: 1, "
+        "gpus: 0}\n"
+        "    inputs:\n"
+        "      program: {type: file, runs: true}\n"
+        "    outputs:\n"
+        "      outcome: {type: outcome}\n"
+    )
+    assert check_declaration.problems(schema, _repo(tmp_path, text)) == []
