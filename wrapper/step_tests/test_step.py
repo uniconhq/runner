@@ -674,7 +674,7 @@ def test_past_its_cap_the_cache_removes_the_least_recently_used_it_can(
     server: StandIn, tmp_path: Path, work: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     cache = tmp_path / "cache"
-    store = unicon_step.Cache(cache)
+    unicon_step.tidy(cache)
     objects = cache / "objects"
     for age, name in enumerate(["oldest", "linked", "fetching", "older", "newest"]):
         (objects / name).write_bytes(b"x" * 100)
@@ -683,7 +683,7 @@ def test_past_its_cap_the_cache_removes_the_least_recently_used_it_can(
     fetching = unicon_step.take_lock(cache / "locks" / "fetching")
     monkeypatch.setattr(unicon_step, "CACHE_CAP", 550)
     try:
-        store.make_room(200)
+        unicon_step.make_room(cache, 200)
     finally:
         os.close(fetching)
 
@@ -694,12 +694,12 @@ def test_a_machine_may_set_the_caches_cap(
     server: StandIn, tmp_path: Path, work: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     cache = tmp_path / "cache"
-    store = unicon_step.Cache(cache)
+    unicon_step.tidy(cache)
     (cache / "objects" / "old").write_bytes(b"x" * 100)
     (tmp_path / "cap").write_text("150\n")
     monkeypatch.setattr(unicon_step, "CACHE_CAP_FILE", tmp_path / "cap")
 
-    store.make_room(100)
+    unicon_step.make_room(cache, 100)
 
     assert list((cache / "objects").iterdir()) == []
 
@@ -732,7 +732,106 @@ def test_stale_leftovers_of_killed_steps_are_swept_and_fresh_ones_kept(
     assert "step-old.lock-new" not in left
     assert "step-lockless" not in left
     assert {"step-new.lock-new", "step-young"} <= set(left)
-    assert sorted(p.name for p in locks.iterdir()) == ["held", "kept"]
+    assert sorted(p.name for p in locks.iterdir()) == ["evict", "held", "kept"]
+
+
+KEYS = {name: hashlib.sha256(name.encode()).hexdigest() for name in "abcdef"}
+
+
+def a_program(cache: Path, name: str, age: int, size: int = 100) -> Path:
+    """A compiled program's folder in the cache, as exec stores one, last
+    used `age` seconds after the epoch's thousandth."""
+    folder = cache / "programs" / KEYS[name]
+    folder.mkdir(parents=True)
+    (folder / "program").write_bytes(b"x" * (size - 2))
+    (folder / "program").chmod(0o444)
+    (folder / "result.json").write_bytes(b"{}")
+    os.utime(folder, (1000 + age, 1000 + age))
+    return folder
+
+
+def test_past_its_cap_compiled_programs_go_by_last_use_with_the_objects(
+    server: StandIn, tmp_path: Path, work: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """One cap and one order for both: the oldest goes first, whichever it
+    is, and a program a step is compiling or reading stays."""
+    cache = tmp_path / "cache"
+    unicon_step.tidy(cache)
+    for age, name in [(0, "oldest"), (3, "newer")]:
+        (cache / "objects" / name).write_bytes(b"x" * 100)
+        os.utime(cache / "objects" / name, (1000 + age, 1000 + age))
+    a_program(cache, "a", age=1)
+    a_program(cache, "b", age=2)
+    a_program(cache, "c", age=4)
+    held = unicon_step.take_lock(cache / "locks" / f"programs-{KEYS['b']}.lock")
+    monkeypatch.setattr(unicon_step, "CACHE_CAP", 200)
+    try:
+        unicon_step.make_room(cache, 0)
+    finally:
+        os.close(held)
+
+    assert list((cache / "objects").iterdir()) == []
+    assert sorted(p.name for p in (cache / "programs").iterdir()) == sorted(
+        [KEYS["b"], KEYS["c"]]
+    )
+    assert not (cache / "locks" / f"programs-{KEYS['a']}.lock").exists()
+
+
+def test_a_folder_a_killed_step_was_compiling_into_is_swept(
+    server: StandIn, tmp_path: Path, work: Path
+) -> None:
+    """`<key>.<anything>` is a compile in progress: swept once stale and its
+    lock free, kept while young or held. A stored program stays, however
+    old."""
+    cache = tmp_path / "cache"
+    programs = cache / "programs"
+    programs.mkdir()
+    for name in ("a", "b", "c"):
+        (programs / f"{KEYS[name]}.tmp1").mkdir()
+        (programs / f"{KEYS[name]}.tmp1" / "program").write_bytes(b"half")
+    (programs / "stray").write_bytes(b"?")
+    stored = a_program(cache, "d", age=0)
+    old = time.time() - unicon_step.STALE_SECONDS - 60
+    for path in (
+        programs / f"{KEYS['a']}.tmp1",
+        programs / f"{KEYS['b']}.tmp1",
+        programs / "stray",
+    ):
+        os.utime(path, (old, old))
+    for name in ("items", "locks"):
+        (cache / name).mkdir()
+    held = unicon_step.take_lock(cache / "locks" / f"programs-{KEYS['b']}.lock")
+    try:
+        unicon_step.sweep(cache)
+    finally:
+        os.close(held)
+
+    assert sorted(p.name for p in programs.iterdir()) == sorted(
+        [f"{KEYS['b']}.tmp1", f"{KEYS['c']}.tmp1", stored.name]
+    )
+
+
+@pytest.mark.parametrize(("uid", "tidied"), [(0, True), (1000, False)])
+def test_a_step_given_the_cache_and_no_cached_files_tidies_it_as_root(
+    step: Step,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    uid: int,
+    tidied: bool,
+) -> None:
+    """exec stores what it compiles without the wrapper, so a step that
+    fetches nothing into the cache still holds it to the cap; one not run
+    as root cannot write it and leaves it as it is."""
+    cache = tmp_path / "cache"
+    a_program(cache, "a", age=0)
+    a_program(cache, "b", age=1)
+    monkeypatch.setattr(unicon_step, "CACHE_CAP", 150)
+    monkeypatch.setattr(os, "geteuid", lambda: uid)
+
+    assert step() == 0
+
+    left = sorted(p.name for p in (cache / "programs").iterdir())
+    assert left == ([KEYS["b"]] if tidied else sorted([KEYS["a"], KEYS["b"]]))
 
 
 def test_cached_files_without_a_cache_volume_are_refused(
@@ -1097,7 +1196,7 @@ def test_an_object_linked_while_its_lock_was_awaited_is_kept(
     """make_room listed the object unlinked; by the time it held the lock,
     another step had linked it into an item, so it stays."""
     cache = tmp_path / "cache"
-    store = unicon_step.Cache(cache)
+    unicon_step.tidy(cache)
     (cache / "objects" / "taken").write_bytes(b"x" * 100)
     real = unicon_step.take_lock
 
@@ -1108,7 +1207,7 @@ def test_an_object_linked_while_its_lock_was_awaited_is_kept(
 
     monkeypatch.setattr(unicon_step, "take_lock", linked_meanwhile)
     monkeypatch.setattr(unicon_step, "CACHE_CAP", 50)
-    store.make_room(10)
+    unicon_step.make_room(cache, 10)
 
     assert (cache / "objects" / "taken").exists()
 

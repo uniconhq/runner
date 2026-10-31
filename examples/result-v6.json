@@ -25,7 +25,7 @@
   "once": {
     "reports": {},
     "texts": { "log": { "output": "0199a2c1-6b7e-7c3a-9f10-5d2e4b8a6c31", "name": "log" } },
-    "outcomes": { "compile": "accepted" }
+    "outcomes": { "solution": "accepted", "compare": "accepted" }
   },
   "values": { "mean": 0.5 },
   "staff": [
@@ -52,7 +52,7 @@
           "message": { "output": "0199a2c1-6b7e-7c3a-9f10-5d2e4b8a6c34", "name": "message" }
         }
       ],
-      "once": { "reports": {}, "texts": {}, "outcomes": { "compile": "accepted" } },
+      "once": { "reports": {}, "texts": {}, "outcomes": { "solution": "accepted", "compare": "accepted" } },
       "values": { "mean": 0 },
       "staff": [
         {

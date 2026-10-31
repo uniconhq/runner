@@ -7,8 +7,8 @@
 # the repo root: docker build -f images/primitive-base/Dockerfile .
 
 # python:3.14-slim, pulled 2026-09-13. The same digest is in the worker
-# Dockerfile, and the primitives built on this one run what compile builds
-# with this Python; change them all together.
+# Dockerfile, and the primitives built on this one run the programs exec
+# compiles with this Python; change them all together.
 FROM python:3.14-slim@sha256:cad9a2c871761c413caa6fdd6441c783451e740a48aaeba60ae62a8b53525ef6
 
 LABEL org.opencontainers.image.title="primitive-base" \
@@ -19,7 +19,8 @@ LABEL org.opencontainers.image.title="primitive-base" \
 COPY --chmod=0755 wrapper/unicon_step.py /usr/local/bin/unicon-step
 
 # /work is where a primitive reads inputs.json and writes outputs.json, which
-# any user may write, as a compile step runs as the grading's own user.
+# any user may write, as a step that is not root, one the plan runs as the
+# grading's own user, writes them too.
 # /cache is where a step given the org's cache volume mounts it, root's
 # alone: only the primitives that run as root use the cache, and Docker
 # copies /cache's owner and mode into a new, empty volume.

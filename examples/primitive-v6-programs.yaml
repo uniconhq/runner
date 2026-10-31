@@ -19,7 +19,8 @@ inputs:
     type: programs
     description: The programs to run, by name.
     inputs:
-      program: {type: file, runs: true}
+      source: {type: folder, runs: true}
+      language: {type: enum, options: [c, cpp, java, python, ipynb]}
       files: {type: named_files, runs: false, optional: true}
       args: {type: text, optional: true}
       time_limit: {type: number}

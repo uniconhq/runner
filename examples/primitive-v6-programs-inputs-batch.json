@@ -7,16 +7,18 @@
         "programs": {
           "programs": {
             "entrant": {
-              "program": {
-                "file": "in/1/program"
+              "source": {
+                "folder": "in/1/source"
               },
+              "language": "c",
               "time_limit": 1,
               "memory_limit": 256
             },
             "judge": {
-              "program": {
-                "file": "in/2/program"
+              "source": {
+                "folder": "in/2/source"
               },
+              "language": "python",
               "files": {
                 "files": {
                   "input": {

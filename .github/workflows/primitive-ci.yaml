@@ -17,12 +17,6 @@ on:
           caller names this workflow at.
         type: string
         required: true
-      compile-image:
-        description: >-
-          Build the compile primitive from its main branch for the image tests,
-          as COMPILE_IMAGE, for a primitive that runs what compile builds.
-        type: boolean
-        default: false
 
 permissions:
   contents: read
@@ -92,22 +86,9 @@ jobs:
         run: |
           docker build -q -f ../runner/images/primitive-base/Dockerfile -t primitive-base:ci ../runner
           docker build -q --build-arg BASE_IMAGE=primitive-base:ci -t "$NAME:ci" .
-      # Native and Java test binaries come from the compile primitive itself,
-      # so these tests are also the check that the two agree on the binary
-      # format. Its main branch is the version that will ship next to this one.
-      - if: inputs.compile-image
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          repository: uniconhq/primitive-compile
-          ref: main
-          path: primitive-compile
-          persist-credentials: false
-      - if: inputs.compile-image
-        run: docker build -q --build-arg BASE_IMAGE=primitive-base:ci -t primitive-compile:ci ../primitive-compile
       # Runs the image under sandbox flags: no network, read-only root, no
       # capabilities, seccomp, a user other than root (65532 here).
       - run: uv run pytest -m image
         env:
           PRIMITIVE_IMAGE: ${{ env.NAME }}:ci
-          COMPILE_IMAGE: ${{ inputs.compile-image && 'primitive-compile:ci' || '' }}
           BASE_IMAGE: primitive-base:ci

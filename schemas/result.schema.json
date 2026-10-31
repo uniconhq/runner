@@ -78,7 +78,7 @@
       }
     },
     "once_result": {
-      "description": "The reports of the steps done once that this grading's pipeline ran, and the outcome each of those steps returned, by its id, which the compiled fact reads; a step that faulted or gave nothing has none.",
+      "description": "The reports of the steps done once that this grading's pipeline ran, and what a batch step gives once for all its runs, read from its first item; and the outcome each of those steps returned, by its id, which the compiled fact reads: for a batch step, the outcome it gives once for all its runs, such as compile_error, else accepted. A step that faulted or gave nothing has none.",
       "type": "object",
       "required": ["reports", "texts", "outcomes"],
       "additionalProperties": false,
