@@ -18,12 +18,6 @@ on:
           caller names this workflow at.
         type: string
         required: true
-      compile-image:
-        description: >-
-          Build the compile primitive from its main branch for the image tests,
-          as COMPILE_IMAGE, for a primitive that runs what compile builds.
-        type: boolean
-        default: false
 
 # Nothing by default: each job asks for what it needs. The job that runs the
 # repo's code and tests can only read; the one that pushes the image only
@@ -102,26 +96,9 @@ jobs:
         env:
           BASE_IMAGE: ghcr.io/uniconhq/primitive-base:${{ inputs.runner-ref }}
 
-      # Native and Java test binaries come from the compile primitive itself,
-      # so these tests are also the check that the two agree on the binary
-      # format. Its main branch is the version that will ship next to this one.
-      # It is built and run here, in the job that can only read.
-      - if: inputs.compile-image
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          repository: uniconhq/primitive-compile
-          ref: main
-          path: primitive-compile
-          persist-credentials: false
-      - if: inputs.compile-image
-        run: docker build --build-arg "BASE_IMAGE=$BASE_IMAGE" -t primitive-compile:release ../primitive-compile
-        env:
-          BASE_IMAGE: ghcr.io/uniconhq/primitive-base:${{ inputs.runner-ref }}
-
       - run: uv run pytest -m image
         env:
           PRIMITIVE_IMAGE: ${{ env.NAME }}:release
-          COMPILE_IMAGE: ${{ inputs.compile-image && 'primitive-compile:release' || '' }}
 
       # Exactly the tested image, handed to the job that pushes it.
       - run: docker save -o ../image.tar "$NAME:release"

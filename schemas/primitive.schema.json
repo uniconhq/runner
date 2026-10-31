@@ -179,6 +179,15 @@
                     "enum": ["accepted", "wrong_answer", "time_limit", "memory_limit", "output_limit", "runtime_error", "compile_error"]
                   },
                   "additionalProperties": { "$ref": "#/$defs/line" }
+                },
+                "once": {
+                  "description": "The outcomes that, when a batch step reports one, it reports for every item alike, as compile_error when the source given once did not compile. check_declaration.py checks each is among outcomes when those are listed.",
+                  "type": "array",
+                  "minItems": 1,
+                  "uniqueItems": true,
+                  "items": {
+                    "enum": ["accepted", "wrong_answer", "time_limit", "memory_limit", "output_limit", "runtime_error", "compile_error"]
+                  }
                 }
               }
             }
@@ -269,7 +278,12 @@
         "memory_mb": { "type": "integer", "minimum": 1 },
         "pids": { "type": "integer", "minimum": 1 },
         "output_mb": { "type": "integer", "minimum": 1 },
-        "gpus": { "type": "integer", "minimum": 0 }
+        "gpus": { "type": "integer", "minimum": 0 },
+        "once_time_ms": {
+          "description": "Time for work a batch step does once before its items, such as compiling, added once to the step's time_ms, which is otherwise summed over its items. 0 when left out.",
+          "type": "integer",
+          "minimum": 1
+        }
       }
     },
     "limit_from": {
@@ -313,7 +327,7 @@
       "items": { "type": "string", "minLength": 1 }
     },
     "input_port": {
-      "description": "One declared input. options on an enum and nowhere else. runs on every file, folder or named_files port and nowhere else: whether the primitive runs what arrives there as a program. names on a named_files port and nowhere else: the names its files must have, when the primitive fixes them. inputs and outputs on a programs port and nowhere else. secret: the image keeps what arrives there from any program it runs from another port. optional: the port may be left without a value. description: what the port takes, for the workflow editor. A programs port takes programs the step names, at most 8, each with the inputs the port declares, program among them, the file it runs with runs: true, which the primitive runs side by side; a links port takes the links between them. check_declaration.py allows one programs port, and a links port only beside it.",
+      "description": "One declared input. options on an enum and nowhere else. runs on every file, folder or named_files port and nowhere else: whether the primitive runs what arrives there as a program. names on a named_files port and nowhere else: the names its files must have, when the primitive fixes them. inputs and outputs on a programs port and nowhere else. secret: the image keeps what arrives there from any program it runs from another port. optional: the port may be left without a value. description: what the port takes, for the workflow editor. A programs port takes programs the step names, at most 8, each with the inputs the port declares, source among them, the folder it compiles and runs with runs: true, which the primitive runs side by side; a links port takes the links between them. check_declaration.py allows one programs port, and a links port only beside it.",
       "type": "object",
       "required": ["type"],
       "additionalProperties": false,
@@ -376,8 +390,8 @@
             "required": ["inputs", "outputs"],
             "properties": {
               "inputs": {
-                "required": ["program"],
-                "properties": { "program": { "properties": { "type": { "const": "file" }, "runs": { "const": true } } } }
+                "required": ["source"],
+                "properties": { "source": { "properties": { "type": { "const": "folder" }, "runs": { "const": true } } } }
               }
             }
           },
@@ -386,7 +400,7 @@
       ]
     },
     "output_port": {
-      "description": "One declared output. optional: the primitive may leave it out of an accepted result. better, at_least and at_most on a number and nowhere else: which way is better, and the bounds every value lies within, both inclusive; check_declaration.py also refuses an at_least above at_most. description: what the port gives back, for the workflow editor.",
+      "description": "One declared output. optional: the primitive may leave it out of an accepted result. once: a batch step gives the same value for every item, as a log of compiling the source it was given once. better, at_least and at_most on a number and nowhere else: which way is better, and the bounds every value lies within, both inclusive; check_declaration.py also refuses an at_least above at_most. description: what the port gives back, for the workflow editor.",
       "type": "object",
       "required": ["type"],
       "additionalProperties": false,
@@ -397,6 +411,7 @@
         },
         "options": { "$ref": "#/$defs/options" },
         "optional": { "type": "boolean" },
+        "once": { "type": "boolean" },
         "better": { "type": "string", "enum": ["higher", "lower"] },
         "at_least": { "type": "number" },
         "at_most": { "type": "number" },

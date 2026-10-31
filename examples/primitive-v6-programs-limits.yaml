@@ -15,7 +15,8 @@ inputs:
   programs:
     type: programs
     inputs:
-      program: {type: file, runs: true}
+      source: {type: folder, runs: true}
+      language: {type: enum, options: [c, cpp, java, python, ipynb]}
       time_limit: {type: number}
       memory_limit: {type: number}
       processes: {type: number}

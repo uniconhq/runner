@@ -6,9 +6,10 @@
       {
         "run": "r7Kq2",
         "inputs": {
-          "program": {
-            "file": "in/k3v9QpZt/program"
+          "source": {
+            "folder": "in/k3v9QpZt"
           },
+          "language": "python",
           "stdin": {
             "file": "cache/Wq81mN0x/f2Lp6sTa"
           },
@@ -19,9 +20,10 @@
       {
         "run": "r7Kq3",
         "inputs": {
-          "program": {
-            "file": "in/k3v9QpZt/program"
+          "source": {
+            "folder": "in/k3v9QpZt"
           },
+          "language": "python",
           "stdin": {
             "file": "cache/c0Rj5yHe/u8Dn3wKb"
           },
@@ -40,10 +42,8 @@
   },
   "files": [
     {
-      "path": "in/k3v9QpZt/program",
-      "url": "http://proxy/unicon-results/results/0199a2c1-6b7e-7c3a-9f10-5d2e4b8a6c31/steps/compile/out/program?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Expires=900&X-Amz-Signature=example",
-      "sha256": "4f1c2b7e9a0d3c6f8e5b1a2d4c7f9e0b3a6d8c1f2e4b7a9d0c3f6e8b1a5d2c4f",
-      "size": 912384
+      "path": "in/k3v9QpZt",
+      "workspace": "files/code"
     },
     {
       "path": "cache/Wq81mN0x/f2Lp6sTa",
@@ -69,11 +69,11 @@
   ],
   "uploads": "http://proxy/api/v1/gradings/0199a2c1-6b7e-7c3a-9f10-5d2e4b8a6c31/steps/solution/uploads",
   "done": "http://proxy/api/v1/gradings/0199a2c1-6b7e-7c3a-9f10-5d2e4b8a6c31/steps/solution/done",
-  "time_limit": 16,
+  "time_limit": 54,
   "box_users": {
     "first": 20480,
     "last": 20487
   },
-  "step_memory_mb": 400,
+  "step_memory_mb": 1168,
   "fail_on_non_accepted": false
 }

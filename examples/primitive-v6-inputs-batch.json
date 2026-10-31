@@ -4,9 +4,10 @@
     {
       "run": "r7Kq2",
       "inputs": {
-        "program": {
-          "file": "in/1/program"
+        "source": {
+          "folder": "in/1/source"
         },
+        "language": "cpp",
         "stdin": {
           "file": "in/2/stdin"
         },
@@ -24,9 +25,10 @@
     {
       "run": "r7Kq3",
       "inputs": {
-        "program": {
-          "file": "in/4/program"
+        "source": {
+          "folder": "in/4/source"
         },
+        "language": "python",
         "manifest": {
           "file": "in/5/program.yaml"
         },
