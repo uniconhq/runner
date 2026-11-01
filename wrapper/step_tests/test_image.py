@@ -311,7 +311,10 @@ file `in/p/source/main.py`, and its language; exec compiles it."""
 
 def environment_files(server: StandIn) -> list[dict[str, Any]]:
     """Serve the sibling's public locked Python pieces through the real wrapper."""
-    helpers = runpy.run_path(str(SIBLINGS / "primitive-exec/tests/toolchains.py"))
+    toolchains = SIBLINGS / "primitive-exec" / "tests" / "toolchains.py"
+    if not toolchains.is_file():
+        pytest.skip("no primitive-exec checkout with locked toolchains beside this one")
+    helpers = runpy.run_path(str(toolchains))
     arch = docker(
         "image", "inspect", on_base("exec"), "--format", "{{.Architecture}}"
     ).strip()
