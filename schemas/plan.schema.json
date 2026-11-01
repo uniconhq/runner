@@ -455,6 +455,13 @@
       "description": "Exactly one of: a literal, with the task's scalars written in; a file or folder of the task, or of the workflow at its commit; an entrant input, or one part of it; a secret by name; an output of an earlier step; text with the entrant's scalars written in; named files, one of them a file of runs the forge builds; a step's programs, each with its own inputs; the links between them.",
       "oneOf": [
         {
+          "type": "object", "required": ["environment"], "additionalProperties": false,
+          "properties": {"environment": {
+            "type": "object", "required": ["version", "prefix", "platforms"], "additionalProperties": false,
+            "properties": {"version": {"const": 2}, "prefix": {"const": "/env"}, "platforms": {"type": "object"}}
+          }}
+        },
+        {
           "type": "object",
           "required": ["value"],
           "additionalProperties": false,
