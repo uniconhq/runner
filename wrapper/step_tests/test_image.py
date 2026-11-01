@@ -14,6 +14,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import runpy
 import subprocess
 import uuid
 from collections.abc import Iterator
@@ -299,14 +300,52 @@ for line in open("/proc/self/mountinfo"):
 """
 
 
-SOURCE = {"source": {"folder": "in/p/source"}, "language": "python"}
-"""A program's inputs for exec@v2: its source folder, which holds the one
+SOURCE = {
+    "source": {"folder": "in/p/source"},
+    "language": "python",
+    "environment": {"file": "in/environment.json"},
+}
+"""A program's inputs for exec@v3: its source folder, which holds the one
 file `in/p/source/main.py`, and its language; exec compiles it."""
+
+
+def environment_files(server: StandIn) -> list[dict[str, Any]]:
+    """Serve the sibling's public locked Python pieces through the real wrapper."""
+    toolchains = SIBLINGS / "primitive-exec" / "tests" / "toolchains.py"
+    if not toolchains.is_file():
+        pytest.skip("no primitive-exec checkout with locked toolchains beside this one")
+    helpers = runpy.run_path(str(toolchains))
+    arch = docker(
+        "image", "inspect", on_base("exec"), "--format", "{{.Architecture}}"
+    ).strip()
+    platform = "linux-aarch64" if arch == "arm64" else "linux-64"
+    document = helpers["document"](platform)
+    entry = document["languages"]["python"]
+    archives = helpers["downloaded"](platform)
+    document["languages"] = {"python": entry}
+    document["pieces"] = {
+        piece["sha256"]: "cache/pieces/" + piece["sha256"]
+        for piece in entry["conda"] + entry["pypi"]
+    }
+    return [a_file(server, "in/environment.json", json.dumps(document).encode())] + [
+        a_file(server, path, (archives / digest).read_bytes(), cached=True)
+        for digest, path in document["pieces"].items()
+    ]
+
+
+@pytest.fixture
+def exec_cache() -> Iterator[str]:
+    volume = f"unicon-cache-lab-{uuid.uuid4().hex[:8]}"
+    docker("volume", "create", volume)
+    try:
+        yield volume
+    finally:
+        docker("volume", "rm", "--force", volume, check=False)
 
 
 def exec_flags() -> list[str]:
     """exec's container as a grading machine starts it, privileged, with
-    the memory exec@v2 declares, which holds its compile box and a 64 MB
+    the memory exec@v3 declares, which holds its compile box and a 64 MB
     run, entered through primitive-exec's userns.py, as exec refuses root
     Docker's identity map."""
     userns = SIBLINGS / "primitive-exec" / "tests" / "userns.py"
@@ -322,13 +361,17 @@ BOX_USERS = {"first": 60000, "last": 60009}
 
 def test_exec_on_the_base_image_runs_a_batch_through_the_wrapper(
     server: StandIn,
+    exec_cache: str,
 ) -> None:
     """exec on the base image, privileged and with exec's own memory for the
     batch, as a grading machine starts it: the wrapper fetches the source and
     inputs, hands exec the job's box users, exec compiles the source and
     runs it, the wrapper uploads every output with its hash and posts done,
     and the token goes only to the door."""
-    files = [a_file(server, "in/p/source/main.py", DOUBLE.encode())]
+    files = [
+        a_file(server, "in/p/source/main.py", DOUBLE.encode()),
+        *environment_files(server),
+    ]
     batch = []
     for run, number in (("r1", 21), ("r2", 50)):
         files.append(a_file(server, f"in/{run}/stdin", f"{number}\n".encode()))
@@ -341,7 +384,7 @@ def test_exec_on_the_base_image_runs_a_batch_through_the_wrapper(
         on_base("exec"),
         inputs,
         files,
-        exec_flags(),
+        [*exec_flags(), "--volume", f"{exec_cache}:/cache"],
         EXEC,
         box_users=BOX_USERS,
         step_memory_mb=1136,
@@ -385,7 +428,7 @@ def test_exec_through_the_wrapper_binds_a_cached_file_into_its_box(
             server,
             on_base("exec"),
             inputs,
-            [program, cached],
+            [program, cached, *environment_files(server)],
             [*exec_flags(), "--volume", f"{volume}:/cache"],
             EXEC,
             box_users=BOX_USERS,
