@@ -94,9 +94,17 @@ with any part of a download in it, and, once an hour old, a lock still being
 made, a folder without a lock, or a folder a program was being compiled
 into whose lock no one holds, and the lock of every name no object has.
 Past the cap, 10 GiB or the number of bytes in `/etc/unicon/cache-cap`, the
-least recently used objects no running step links and compiled programs no
-step holds go, a program's last use the time of its folder; downloads and
-compiles in progress are not counted. A root step with the volume does
+least recently used objects no running step links, compiled programs and
+whole `envs/<F>` language folders no step holds go, their last use the time
+of their folder. Environment sizes count each plain-file inode once even
+inside nested package folders, and each folder is walked once a step, not
+again for each piece it fetches. Shared environment readers block exclusive
+eviction. An evicted folder is renamed to `<F>.evicting-<anything>`
+before it is removed, so a step killed midway leaves no half-removed folder
+under its name. Downloads and assemblies in progress are not counted; stale
+partial `envs/<F>.<suffix>` folders are swept under the same lock.
+Conda archive file-name links live inside a step's own item and disappear
+with it, leaving the one verified archive in `objects/`. A root step with the volume does
 both at its start, with cached files or without, so what exec stored is
 held to the cap. The volume takes the image's `/cache`, root's, mode 0755.
 Its tests are in `wrapper/step_tests/`,

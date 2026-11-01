@@ -12,6 +12,7 @@ import fcntl
 import hashlib
 import json
 import os
+import platform
 import shutil
 import subprocess
 import sys
@@ -1094,6 +1095,7 @@ def test_only_plain_files_under_out_are_uploaded(
         WRITES_ACCEPTED
         + f"""
 import os
+import platform
 os.makedirs("out/d")
 open("out/d/plain", "w").write("p")
 os.symlink({str(tmp_path / "secret")!r}, "out/link")
@@ -1221,3 +1223,159 @@ def test_in_a_woodpecker_step_it_must_be_the_first_process(
 
     assert step() == 2
     assert server.seen == []
+
+
+@pytest.mark.parametrize(
+    ("machine", "expected"),
+    [("x86_64", ["linux-64"]), ("aarch64", ["linux-aarch64"]), ("riscv64", [])],
+)
+def test_the_job_request_names_only_the_machine_platform(
+    step: Step,
+    server: StandIn,
+    monkeypatch: pytest.MonkeyPatch,
+    machine: str,
+    expected: list[str],
+) -> None:
+    """A machine of no platform the wrapper knows names none, and still runs
+    a step given no environment, which needs none."""
+    monkeypatch.setattr(platform, "machine", lambda: machine)
+    assert step() == 0
+    assert server.platforms == expected
+
+
+def test_environment_eviction_counts_nested_inodes_once_and_keeps_a_held_folder(
+    work: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "cache"
+    unicon_step.tidy(root)
+    first = root / "envs" / ("a" * 64)
+    second = root / "envs" / ("b" * 64)
+    for folder in (first, second):
+        (folder / "nested").mkdir(parents=True)
+        (folder / "nested/file").write_bytes(b"ten bytes!")
+    os.link(first / "nested/file", first / "same-inode")
+    assert unicon_step.folder_size(first) == 10
+    held = unicon_step.take_lock(root / "locks" / f"envs-{second.name}.lock")
+    monkeypatch.setattr(unicon_step, "CACHE_CAP", 0)
+    try:
+        unicon_step.make_room(root, 0)
+        assert not first.exists() and second.exists()
+    finally:
+        os.close(held)
+    unicon_step.make_room(root, 0)
+    assert not second.exists()
+
+
+def test_a_shared_environment_reader_blocks_eviction_of_a_large_folder(
+    work: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "cache"
+    unicon_step.tidy(root)
+    folder = root / "envs" / ("c" * 64)
+    (folder / "lib/python3.14/site-packages/numpy").mkdir(parents=True)
+    piece = folder / "lib/python3.14/site-packages/numpy/array.so"
+    with piece.open("wb") as file:
+        file.truncate(512 * 1024 * 1024)
+    os.link(piece, folder / "duplicate-inode")
+    held = os.open(
+        root / "locks" / f"envs-{folder.name}.lock", os.O_CREAT | os.O_RDONLY, 0o600
+    )
+    fcntl.flock(held, fcntl.LOCK_SH)
+    monkeypatch.setattr(unicon_step, "CACHE_CAP", 1)
+    try:
+        assert unicon_step.folder_size(folder) == 512 * 1024 * 1024
+        unicon_step.make_room(root, 0)
+        assert piece.is_file()
+    finally:
+        os.close(held)
+    unicon_step.make_room(root, 0)
+    assert not folder.exists()
+
+
+def test_a_step_removes_archive_file_name_links_and_sweeps_an_abandoned_environment(
+    work: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "cache"
+    unicon_step.tidy(root)
+    archive = root / "objects" / ("d" * 64)
+    archive.write_bytes(b"verified archive")
+    unfinished = root / "envs" / ("e" * 64 + ".partial")
+    (unfinished / "lib/nested").mkdir(parents=True)
+    (unfinished / "lib/nested/file").write_bytes(b"incomplete")
+    os.utime(unfinished, (0, 0))
+    with unicon_step.Cache.for_step([{"cached": True}]) as item:
+        assert item is not None
+        own = item.folder / "r1"
+        own.mkdir()
+        os.link(archive, own / archive.name)
+        os.link(own / archive.name, own / "python-3.14-linux.conda")
+        assert archive.stat().st_nlink == 3
+        assert not unfinished.exists()
+    assert archive.read_bytes() == b"verified archive"
+    assert archive.stat().st_nlink == 1
+    assert list((root / "items").iterdir()) == []
+
+
+def test_an_evicted_environment_leaves_its_name_whole_before_it_is_removed(
+    work: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A wrapper killed while it removes an evicted folder leaves nothing
+    under the folder's own name for exec to take for whole, and the sweep
+    removes what it left."""
+    root = tmp_path / "cache"
+    unicon_step.tidy(root)
+    folder = root / "envs" / ("f" * 64)
+    (folder / "libexec").mkdir(parents=True)
+    (folder / "libexec/cc1plus").write_bytes(b"compiler")
+    (folder / "ready.json").write_text("{}")
+    real = unicon_step.remove
+
+    def killed(path: Path) -> None:
+        assert not folder.exists()
+        (path / "libexec/cc1plus").unlink()
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(unicon_step, "remove", killed)
+    monkeypatch.setattr(unicon_step, "CACHE_CAP", 0)
+    with pytest.raises(KeyboardInterrupt):
+        unicon_step.make_room(root, 0)
+    monkeypatch.setattr(unicon_step, "remove", real)
+    (left,) = (root / "envs").iterdir()
+    assert left.name.startswith(f"{folder.name}.evicting-")
+    assert not folder.exists()
+    os.utime(left, (0, 0))
+    unicon_step.sweep(root)
+    assert list((root / "envs").iterdir()) == []
+
+
+def test_each_folder_is_walked_once_a_step_however_many_pieces_it_fetches(
+    work: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Making room for each piece reads a folder's size the step already
+    counted, and walks again only a folder renamed into its key since."""
+    root = tmp_path / "cache"
+    unicon_step.tidy(root)
+    folder = root / "envs" / ("a" * 64)
+    (folder / "lib").mkdir(parents=True)
+    (folder / "lib/file").write_bytes(b"ten bytes!")
+    walked: list[Path] = []
+    real = unicon_step.folder_size
+
+    def counted(path: Path) -> int:
+        walked.append(path)
+        return real(path)
+
+    monkeypatch.setattr(unicon_step, "folder_size", counted)
+    monkeypatch.setattr(unicon_step, "FOLDER_SIZES", {})
+    for _ in range(3):
+        unicon_step.make_room(root, 1)
+    assert walked == [folder]
+    replaced = root / "envs" / ("a" * 64 + ".new")
+    (replaced / "lib").mkdir(parents=True)
+    (replaced / "lib/file").write_bytes(b"twenty bytes, twice!")
+    unicon_step.remove(folder)
+    replaced.rename(folder)
+    monkeypatch.setattr(unicon_step, "CACHE_CAP", 20)
+    unicon_step.make_room(root, 1)
+    assert walked == [folder, folder]
+    assert not folder.exists()

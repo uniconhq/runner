@@ -52,6 +52,7 @@ import hashlib
 import http.client
 import json
 import os
+import platform
 import re
 import resource
 import shutil
@@ -65,6 +66,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import uuid
 from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
@@ -81,6 +83,11 @@ program was being compiled into, must be before a sweep takes it for one a
 killed step left."""
 PROGRAM_KEY = re.compile(r"[0-9a-f]{64}")
 """The name of a compiled program's folder in /cache/programs, its key."""
+FOLDER_SIZES: dict[tuple[str, int, int], int] = {}
+"""Each compiled program's or environment's folder size the step has
+counted, by its path and its own inode: a folder under its key is renamed
+into place whole and never changed, so it is walked once a step, not once
+for each piece the step fetches."""
 PARALLEL = 8
 TRIES = 4
 BACKOFF = 1.0
@@ -171,7 +178,25 @@ def main(argv: list[str]) -> int:
 def read_job(door: Door, url: str) -> Any:
     """The step's job, or none for a 204: its inputs with each number as
     written, so inputs.json carries it exactly, as TASK-FORMAT 1.6 asks,
-    and the rest read as Python numbers for the wrapper's own use."""
+    and the rest read as Python numbers for the wrapper's own use. The
+    request names the machine's conda platform, which only a step given an
+    environment needs; on a machine of no platform it knows it names none,
+    and the forge refuses such a step itself."""
+    selected = {
+        "x86_64": "linux-64",
+        "amd64": "linux-64",
+        "aarch64": "linux-aarch64",
+        "arm64": "linux-aarch64",
+    }.get(platform.machine().lower())
+    parsed = urllib.parse.urlsplit(url)
+    query = [
+        (key, value)
+        for key, value in urllib.parse.parse_qsl(parsed.query)
+        if key != "platform"
+    ]
+    if selected is not None:
+        query.append(("platform", selected))
+    url = urllib.parse.urlunsplit(parsed._replace(query=urllib.parse.urlencode(query)))
     job = door.call("GET", url, exactly=True)
     if not isinstance(job, dict):
         return job
@@ -529,7 +554,7 @@ def tidy(root: Path) -> None:
     """Make the cache's folders that are not there yet, sweep it, and bring
     it within its cap, which a primitive's compiled programs, stored
     without the wrapper, may have passed."""
-    for name in ("objects", "programs", "locks", "items"):
+    for name in ("objects", "programs", "envs", "locks", "items"):
         (root / name).mkdir(exist_ok=True)
     sweep(root)
     make_room(root, 0)
@@ -564,16 +589,22 @@ def stored(root: Path) -> list[tuple[float, int, Callable[[], int]]]:
         seen = path.stat()
         evict = functools.partial(evict_object, root, path, seen)
         found.append((seen.st_mtime, seen.st_size, evict))
-    for path in (root / "programs").iterdir():
-        if not PROGRAM_KEY.fullmatch(path.name):
+    for kind in ("programs", "envs"):
+        if not (root / kind).is_dir():
             continue
-        with contextlib.suppress(FileNotFoundError):
-            seen = path.lstat()
-            if not stat.S_ISDIR(seen.st_mode):
+        for path in (root / kind).iterdir():
+            if not PROGRAM_KEY.fullmatch(path.name):
                 continue
-            size = folder_size(path)
-            evict = functools.partial(evict_program, root, path, size)
-            found.append((seen.st_mtime, size, evict))
+            with contextlib.suppress(FileNotFoundError):
+                seen = path.lstat()
+                if not stat.S_ISDIR(seen.st_mode):
+                    continue
+                known = str(path), seen.st_dev, seen.st_ino
+                if known not in FOLDER_SIZES:
+                    FOLDER_SIZES[known] = folder_size(path)
+                size = FOLDER_SIZES[known]
+                evict = functools.partial(evict_program, root, path, size)
+                found.append((seen.st_mtime, size, evict))
     return found
 
 
@@ -603,15 +634,24 @@ def evict_object(root: Path, path: Path, seen: os.stat_result) -> int:
 
 
 def evict_program(root: Path, path: Path, size: int) -> int:
-    """Remove the compiled program's folder at `path`, of `size` bytes, and
-    its lock, unless a step is compiling or reading it."""
-    lock = root / "locks" / f"programs-{path.name}.lock"
+    """Remove the compiled program's or environment's folder at `path`, of
+    `size` bytes, and its lock, unless a step is compiling, assembling or
+    reading it. The folder leaves its key whole, renamed to
+    `<key>.evicting-<anything>`, before it is removed, so a wrapper killed
+    midway leaves no half-removed folder that exec would take for whole;
+    the sweep removes what it leaves."""
+    lock = root / "locks" / f"{path.parent.name}-{path.name}.lock"
     try:
         held = take_lock(lock, wait=False)
     except BlockingIOError:
         return 0
     try:
-        remove(path)
+        aside = path.with_name(f"{path.name}.evicting-{uuid.uuid4().hex}")
+        try:
+            path.rename(aside)
+        except FileNotFoundError:
+            return size
+        remove(aside)
         lock.unlink(missing_ok=True)
         return size
     finally:
@@ -619,17 +659,21 @@ def evict_program(root: Path, path: Path, size: int) -> int:
 
 
 def folder_size(folder: Path) -> int:
-    """The bytes of the plain files directly in `folder`, as a compiled
-    program's folder holds them."""
-    size = 0
-    with contextlib.suppress(FileNotFoundError, NotADirectoryError):
-        with os.scandir(folder) as entries:
-            for entry in entries:
-                with contextlib.suppress(FileNotFoundError):
-                    found = entry.stat(follow_symlinks=False)
-                    if stat.S_ISREG(found.st_mode):
-                        size += found.st_size
-    return size
+    """Count each plain-file inode once, including nested environment files."""
+    seen: set[tuple[int, int]] = set()
+    total = 0
+    for parent, directories, files in os.walk(folder, followlinks=False):
+        directories[:] = [
+            name for name in directories if not (Path(parent) / name).is_symlink()
+        ]
+        for name in files:
+            with contextlib.suppress(FileNotFoundError):
+                found = (Path(parent) / name).lstat()
+                key = found.st_dev, found.st_ino
+                if stat.S_ISREG(found.st_mode) and key not in seen:
+                    seen.add(key)
+                    total += found.st_size
+    return total
 
 
 def holds(path: Path, size: int, digest: str) -> bool:
@@ -699,23 +743,27 @@ def sweep(root: Path) -> None:
                     os.close(held)
             elif path.is_dir() and not path.with_name(path.name + ".lock").exists():
                 remove(path)
-    for path in (root / "programs").iterdir():
-        with contextlib.suppress(FileNotFoundError):
-            if (
-                PROGRAM_KEY.fullmatch(path.name)
-                or now - path.lstat().st_mtime < STALE_SECONDS
-            ):
-                continue
-            key = path.name.partition(".")[0]
-            if not PROGRAM_KEY.fullmatch(key):
-                discard(path)
-                continue
-            with contextlib.suppress(BlockingIOError):
-                held = take_lock(root / "locks" / f"programs-{key}.lock", wait=False)
-                try:
+    for kind in ("programs", "envs"):
+        if not (root / kind).is_dir():
+            continue
+        for path in (root / kind).iterdir():
+            with contextlib.suppress(FileNotFoundError):
+                if (
+                    PROGRAM_KEY.fullmatch(path.name)
+                    or now - path.lstat().st_mtime < STALE_SECONDS
+                ):
+                    continue
+                key = path.name.partition(".")[0]
+                if not PROGRAM_KEY.fullmatch(key):
                     discard(path)
-                finally:
-                    os.close(held)
+                    continue
+                with contextlib.suppress(BlockingIOError):
+                    held = take_lock(root / "locks" / f"{kind}-{key}.lock", wait=False)
+                    try:
+                        discard(path)
+                    finally:
+                        os.close(held)
+
     for lock in (root / "locks").iterdir():
         if lock.name == "evict" or (root / "objects" / lock.name).exists():
             continue

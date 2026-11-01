@@ -35,6 +35,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
+from urllib.parse import parse_qs, urlsplit
 
 TOKEN = "tok-3f9a1c7e5b2d"
 
@@ -54,6 +55,7 @@ class StandIn:
     job: dict[str, Any] = field(default_factory=dict)
     files: dict[str, bytes] = field(default_factory=dict)
     put: dict[str, bytes] = field(default_factory=dict)
+    platforms: list[str] = field(default_factory=list)
     seen: list[Seen] = field(default_factory=list)
     asked: list[dict[str, Any]] = field(default_factory=list)
     failures: int = 0
@@ -130,6 +132,10 @@ class Handler(BaseHTTPRequestHandler):
 
     def _start(self) -> bool:
         """Record the request; False when it was answered already."""
+        if self.path.startswith("/door?"):
+            parsed = urlsplit(self.path)
+            self.state.platforms.extend(parse_qs(parsed.query).get("platform", []))
+            self.path = parsed.path
         authorization = self.headers.get("Authorization")
         kind = self.headers.get("Content-Type")
         checksum = self.headers.get("x-amz-checksum-sha256")
