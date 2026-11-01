@@ -7,8 +7,8 @@
 # the repo root: docker build -f images/primitive-base/Dockerfile .
 
 # python:3.14-slim, pulled 2026-09-13. The same digest is in the worker
-# Dockerfile, and the primitives built on this one run the programs exec
-# compiles with this Python; change them all together.
+# Dockerfile. This Python runs the wrapper and exec; task programs use their
+# locked language environment. Change both image pins together.
 FROM python:3.14-slim@sha256:cad9a2c871761c413caa6fdd6441c783451e740a48aaeba60ae62a8b53525ef6
 
 LABEL org.opencontainers.image.title="primitive-base" \
