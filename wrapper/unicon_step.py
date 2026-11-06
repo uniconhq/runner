@@ -77,17 +77,57 @@ CACHE = Path("/cache")
 CACHE_CAP_FILE = Path("/etc/unicon/cache-cap")
 """Where a machine may set its cache's cap in bytes; else `CACHE_CAP`."""
 CACHE_CAP = 10 * 1024**3
+DISK_FREE_SHARE = 0.1
+"""The share of the cache's disk eviction keeps free. The cap is one org's
+cache, and the disk holds every org's on the machine, so two orgs within
+their caps could still fill it: eviction goes on while less than this is
+free, though the org is within its cap."""
 STALE_SECONDS = 3600
 """How old a lock being made, a step folder without a lock, or a folder a
 program was being compiled into, must be before a sweep takes it for one a
 killed step left."""
 PROGRAM_KEY = re.compile(r"[0-9a-f]{64}")
 """The name of a compiled program's folder in /cache/programs, its key."""
+ENV_NAME = re.compile(r"[0-9a-f]{64}-[0-9a-f]{64}")
+"""The name of an environment's folder in /cache/envs: the fingerprint of
+the lock it was assembled for and the toolchain line of the exec that
+assembled it."""
+NAMES = {"programs": PROGRAM_KEY, "envs": ENV_NAME}
+UV_ARCHIVES = "uv/archive-v0"
+"""The folder of uv's cache each folder in which is a wheel it unpacked."""
+STORE_ENTRIES = ("conda", UV_ARCHIVES, "wheels", "files")
+"""The folders of /cache/store each folder in which is one store entry: an
+unpacked conda package in rattler's cache, an unpacked wheel in uv's, a
+wheel file as exec hands it to uv, and a Maven jar or an unpacked npm
+package as exec places it, its folders and files read-only. Everything
+else in the store is a tool's own bookkeeping, which eviction leaves alone
+but for `UV_POINTERS`."""
+UV_POINTERS = "uv/wheels-v7"
+"""Where uv keeps, for each wheel it unpacked, a `.rev` file naming the
+unpacked entry under `uv/archive-v0`. uv trusts a pointer without looking
+whether its entry is there, and fails an install whose entry is gone, so
+an entry is freed with the pointers naming it, before it."""
+UNFINISHED = {
+    "files": re.compile(r"\.[0-9a-f]{64}\..+"),
+    "uv": re.compile(r"\.tmp[A-Za-z0-9]+"),
+}
+"""What a step killed while it wrote the store leaves there, by folder:
+exec's Maven jar or npm package unpacked under `.<sha256>.<random>` before
+its rename into `files/`, and the folder uv unpacks a wheel into,
+`.tmp<random>` in its cache's root, before its rename into `UV_ARCHIVES`.
+exec's copy of a wheel, `.<file name>.<random>`, is inside the wheel's
+entry under `wheels/`. rattler unpacks a conda package in place, under its
+own lock, and checks it before it trusts it, so it leaves none."""
+POINTER_LIMIT = 1 << 16
+"""The most of a uv pointer read: uv writes a few names and times."""
+READY_LIMIT = 1 << 20
+"""The most of an environment's `ready.json` read: exec writes a few
+fields and the store entries the folder links."""
 FOLDER_SIZES: dict[tuple[str, int, int], int] = {}
-"""Each compiled program's or environment's folder size the step has
-counted, by its path and its own inode: a folder under its key is renamed
-into place whole and never changed, so it is walked once a step, not once
-for each piece the step fetches."""
+"""Each compiled program's, environment's or store entry's folder size the
+step has counted, by its path and its own inode: a folder under its name is
+renamed into place whole and never changed, so it is walked once a step,
+not once for each piece the step fetches."""
 PARALLEL = 8
 TRIES = 4
 BACKOFF = 1.0
@@ -463,15 +503,21 @@ def mounted(path: Path) -> bool:
 
 
 class Cache:
-    """The machine's cache, /cache, one Docker volume per org, used by steps
-    that run as root: each task file once in objects/, named by its SHA-256,
-    with a lock per name in locks/ held while it is fetched or linked; each
+    """The machine's cache, /cache, the org's folder on the machine's cache
+    disk, bind-mounted by the forge, used by steps that run as root: each
+    task file once in objects/, named by its SHA-256, with a lock per name
+    in locks/ held while it is fetched or linked; each
     program a primitive compiled in programs/<key>/, with the lock
-    locks/programs-<key>.lock held while it is compiled or read; the least
-    recently used of both removed first past the cap; and in items/ this
-    running step's folder, with a lock beside it held for the step's life,
-    whose item folders hold hard links to the objects each item reads and
-    whose .fetching folder holds downloads in progress. /work/cache is a
+    locks/programs-<key>.lock held while it is compiled or read; each
+    environment exec assembled in envs/<fingerprint>-<toolchain>/, with
+    the lock locks/envs-<name>.lock held while it is assembled or used,
+    made of hard links into store/, whose entries each package is unpacked
+    into once, and whose `ready.json` lists the entries it links; the least
+    recently used objects, programs and environments removed first past
+    the cap, and a store entry with the last folder that lists it; and in
+    items/ this running step's folder, with a lock beside it held for the
+    step's life, whose item folders hold hard links to the objects each
+    item reads and whose .fetching folder holds downloads in progress. /work/cache is a
     link to the step's folder, so the job names a cached file
     cache/<item>/<name> before the folder exists. The lock is made under a
     name of its own, held, and only then named <folder>.lock, and the
@@ -562,28 +608,187 @@ def tidy(root: Path) -> None:
 
 def make_room(root: Path, size: int) -> None:
     """Remove the least recently used objects that no item holds and no
-    step is fetching or linking, and compiled programs no step is
-    compiling or reading, with their locks, until `size` more bytes fit the
-    cap. A download or a compile in progress is not counted."""
+    step is fetching or linking, compiled programs no step is compiling or
+    reading, and environments no step is assembling or using, with their
+    locks, until `size` more bytes fit the cap and the disk has
+    `DISK_FREE_SHARE` of its size free. Store entries no folder
+    lists go before any of them, and an entry goes with the last folder
+    that lists it, in the same call. A download, a compile or an assembly
+    in progress is not counted."""
     cap = CACHE_CAP
     if CACHE_CAP_FILE.is_file():
         cap = int(CACHE_CAP_FILE.read_text())
     evicting = take_lock(root / "locks" / "evict")
     try:
-        found = stored(root)
-        used = sum(entry[1] for entry in found)
-        for _, _, evict in sorted(found, key=lambda entry: entry[0]):
-            if used + size <= cap:
-                break
-            used -= evict()
+        with store_pass(root) as passing:
+            store = Store(root, passing)
+            found = stored(root, store)
+            # An entry no folder lists that this call may not free is
+            # left out, so the call does not evict everything else chasing
+            # bytes only a later call can free; it may overshoot the cap
+            # until then.
+            used = store.total - store.held() + sum(entry[1] for entry in found)
+            ordered = sorted(found, key=lambda entry: entry[0])
+            for _, _, evict in [*store.unlisted(), *ordered]:
+                if used + size <= cap and not disk_short(root):
+                    break
+                used -= evict()
     finally:
         os.close(evicting)
 
 
-def stored(root: Path) -> list[tuple[float, int, Callable[[], int]]]:
-    """Each object and each compiled program in the cache: when it was last
-    used, its size, and what removes it, giving back the bytes it freed, 0
-    when it is in use."""
+def disk_short(root: Path) -> bool:
+    """Whether the disk the cache at `root` is on has less than
+    `DISK_FREE_SHARE` of its size free."""
+    found = os.statvfs(root)
+    return found.f_bavail < DISK_FREE_SHARE * found.f_blocks
+
+
+@contextlib.contextmanager
+def store_pass(root: Path) -> Iterator[bool]:
+    """Whether this call may free store entries: only while it holds
+    locks/store.lock exclusive, taken without waiting. exec holds it shared
+    for the whole of an assembly, since an entry it has just unpacked is
+    listed in no `ready.json` yet and would look unused."""
+    try:
+        held = take_lock(root / "locks" / "store.lock", wait=False)
+    except BlockingIOError:
+        yield False
+        return
+    try:
+        yield True
+    finally:
+        os.close(held)
+
+
+class Store:
+    """The store's entries, under /cache/store, as one call of `make_room`
+    finds them: each one's size, counted once however many folders link
+    it, when it came, and the environment folders whose `ready.json` lists
+    it. An entry is freed only by a call that holds the store's lock
+    (`passing`), never while a folder lists it, and never younger than
+    `STALE_SECONDS`. Its age is its folder's inode change time, which
+    unpacking or renaming it into place sets and nothing sets back."""
+
+    def __init__(self, root: Path, passing: bool) -> None:
+        self.root = root / "store"
+        self.passing = passing
+        self.sizes: dict[str, int] = {}
+        self.came: dict[str, float] = {}
+        self.listing: dict[str, set[Path]] = {}
+        for parent in STORE_ENTRIES:
+            folder = self.root / parent
+            if not folder.is_dir():
+                continue
+            for path in folder.iterdir():
+                if path.name.startswith(".") or ".evicting-" in path.name:
+                    continue
+                with contextlib.suppress(FileNotFoundError):
+                    seen = path.lstat()
+                    if not stat.S_ISDIR(seen.st_mode):
+                        continue
+                    name = f"{parent}/{path.name}"
+                    self.sizes[name] = counted(path, seen)
+                    self.came[name] = seen.st_ctime
+                    self.listing[name] = set()
+        self.total = sum(self.sizes.values())
+
+    def note(self, folder: Path, names: frozenset[str]) -> None:
+        """Count each entry of `names` as listed by `folder`."""
+        for name in names & self.listing.keys():
+            self.listing[name].add(folder)
+
+    def unlisted(self) -> list[tuple[float, int, Callable[[], int]]]:
+        """Each entry no folder lists, oldest first, with what frees it."""
+        found = [
+            (self.came[name], self.sizes[name], functools.partial(self.free, name))
+            for name, folders in self.listing.items()
+            if not folders
+        ]
+        return sorted(found, key=lambda entry: entry[0])
+
+    def held(self) -> int:
+        """The bytes of the entries no folder lists that this call may not
+        free: all of them when the store's lock is held elsewhere, else the
+        young ones."""
+        return sum(
+            self.sizes[name]
+            for name, folders in self.listing.items()
+            if not folders and not self.freeable(name)
+        )
+
+    def freeable(self, name: str) -> bool:
+        """Whether this call may free the entry `name`: it holds the store's
+        lock, and the entry is no younger than `STALE_SECONDS`."""
+        return (
+            self.passing
+            and name in self.sizes
+            and time.time() - self.came[name] >= STALE_SECONDS
+        )
+
+    def release(self, folder: Path) -> int:
+        """Free each entry whose last listing was `folder`'s, which was just
+        evicted, giving back the bytes of each: freed now when this call
+        may free it, else left for a later call and out of the count, as
+        `held` leaves such entries out."""
+        last = []
+        for name, folders in self.listing.items():
+            if folder in folders:
+                folders.discard(folder)
+                if not folders:
+                    last.append(name)
+        return sum(
+            self.free(name) if self.freeable(name) else self.sizes[name]
+            for name in last
+        )
+
+    def free(self, name: str) -> int:
+        """Remove the entry `name`, giving back its bytes, or 0 when this
+        call may not free it. It leaves its name whole, renamed to
+        `<entry>.evicting-<anything>`, before it is removed, so no tool
+        takes a half-removed entry for whole; the sweep removes what a
+        wrapper killed midway leaves."""
+        if not self.freeable(name):
+            return 0
+        size = self.sizes.pop(name)
+        path = self.root / name
+        if name.startswith(f"{UV_ARCHIVES}/"):
+            self.unpoint(path.name)
+        aside = path.with_name(f"{path.name}.evicting-{uuid.uuid4().hex}")
+        with contextlib.suppress(FileNotFoundError):
+            path.rename(aside)
+            remove(aside)
+        return size
+
+    def unpoint(self, entry: str) -> None:
+        """Remove each pointer uv keeps to its unpacked entry `entry`, a
+        `.rev` file under `UV_POINTERS` whose bytes name it, so uv unpacks
+        the wheel again rather than trust an entry that is gone."""
+        pointers = self.root / UV_POINTERS
+        if not pointers.is_dir():
+            return
+        wanted = entry.encode()
+        for pointer in pointers.rglob("*.rev"):
+            with contextlib.suppress(OSError):
+                descriptor = os.open(
+                    pointer, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
+                )
+                with os.fdopen(descriptor, "rb") as stream:
+                    if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+                        continue
+                    content = stream.read(POINTER_LIMIT)
+                if wanted in content:
+                    pointer.unlink()
+
+
+def stored(root: Path, store: Store) -> list[tuple[float, int, Callable[[], int]]]:
+    """Each object, compiled program and environment in the cache: when it
+    was last used, its own size, and what removes it, giving back the bytes
+    it freed, 0 when it is in use. An environment was last used when its
+    `ready.json` was last touched, which exec does each time it takes the
+    folder; its own size leaves out the files it links from the store,
+    which `store` counts once, and the entries it lists are counted as its
+    in `store`."""
     found: list[tuple[float, int, Callable[[], int]]] = []
     for path in (root / "objects").iterdir():
         seen = path.stat()
@@ -593,19 +798,57 @@ def stored(root: Path) -> list[tuple[float, int, Callable[[], int]]]:
         if not (root / kind).is_dir():
             continue
         for path in (root / kind).iterdir():
-            if not PROGRAM_KEY.fullmatch(path.name):
+            if not NAMES[kind].fullmatch(path.name):
                 continue
             with contextlib.suppress(FileNotFoundError):
                 seen = path.lstat()
                 if not stat.S_ISDIR(seen.st_mode):
                     continue
-                known = str(path), seen.st_dev, seen.st_ino
-                if known not in FOLDER_SIZES:
-                    FOLDER_SIZES[known] = folder_size(path)
-                size = FOLDER_SIZES[known]
-                evict = functools.partial(evict_program, root, path, size)
-                found.append((seen.st_mtime, size, evict))
+                if kind == "programs":
+                    size = counted(path, seen)
+                    evict = functools.partial(evict_program, root, path, size)
+                    found.append((seen.st_mtime, size, evict))
+                    continue
+                used, names = ready_of(path)
+                store.note(path, names)
+                size = counted(path, seen, linked=False)
+                evict = functools.partial(evict_environment, root, path, size, store)
+                found.append((used, size, evict))
     return found
+
+
+def ready_of(folder: Path) -> tuple[float, frozenset[str]]:
+    """When the environment at `folder` was last used, its `ready.json`'s
+    mtime, and the store entries that file lists; for a folder without a
+    `ready.json` exec wrote, the oldest time and no entries."""
+    try:
+        descriptor = os.open(
+            folder / "ready.json", os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
+        )
+    except OSError:
+        return 0.0, frozenset()
+    with os.fdopen(descriptor, "rb") as stream:
+        found = os.fstat(descriptor)
+        if not stat.S_ISREG(found.st_mode):
+            return 0.0, frozenset()
+        text = stream.read(READY_LIMIT + 1)
+    try:
+        document = json.loads(text) if len(text) <= READY_LIMIT else None
+    except ValueError:
+        document = None
+    entries = document.get("store") if isinstance(document, dict) else None
+    if not isinstance(entries, list):
+        return found.st_mtime, frozenset()
+    return found.st_mtime, frozenset(name for name in entries if isinstance(name, str))
+
+
+def counted(path: Path, seen: os.stat_result, linked: bool = True) -> int:
+    """The size of the folder at `path`, listed as `seen`, by `folder_size`,
+    walked once a step."""
+    known = str(path), seen.st_dev, seen.st_ino
+    if known not in FOLDER_SIZES:
+        FOLDER_SIZES[known] = folder_size(path, linked=linked)
+    return FOLDER_SIZES[known]
 
 
 def evict_object(root: Path, path: Path, seen: os.stat_result) -> int:
@@ -634,34 +877,52 @@ def evict_object(root: Path, path: Path, seen: os.stat_result) -> int:
 
 
 def evict_program(root: Path, path: Path, size: int) -> int:
-    """Remove the compiled program's or environment's folder at `path`, of
-    `size` bytes, and its lock, unless a step is compiling, assembling or
-    reading it. The folder leaves its key whole, renamed to
-    `<key>.evicting-<anything>`, before it is removed, so a wrapper killed
+    """Remove the compiled program's folder at `path`, of `size` bytes, as
+    `removed` does."""
+    return size if removed(root, path) else 0
+
+
+def evict_environment(root: Path, path: Path, size: int, store: Store) -> int:
+    """Remove the environment's folder at `path`, of `size` bytes of its
+    own, as `removed` does, and with it each store entry it held the last
+    listing of, giving back their bytes with its own."""
+    if not removed(root, path):
+        return 0
+    return size + store.release(path)
+
+
+def removed(root: Path, path: Path) -> bool:
+    """Remove the compiled program's or environment's folder at `path`, and
+    its lock, unless a step is compiling, assembling or using it: whether
+    it is gone. The folder leaves its name whole, renamed to
+    `<name>.evicting-<anything>`, before it is removed, so a wrapper killed
     midway leaves no half-removed folder that exec would take for whole;
     the sweep removes what it leaves."""
     lock = root / "locks" / f"{path.parent.name}-{path.name}.lock"
     try:
         held = take_lock(lock, wait=False)
     except BlockingIOError:
-        return 0
+        return False
     try:
         aside = path.with_name(f"{path.name}.evicting-{uuid.uuid4().hex}")
         try:
             path.rename(aside)
         except FileNotFoundError:
-            return size
+            return True
         remove(aside)
         lock.unlink(missing_ok=True)
-        return size
+        return True
     finally:
         os.close(held)
 
 
-def folder_size(folder: Path) -> int:
-    """Count each plain-file inode once, including nested environment files."""
-    seen: set[tuple[int, int]] = set()
-    total = 0
+def folder_size(folder: Path, linked: bool = True) -> int:
+    """The bytes of a folder's plain files, nested folders included, each
+    inode counted once. With `linked` false, an inode that also has links
+    outside the folder is left out: an environment's file linked from the
+    store, which the store counts."""
+    sizes: dict[tuple[int, int], tuple[int, int]] = {}
+    inside: dict[tuple[int, int], int] = {}
     for parent, directories, files in os.walk(folder, followlinks=False):
         directories[:] = [
             name for name in directories if not (Path(parent) / name).is_symlink()
@@ -670,10 +931,12 @@ def folder_size(folder: Path) -> int:
             with contextlib.suppress(FileNotFoundError):
                 found = (Path(parent) / name).lstat()
                 key = found.st_dev, found.st_ino
-                if stat.S_ISREG(found.st_mode) and key not in seen:
-                    seen.add(key)
-                    total += found.st_size
-    return total
+                if stat.S_ISREG(found.st_mode):
+                    sizes[key] = found.st_size, found.st_nlink
+                    inside[key] = inside.get(key, 0) + 1
+    return sum(
+        size for key, (size, links) in sizes.items() if linked or inside[key] >= links
+    )
 
 
 def holds(path: Path, size: int, digest: str) -> bool:
@@ -718,10 +981,14 @@ def sweep(root: Path) -> None:
     """Remove what killed steps left: each step folder whose lock no one
     holds, whose links would keep objects past the cap and whose .fetching
     folder holds a part of a download; a lock still being made, a step
-    folder without one, or a folder in programs/ a program was being
-    compiled into, `<key>.<anything>`, whose lock no one holds, once older
-    than `STALE_SECONDS`; and the lock of every name no object has and no
-    step holds."""
+    folder without one, or a folder in programs/ or envs/ a program was
+    being compiled or an environment assembled into, `<name>.<anything>`,
+    whose lock no one holds, once older than `STALE_SECONDS`, and anything
+    else there not under a name of its kind; each store entry a wrapper
+    was removing, `<entry>.evicting-<anything>`; what a killed step left
+    half written in the store, once older than `STALE_SECONDS`, while no
+    step holds the store's lock (`unfinished`); and the lock of every name
+    no object has and no step holds."""
     items = root / "items"
     for lock in items.glob("*.lock"):
         try:
@@ -743,18 +1010,18 @@ def sweep(root: Path) -> None:
                     os.close(held)
             elif path.is_dir() and not path.with_name(path.name + ".lock").exists():
                 remove(path)
-    for kind in ("programs", "envs"):
+    for kind, named in NAMES.items():
         if not (root / kind).is_dir():
             continue
         for path in (root / kind).iterdir():
             with contextlib.suppress(FileNotFoundError):
                 if (
-                    PROGRAM_KEY.fullmatch(path.name)
+                    named.fullmatch(path.name)
                     or now - path.lstat().st_mtime < STALE_SECONDS
                 ):
                     continue
                 key = path.name.partition(".")[0]
-                if not PROGRAM_KEY.fullmatch(key):
+                if not named.fullmatch(key):
                     discard(path)
                     continue
                 with contextlib.suppress(BlockingIOError):
@@ -763,15 +1030,48 @@ def sweep(root: Path) -> None:
                         discard(path)
                     finally:
                         os.close(held)
+    for parent in STORE_ENTRIES:
+        folder = root / "store" / parent
+        if folder.is_dir():
+            for path in folder.iterdir():
+                if ".evicting-" in path.name and not path.name.startswith("."):
+                    discard(path)
+    with store_pass(root) as passing:
+        if passing:
+            for path in unfinished(root / "store"):
+                with contextlib.suppress(FileNotFoundError):
+                    if now - path.lstat().st_mtime >= STALE_SECONDS:
+                        discard(path)
 
     for lock in (root / "locks").iterdir():
-        if lock.name == "evict" or (root / "objects" / lock.name).exists():
+        if (
+            lock.name in ("evict", "store.lock")
+            or (root / "objects" / lock.name).exists()
+        ):
             continue
         with contextlib.suppress(BlockingIOError, FileNotFoundError):
             held = take_lock(lock, wait=False, create=False)
             if not (root / "objects" / lock.name).exists():
                 lock.unlink(missing_ok=True)
             os.close(held)
+
+
+def unfinished(store: Path) -> Iterator[Path]:
+    """Each file or folder a killed step left half written in the store at
+    `store` (`UNFINISHED`). Only a call that holds the store's lock
+    exclusive may take them for left, since every write to the store is
+    made while exec holds it shared."""
+    for parent, named in UNFINISHED.items():
+        folder = store / parent
+        if folder.is_dir():
+            yield from (path for path in folder.iterdir() if named.fullmatch(path.name))
+    wheels = store / "wheels"
+    if wheels.is_dir():
+        for entry in wheels.iterdir():
+            if entry.is_dir() and not entry.is_symlink():
+                yield from (
+                    path for path in entry.iterdir() if path.name.startswith(".")
+                )
 
 
 def discard(path: Path) -> None:

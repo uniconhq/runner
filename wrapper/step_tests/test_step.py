@@ -34,6 +34,16 @@ SECRET = "sk-not-a-real-key-81c4"
 Step = Callable[..., int]
 
 
+DISK_SHORT = unicon_step.disk_short
+
+
+@pytest.fixture(autouse=True)
+def roomy_disk(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The cache's disk with room to spare, whatever the tester's disk
+    holds, but in the tests of the disk's rule."""
+    monkeypatch.setattr(unicon_step, "disk_short", lambda root: False)
+
+
 @pytest.fixture
 def server() -> Iterator[StandIn]:
     with stand_in() as state:
@@ -733,7 +743,12 @@ def test_stale_leftovers_of_killed_steps_are_swept_and_fresh_ones_kept(
     assert "step-old.lock-new" not in left
     assert "step-lockless" not in left
     assert {"step-new.lock-new", "step-young"} <= set(left)
-    assert sorted(p.name for p in locks.iterdir()) == ["evict", "held", "kept"]
+    assert sorted(p.name for p in locks.iterdir()) == [
+        "evict",
+        "held",
+        "kept",
+        "store.lock",
+    ]
 
 
 KEYS = {name: hashlib.sha256(name.encode()).hexdigest() for name in "abcdef"}
@@ -776,6 +791,67 @@ def test_past_its_cap_compiled_programs_go_by_last_use_with_the_objects(
         [KEYS["b"], KEYS["c"]]
     )
     assert not (cache / "locks" / f"programs-{KEYS['a']}.lock").exists()
+
+
+def test_objects_and_programs_go_oldest_first_and_only_until_the_cache_fits(
+    server: StandIn, tmp_path: Path, work: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Objects and compiled programs share one order by last use. An object
+    an item links or a step holds stays, as does a program a step holds,
+    and eviction stops as soon as what is asked for fits, leaving the
+    newest whatever it is."""
+    cache = tmp_path / "cache"
+    unicon_step.tidy(cache)
+    objects = cache / "objects"
+    for age, name in [(0, "oldest"), (1, "linked"), (3, "held"), (6, "newest")]:
+        (objects / name).write_bytes(b"x" * 100)
+        os.utime(objects / name, (1000 + age, 1000 + age))
+    os.link(objects / "linked", tmp_path / "held-by-an-item")
+    for age, name in [(2, "a"), (4, "b"), (5, "c")]:
+        a_program(cache, name, age=age)
+    holding = [
+        unicon_step.take_lock(cache / "locks" / "held"),
+        unicon_step.take_lock(cache / "locks" / f"programs-{KEYS['b']}.lock"),
+    ]
+    monkeypatch.setattr(unicon_step, "CACHE_CAP", 450)
+    try:
+        unicon_step.make_room(cache, 0)
+    finally:
+        for held in holding:
+            os.close(held)
+
+    assert sorted(p.name for p in objects.iterdir()) == ["held", "linked", "newest"]
+    assert [p.name for p in (cache / "programs").iterdir()] == [KEYS["b"]]
+
+
+def test_eviction_goes_on_past_the_cap_while_the_shared_disk_is_short(
+    tmp_path: Path, work: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The cap is the org's, the disk every org's: an org within its cap
+    still evicts, oldest first, while less than a tenth of the disk is
+    free, and stops once it is (#287)."""
+    cache = tmp_path / "cache"
+    unicon_step.tidy(cache)
+    objects = cache / "objects"
+    for age in range(4):
+        (objects / f"object-{age}").write_bytes(b"x" * 100)
+        os.utime(objects / f"object-{age}", (1000 + age, 1000 + age))
+
+    def statvfs(path: Path) -> os.statvfs_result:
+        held = sum(found.stat().st_size for found in objects.iterdir())
+        free = 1000 - 520 - held
+        return os.statvfs_result((1, 1, 1000, free, free, 0, 0, 0, 0, 255))
+
+    monkeypatch.setattr(unicon_step, "disk_short", DISK_SHORT)
+    monkeypatch.setattr(os, "statvfs", statvfs)
+    unicon_step.make_room(cache, 0)
+    assert sorted(path.name for path in objects.iterdir()) == [
+        "object-1",
+        "object-2",
+        "object-3",
+    ]
+    unicon_step.make_room(cache, 0)
+    assert len(list(objects.iterdir())) == 3
 
 
 def test_a_folder_a_killed_step_was_compiling_into_is_swept(
@@ -1243,18 +1319,429 @@ def test_the_job_request_names_only_the_machine_platform(
     assert server.platforms == expected
 
 
+LINE = hashlib.sha256(b"toolchain").hexdigest()
+ENVS = {name: f"{key}-{LINE}" for name, key in KEYS.items()}
+"""Environment folder names as exec 4 gives them: a lock's fingerprint and
+the toolchain line of the exec that assembled it."""
+
+
+def an_entry(cache: Path, name: str, size: int = 1000) -> Path:
+    """A store entry, `conda/<name>`, one file of `size` bytes."""
+    entry = cache / "store" / "conda" / name
+    entry.mkdir(parents=True)
+    (entry / "file").write_bytes(b"x" * size)
+    return entry
+
+
+def an_environment(
+    cache: Path, name: str, age: int, entries: tuple[str, ...] = (), own: int = 0
+) -> Path:
+    """An environment's folder as exec assembles one: a hard link to the
+    file of each store entry it lists in its `ready.json`, `own` bytes of
+    its own besides that file, last used `age` seconds after the epoch's
+    thousandth."""
+    folder = cache / "envs" / ENVS[name]
+    (folder / "lib").mkdir(parents=True)
+    for entry in entries:
+        os.link(cache / "store" / "conda" / entry / "file", folder / "lib" / entry)
+    if own:
+        (folder / "lib" / "own").write_bytes(b"y" * own)
+    store = [f"conda/{entry}" for entry in entries]
+    (folder / "ready.json").write_text(json.dumps({"store": store}))
+    os.utime(folder / "ready.json", (1000 + age, 1000 + age))
+    return folder
+
+
+def own_bytes(folder: Path) -> int:
+    return unicon_step.folder_size(folder, linked=False)
+
+
+@pytest.fixture
+def entries_age(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Every store entry old enough to free, though each was just made."""
+    monkeypatch.setattr(unicon_step, "STALE_SECONDS", -60)
+
+
+def test_two_folders_listing_one_entry_count_it_once_and_keep_it(
+    work: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, entries_age: None
+) -> None:
+    """A folder counts only its own files, so an entry two folders link is
+    counted once, and evicting one of them leaves the entry to the other
+    (#574)."""
+    cache = tmp_path / "cache"
+    unicon_step.tidy(cache)
+    an_entry(cache, "python")
+    older = an_environment(cache, "a", age=0, entries=("python",))
+    newer = an_environment(cache, "b", age=1, entries=("python",))
+    assert own_bytes(older) == (older / "ready.json").stat().st_size
+    total = 1000 + own_bytes(older) + own_bytes(newer)
+    monkeypatch.setattr(unicon_step, "CACHE_CAP", total)
+    unicon_step.make_room(cache, 0)
+    assert older.exists() and newer.exists()
+
+    monkeypatch.setattr(unicon_step, "CACHE_CAP", total - 1)
+    unicon_step.make_room(cache, 0)
+    assert not older.exists() and newer.exists()
+    assert (cache / "store/conda/python/file").stat().st_nlink == 2
+
+
+def test_the_last_folder_listing_an_entry_frees_it_and_eviction_stops_once_it_fits(
+    work: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, entries_age: None
+) -> None:
+    """Evicting a folder gives back its own bytes and those of each entry
+    it held the last listing of, in the same call, so `make_room` stops
+    there and leaves the newest folder (#574)."""
+    cache = tmp_path / "cache"
+    unicon_step.tidy(cache)
+    for name in ("python", "numpy", "gcc"):
+        an_entry(cache, name)
+    oldest = an_environment(cache, "a", age=0, entries=("python",), own=10)
+    older = an_environment(cache, "b", age=1, entries=("python", "numpy"), own=10)
+    newest = an_environment(cache, "c", age=2, entries=("gcc",), own=10)
+    total = 3000 + sum(own_bytes(folder) for folder in (oldest, older, newest))
+    monkeypatch.setattr(unicon_step, "CACHE_CAP", total - own_bytes(oldest) - 1)
+    unicon_step.make_room(cache, 0)
+
+    assert not oldest.exists() and not older.exists() and newest.exists()
+    assert sorted(p.name for p in (cache / "store/conda").iterdir()) == ["gcc"]
+
+
+def test_an_entry_no_folder_lists_goes_before_any_folder(
+    work: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, entries_age: None
+) -> None:
+    cache = tmp_path / "cache"
+    unicon_step.tidy(cache)
+    an_entry(cache, "python")
+    an_entry(cache, "left")
+    folder = an_environment(cache, "a", age=0, entries=("python",))
+    monkeypatch.setattr(unicon_step, "CACHE_CAP", 1000 + own_bytes(folder))
+    unicon_step.make_room(cache, 0)
+
+    assert folder.exists()
+    assert [p.name for p in (cache / "store/conda").iterdir()] == ["python"]
+
+
+def test_a_folder_a_step_holds_is_never_evicted_nor_the_entries_it_lists(
+    work: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, entries_age: None
+) -> None:
+    cache = tmp_path / "cache"
+    unicon_step.tidy(cache)
+    an_entry(cache, "python")
+    folder = an_environment(cache, "a", age=0, entries=("python",))
+    held = os.open(
+        cache / "locks" / f"envs-{folder.name}.lock", os.O_CREAT | os.O_RDONLY, 0o600
+    )
+    fcntl.flock(held, fcntl.LOCK_SH)
+    monkeypatch.setattr(unicon_step, "CACHE_CAP", 0)
+    try:
+        unicon_step.make_room(cache, 0)
+        assert folder.exists() and (cache / "store/conda/python").exists()
+    finally:
+        os.close(held)
+    unicon_step.make_room(cache, 0)
+    assert not folder.exists() and not (cache / "store/conda/python").exists()
+
+
+def test_no_entry_is_freed_while_an_assembly_holds_the_store(
+    work: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, entries_age: None
+) -> None:
+    """exec holds locks/store.lock shared while it assembles, when an entry
+    it has just unpacked is listed nowhere yet: eviction then frees no
+    entry and counts a folder's own bytes only, and a later call frees what
+    the evicted folders left (#574)."""
+    cache = tmp_path / "cache"
+    unicon_step.tidy(cache)
+    an_entry(cache, "python")
+    an_entry(cache, "unpacking")
+    folder = an_environment(cache, "a", age=0, entries=("python",))
+    assembling = os.open(cache / "locks" / "store.lock", os.O_RDONLY)
+    fcntl.flock(assembling, fcntl.LOCK_SH)
+    monkeypatch.setattr(unicon_step, "CACHE_CAP", 1000)
+    try:
+        unicon_step.make_room(cache, 0)
+        assert not folder.exists()
+        assert sorted(p.name for p in (cache / "store/conda").iterdir()) == [
+            "python",
+            "unpacking",
+        ]
+    finally:
+        os.close(assembling)
+    unicon_step.make_room(cache, 0)
+    assert len(list((cache / "store/conda").iterdir())) == 1
+
+
+def test_a_call_that_cannot_free_the_store_does_not_chase_its_bytes(
+    work: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, entries_age: None
+) -> None:
+    """While an assembly holds the store's lock, an entry no folder lists
+    cannot be freed, so its bytes are left out of the count: the objects
+    and programs that fit beside it stay, the cache over its cap until a
+    later call frees the entry (#574)."""
+    cache = tmp_path / "cache"
+    unicon_step.tidy(cache)
+    an_entry(cache, "unpacked")
+    (cache / "objects" / "object").write_bytes(b"x" * 100)
+    a_program(cache, "a", age=0)
+    assembling = os.open(cache / "locks" / "store.lock", os.O_RDONLY)
+    fcntl.flock(assembling, fcntl.LOCK_SH)
+    monkeypatch.setattr(unicon_step, "CACHE_CAP", 300)
+    try:
+        unicon_step.make_room(cache, 0)
+    finally:
+        os.close(assembling)
+    assert (cache / "store/conda/unpacked").exists()
+    assert (cache / "objects/object").exists()
+    assert (cache / "programs" / KEYS["a"]).exists()
+    unicon_step.make_room(cache, 0)
+    assert not (cache / "store/conda/unpacked").exists()
+    assert (cache / "objects/object").exists()
+    assert (cache / "programs" / KEYS["a"]).exists()
+
+
+def test_a_young_unlisted_entry_is_not_chased_either(
+    work: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An entry younger than `STALE_SECONDS` cannot be freed yet either, so
+    the objects beside it stay too."""
+    cache = tmp_path / "cache"
+    unicon_step.tidy(cache)
+    an_entry(cache, "young")
+    (cache / "objects" / "object").write_bytes(b"x" * 100)
+    monkeypatch.setattr(unicon_step, "CACHE_CAP", 200)
+    unicon_step.make_room(cache, 0)
+    assert (cache / "store/conda/young").exists()
+    assert (cache / "objects/object").exists()
+
+
+@pytest.mark.parametrize("kept_by", ["the store's lock", "its age"])
+def test_an_entry_a_call_cannot_free_is_given_back_with_its_last_folder(
+    work: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, kept_by: str
+) -> None:
+    """Evicting the last folder that lists an entry gives back the entry's
+    bytes even when this call may not free it, held by an assembly or too
+    young, so the call stops at the oldest folder rather than evict every
+    other folder and object chasing them."""
+    if kept_by == "its age":
+        monkeypatch.setattr(unicon_step, "STALE_SECONDS", 3600)
+    else:
+        monkeypatch.setattr(unicon_step, "STALE_SECONDS", -60)
+    cache = tmp_path / "cache"
+    unicon_step.tidy(cache)
+    an_entry(cache, "python", size=5000)
+    an_entry(cache, "numpy", size=5000)
+    oldest = an_environment(cache, "a", age=0, entries=("python",))
+    newer = an_environment(cache, "b", age=1, entries=("numpy",))
+    (cache / "objects" / "object").write_bytes(b"x" * 100)
+    total = 10100 + own_bytes(oldest) + own_bytes(newer)
+    monkeypatch.setattr(unicon_step, "CACHE_CAP", total - 3000)
+    assembling = os.open(cache / "locks" / "store.lock", os.O_RDONLY)
+    if kept_by == "the store's lock":
+        fcntl.flock(assembling, fcntl.LOCK_SH)
+    try:
+        unicon_step.make_room(cache, 0)
+    finally:
+        os.close(assembling)
+
+    assert not oldest.exists() and newer.exists()
+    assert (cache / "objects/object").exists()
+    assert sorted(p.name for p in (cache / "store/conda").iterdir()) == [
+        "numpy",
+        "python",
+    ]
+
+
+def test_an_entry_younger_than_an_hour_is_kept_though_no_folder_lists_it(
+    work: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cache = tmp_path / "cache"
+    unicon_step.tidy(cache)
+    an_entry(cache, "python")
+    monkeypatch.setattr(unicon_step, "CACHE_CAP", 0)
+    unicon_step.make_room(cache, 0)
+
+    assert (cache / "store/conda/python").exists()
+
+
+def test_only_entries_count_and_go_never_a_tools_bookkeeping(
+    work: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, entries_age: None
+) -> None:
+    """An entry is a folder in rattler's cache, in uv's `archive-v0`, in
+    `wheels/` or in `files/`, exec's read-only one of a jar or an npm
+    package; the tools' locks and pointers beside them stay."""
+    cache = tmp_path / "cache"
+    unicon_step.tidy(cache)
+    store = cache / "store"
+    entries = ("conda/python", "uv/archive-v0/Xa9", "wheels/" + "a" * 64)
+    for entry in (*entries, "files/" + "b" * 64):
+        (store / entry).mkdir(parents=True)
+        (store / entry / "file").write_bytes(b"x" * 100)
+    (store / "files" / ("b" * 64) / "file").chmod(0o444)
+    (store / "files" / ("b" * 64)).chmod(0o555)
+    for bookkeeping in ("conda/python.lock", "conda/.cache.lock", "uv/.lock"):
+        (store / bookkeeping).write_bytes(b"x" * 40)
+    (store / "uv/wheels-v7/path").mkdir(parents=True)
+    (store / "uv/wheels-v7/path/numpy.rev").write_bytes(b"x" * 40)
+    monkeypatch.setattr(unicon_step, "CACHE_CAP", 100)
+    unicon_step.make_room(cache, 0)
+    left = sorted(
+        str(path.relative_to(store)) for path in store.rglob("*") if path.is_file()
+    )
+    assert len([name for name in left if name.endswith("/file")]) == 1
+    assert [name for name in left if not name.endswith("/file")] == [
+        "conda/.cache.lock",
+        "conda/python.lock",
+        "uv/.lock",
+        "uv/wheels-v7/path/numpy.rev",
+    ]
+
+
+def test_a_freed_uv_entry_takes_the_pointers_that_name_it(
+    work: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, entries_age: None
+) -> None:
+    """uv trusts its pointer to an unpacked wheel and fails an install
+    whose entry is gone, so freeing an entry removes each `.rev` pointer
+    naming it, and no other."""
+    cache = tmp_path / "cache"
+    unicon_step.tidy(cache)
+    store = cache / "store"
+    (store / "uv/archive-v0/Freed01").mkdir(parents=True)
+    (store / "uv/archive-v0/Freed01/file").write_bytes(b"x" * 100)
+    pointers = store / "uv/wheels-v7/url/f1d6"
+    (pointers / "numpy").mkdir(parents=True)
+    (pointers / "numpy/2.5.4-cp314.rev").write_bytes(b"\x93\xa7Freed01\x01")
+    (pointers / "other.rev").write_bytes(b"\x93\xa7Kept002\x01")
+    (pointers / "linked.rev").symlink_to(pointers / "numpy/2.5.4-cp314.rev")
+    monkeypatch.setattr(unicon_step, "CACHE_CAP", 50)
+    unicon_step.make_room(cache, 0)
+    assert not (store / "uv/archive-v0/Freed01").exists()
+    assert sorted(
+        str(path.relative_to(pointers)) for path in pointers.rglob("*.rev")
+    ) == ["linked.rev", "other.rev"]
+
+
+def test_an_entry_a_killed_wrapper_was_removing_is_swept(
+    work: Path, tmp_path: Path
+) -> None:
+    cache = tmp_path / "cache"
+    unicon_step.tidy(cache)
+    aside = an_entry(cache, "python.evicting-1f2e")
+    kept = an_entry(cache, "python")
+    unicon_step.sweep(cache)
+
+    assert not aside.exists() and kept.exists()
+
+
+def test_what_a_killed_step_left_half_written_in_the_store_is_swept_once_old(
+    work: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """exec's file entry under its hidden name, uv's unpacking folder and
+    exec's copy of a wheel go once older than `STALE_SECONDS`, and never
+    while a step holds the store's lock; the entries beside them stay."""
+    cache = tmp_path / "cache"
+    unicon_step.tidy(cache)
+    store = cache / "store"
+    digest = "a" * 64
+    left = [
+        store / "files" / f".{digest}.k2j4x9",
+        store / "uv" / ".tmpQ3zX9a",
+        store / "wheels" / digest / ".numpy.whl.p0x1",
+    ]
+    for path in left:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if path.parent.name == digest:
+            path.write_bytes(b"x")
+        else:
+            (path / "lib").mkdir(parents=True)
+            (path / "lib" / "file").write_bytes(b"x")
+            (path / "lib").chmod(0o555)
+    kept = [store / "files" / digest, store / "wheels" / digest / "numpy.whl"]
+    kept[0].mkdir()
+    kept[1].write_bytes(b"x")
+    (store / "uv" / ".lock").write_bytes(b"")
+
+    unicon_step.sweep(cache)
+    assert all(path.exists() for path in left)
+
+    monkeypatch.setattr(unicon_step, "STALE_SECONDS", -60)
+    assembling = os.open(
+        cache / "locks" / "store.lock", os.O_CREAT | os.O_RDONLY, 0o600
+    )
+    fcntl.flock(assembling, fcntl.LOCK_SH)
+    try:
+        unicon_step.sweep(cache)
+        assert all(path.exists() for path in left)
+    finally:
+        os.close(assembling)
+    unicon_step.sweep(cache)
+
+    assert not any(path.exists() for path in left)
+    assert all(path.exists() for path in kept)
+    assert (store / "uv" / ".lock").exists()
+
+
+def test_a_folder_under_its_new_name_is_counted_kept_and_evicted_when_old(
+    work: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A folder is named by its lock's fingerprint and exec's toolchain
+    line (#572): the sweep keeps it however old, and eviction counts it and
+    takes it once it is the oldest. An exec 3 folder, named by the
+    fingerprint alone, is not counted and is swept once old."""
+    cache = tmp_path / "cache"
+    unicon_step.tidy(cache)
+    folder = an_environment(cache, "a", age=0, own=100)
+    os.utime(folder, (0, 0))
+    unnamed = cache / "envs" / KEYS["b"]
+    unnamed.mkdir()
+    (unnamed / "ready.json").write_text("{}")
+    os.utime(unnamed, (0, 0))
+    unicon_step.sweep(cache)
+    assert folder.exists() and not unnamed.exists()
+    found = unicon_step.stored(cache, unicon_step.Store(cache, True))
+    assert [(age, size) for age, size, _ in found] == [(1000, own_bytes(folder))]
+
+    monkeypatch.setattr(unicon_step, "CACHE_CAP", 0)
+    unicon_step.make_room(cache, 0)
+    assert not folder.exists()
+
+
+def test_a_folder_a_killed_assembly_left_is_swept_only_under_its_lock(
+    work: Path, tmp_path: Path
+) -> None:
+    """`<fingerprint>-<toolchain>.<anything>` is an assembly in progress, or
+    a folder exec or the wrapper moved aside: swept once stale and its lock
+    free, kept while young or held."""
+    cache = tmp_path / "cache"
+    unicon_step.tidy(cache)
+    old = time.time() - unicon_step.STALE_SECONDS - 60
+    building = {}
+    for name in ("a", "b", "c"):
+        building[name] = cache / "envs" / f"{ENVS[name]}.x1y2"
+        (building[name] / "lib").mkdir(parents=True)
+        if name != "c":
+            os.utime(building[name], (old, old))
+    held = unicon_step.take_lock(cache / "locks" / f"envs-{ENVS['b']}.lock")
+    try:
+        unicon_step.sweep(cache)
+    finally:
+        os.close(held)
+
+    assert not building["a"].exists()
+    assert building["b"].exists() and building["c"].exists()
+
+
 def test_environment_eviction_counts_nested_inodes_once_and_keeps_a_held_folder(
     work: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     root = tmp_path / "cache"
     unicon_step.tidy(root)
-    first = root / "envs" / ("a" * 64)
-    second = root / "envs" / ("b" * 64)
+    first = root / "envs" / ENVS["a"]
+    second = root / "envs" / ENVS["b"]
     for folder in (first, second):
         (folder / "nested").mkdir(parents=True)
         (folder / "nested/file").write_bytes(b"ten bytes!")
     os.link(first / "nested/file", first / "same-inode")
     assert unicon_step.folder_size(first) == 10
+    assert unicon_step.folder_size(first, linked=False) == 10
     held = unicon_step.take_lock(root / "locks" / f"envs-{second.name}.lock")
     monkeypatch.setattr(unicon_step, "CACHE_CAP", 0)
     try:
@@ -1271,7 +1758,7 @@ def test_a_shared_environment_reader_blocks_eviction_of_a_large_folder(
 ) -> None:
     root = tmp_path / "cache"
     unicon_step.tidy(root)
-    folder = root / "envs" / ("c" * 64)
+    folder = root / "envs" / ENVS["c"]
     (folder / "lib/python3.14/site-packages/numpy").mkdir(parents=True)
     piece = folder / "lib/python3.14/site-packages/numpy/array.so"
     with piece.open("wb") as file:
@@ -1283,7 +1770,7 @@ def test_a_shared_environment_reader_blocks_eviction_of_a_large_folder(
     fcntl.flock(held, fcntl.LOCK_SH)
     monkeypatch.setattr(unicon_step, "CACHE_CAP", 1)
     try:
-        assert unicon_step.folder_size(folder) == 512 * 1024 * 1024
+        assert unicon_step.folder_size(folder, linked=False) == 512 * 1024 * 1024
         unicon_step.make_room(root, 0)
         assert piece.is_file()
     finally:
@@ -1299,7 +1786,7 @@ def test_a_step_removes_archive_file_name_links_and_sweeps_an_abandoned_environm
     unicon_step.tidy(root)
     archive = root / "objects" / ("d" * 64)
     archive.write_bytes(b"verified archive")
-    unfinished = root / "envs" / ("e" * 64 + ".partial")
+    unfinished = root / "envs" / f"{ENVS['e']}.partial"
     (unfinished / "lib/nested").mkdir(parents=True)
     (unfinished / "lib/nested/file").write_bytes(b"incomplete")
     os.utime(unfinished, (0, 0))
@@ -1324,7 +1811,7 @@ def test_an_evicted_environment_leaves_its_name_whole_before_it_is_removed(
     removes what it left."""
     root = tmp_path / "cache"
     unicon_step.tidy(root)
-    folder = root / "envs" / ("f" * 64)
+    folder = root / "envs" / ENVS["f"]
     (folder / "libexec").mkdir(parents=True)
     (folder / "libexec/cc1plus").write_bytes(b"compiler")
     (folder / "ready.json").write_text("{}")
@@ -1352,25 +1839,25 @@ def test_each_folder_is_walked_once_a_step_however_many_pieces_it_fetches(
     work: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Making room for each piece reads a folder's size the step already
-    counted, and walks again only a folder renamed into its key since."""
+    counted, and walks again only a folder renamed into its name since."""
     root = tmp_path / "cache"
     unicon_step.tidy(root)
-    folder = root / "envs" / ("a" * 64)
+    folder = root / "envs" / ENVS["a"]
     (folder / "lib").mkdir(parents=True)
     (folder / "lib/file").write_bytes(b"ten bytes!")
     walked: list[Path] = []
     real = unicon_step.folder_size
 
-    def counted(path: Path) -> int:
+    def counted(path: Path, linked: bool = True) -> int:
         walked.append(path)
-        return real(path)
+        return real(path, linked)
 
     monkeypatch.setattr(unicon_step, "folder_size", counted)
     monkeypatch.setattr(unicon_step, "FOLDER_SIZES", {})
     for _ in range(3):
         unicon_step.make_room(root, 1)
     assert walked == [folder]
-    replaced = root / "envs" / ("a" * 64 + ".new")
+    replaced = root / "envs" / f"{ENVS['a']}.new"
     (replaced / "lib").mkdir(parents=True)
     (replaced / "lib/file").write_bytes(b"twenty bytes, twice!")
     unicon_step.remove(folder)

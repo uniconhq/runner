@@ -16,7 +16,7 @@ inputs:
 
 steps:
   - id: attack
-    use: unicon/exec@v3
+    use: unicon/exec@v4
     with:
       source: ${{ inputs.code }}
       language: c
@@ -24,7 +24,7 @@ steps:
       time_limit: ${{ inputs.time_limit }}
       memory_limit: ${{ inputs.memory_limit }}
   - id: check
-    use: unicon/exec@v3
+    use: unicon/exec@v4
     with:
       source: ${{ inputs.check }}
       language: python
