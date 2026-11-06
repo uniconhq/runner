@@ -8,6 +8,7 @@ it and exec on isolate, is in test_image.py.
 from __future__ import annotations
 
 import base64
+import errno
 import fcntl
 import hashlib
 import json
@@ -82,7 +83,7 @@ def step(
                 path.unlink()
         server.ended = False
         server.job = {
-            "schema_version": 1,
+            "schema_version": 2,
             "inputs": {"schema_version": 6, "inputs": {}},
             "files": [],
             "uploads": f"{server.door}/uploads",
@@ -467,7 +468,9 @@ def test_each_upload_sends_the_checksum_its_link_is_signed_for(
 
 
 def test_a_job_of_another_version_is_refused(step: Step, server: StandIn) -> None:
-    assert step(schema_version=2) == 2
+    # #623: version 1 is the job before keep and kept files, which this
+    # wrapper refuses rather than reads.
+    assert step(schema_version=1) == 2
     assert server.put == {}
 
 
@@ -499,6 +502,157 @@ def test_the_submission_is_copied_from_the_workspace_without_links(
     assert step(files=[{"path": "in/S2", "workspace": "files/solution"}]) == 1
     assert "holds 'secret'" in server.outputs()["error"]
     assert step(files=[{"path": "in/S3", "workspace": "../../etc"}]) == 1
+
+
+@pytest.mark.parametrize("kind", ["file", "folder"])
+def test_a_submission_linked_to_a_kept_file_is_refused(
+    step: Step,
+    server: StandIn,
+    work: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    kind: str,
+) -> None:
+    """#623, #627: the entrant's checkout may hold a link to what an
+    earlier step kept, a file or a folder, which is never copied in as the
+    entrant's own, nor a kept file reached through a link."""
+    workspace = tmp_path / "woodpecker" / "src"
+    kept = workspace / ".unicon" / "solution" / "out" / "0"
+    kept.mkdir(parents=True)
+    (kept / "output").write_bytes(b"7\n")
+    checkout = workspace / "submission" / "files"
+    checkout.mkdir(parents=True)
+    monkeypatch.setenv("CI_WORKSPACE", str(workspace))
+    if kind == "file":
+        (checkout / "main.py").symlink_to("../../.unicon/solution/out/0/output")
+        given = "submission/files/main.py"
+    else:
+        (checkout / "code").symlink_to("../../.unicon/solution/out/0")
+        given = "submission/files/code"
+
+    assert step(files=[{"path": "in/S1", "workspace": given}]) == 1
+    assert "is reached through a link" in server.outputs()["error"]
+    assert not (work / "in" / "S1").exists()
+
+    (workspace / ".unicon" / "linked").symlink_to("solution")
+    named = {
+        "path": "in/K1",
+        "workspace": ".unicon/linked/out/0/output",
+        "sha256": hashlib.sha256(b"7\n").hexdigest(),
+        "size": 2,
+    }
+    assert step(files=[named]) == 1
+    assert "is reached through a link" in server.outputs()["error"]
+
+
+def test_a_kept_file_is_copied_from_the_workspace_only_as_the_job_names_it(
+    step: Step,
+    server: StandIn,
+    work: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An earlier step's output read from the workspace is checked like a
+    download, since the entrant's checkout may have put anything there
+    (#623, #627)."""
+    workspace = tmp_path / "woodpecker" / "src"
+    kept = workspace / ".unicon" / "solution" / "out" / "0"
+    kept.mkdir(parents=True)
+    (kept / "output").write_bytes(b"7\n")
+    monkeypatch.setenv("CI_WORKSPACE", str(workspace))
+    named = {
+        "path": "in/K1",
+        "workspace": ".unicon/solution/out/0/output",
+        "sha256": hashlib.sha256(b"7\n").hexdigest(),
+        "size": 2,
+    }
+
+    assert step(files=[named]) == 0
+    assert (work / "in" / "K1").read_bytes() == b"7\n"
+
+    (kept / "output").write_bytes(b"8\n")
+    assert step(files=[named]) == 1
+    assert "is not the length and SHA-256 the job names" in server.outputs()["error"]
+
+    (kept / "output").unlink()
+    (kept / "output").mkdir()
+    assert step(files=[named]) == 1
+    assert "is not a file" in server.outputs()["error"]
+
+    half = {key: value for key, value in named.items() if key != "size"}
+    assert step(files=[half]) == 1
+    assert "places a file at" in server.outputs()["error"]
+
+
+def test_a_step_keeps_what_it_uploaded_under_out_in_its_workspace_folder(
+    step: Step,
+    server: StandIn,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace = tmp_path / "woodpecker" / "src"
+    stale = workspace / ".unicon" / "solution" / "out" / "1"
+    stale.mkdir(parents=True)
+    (stale / "output").write_text("an earlier run's")
+    monkeypatch.setenv("CI_WORKSPACE", str(workspace))
+    writes = "\nimport os; os.makedirs('out/0'); open('out/0/output', 'w').write('7')"
+
+    assert step(WRITES_ACCEPTED + writes, keep=".unicon/solution") == 0
+    folder = workspace / ".unicon" / "solution"
+    assert sorted(str(p.relative_to(folder)) for p in folder.rglob("*")) == [
+        "out",
+        "out/0",
+        "out/0/output",
+    ]
+    assert (folder / "out" / "0" / "output").read_text() == "7"
+    assert set(server.put) == {"outputs.json", "out/0/output"}
+
+    assert step(WRITES_ACCEPTED + writes) == 0
+    assert (folder / "out" / "0" / "output").read_text() == "7"
+
+
+@pytest.mark.parametrize(
+    "keep", [".unicon", "out/solution", ".unicon/a/b", ".unicon/..", "/tmp/x", 5]
+)
+def test_a_keep_folder_outside_the_workspaces_own_is_refused_before_anything_runs(
+    step: Step,
+    server: StandIn,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    keep: object,
+) -> None:
+    monkeypatch.setenv("CI_WORKSPACE", str(tmp_path / "woodpecker" / "src"))
+    ran = tmp_path / "ran"
+
+    assert step(f"open({str(ran)!r}, 'w')", keep=keep) == 2
+    assert not ran.exists()
+    assert server.asked == []
+    assert server.calls("POST", "/door/done") == 0
+
+
+def test_a_keep_that_fails_to_copy_is_the_steps_error_and_leaves_no_folder(
+    step: Step,
+    server: StandIn,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace = tmp_path / "woodpecker" / "src"
+    monkeypatch.setenv("CI_WORKSPACE", str(workspace))
+
+    def full(*args: object) -> None:
+        raise OSError(errno.ENOSPC, os.strerror(errno.ENOSPC))
+
+    monkeypatch.setattr(shutil, "copyfileobj", full)
+    writes = "\nimport os; os.makedirs('out/0'); open('out/0/output', 'w').write('7')"
+
+    assert step(WRITES_ACCEPTED + writes, keep=".unicon/solution") == 1
+    error = server.outputs()["error"]
+    assert error == (
+        f"could not keep out/0/output for later steps: {os.strerror(errno.ENOSPC)}"
+    )
+    assert set(server.put) == {"outputs.json", "out/0/output"}
+    assert server.calls("POST", "/door/done") == 1
+    assert not (workspace / ".unicon" / "solution").exists()
 
 
 def test_report_mode_tells_the_door_the_pipeline_ended(

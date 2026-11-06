@@ -34,13 +34,18 @@ Given `data_url` and `data_token`, as `PLUGIN_DATA_URL` and
 cannot read its `/proc/1/environ`, then:
 
 1. asks the door for the step's job (`job.schema.json`), refusing another
-   version with exit 2; a 204 says nothing is left for the step to do, as
-   when another grading stored the same work first, and it exits 0 having
+   version, or a `keep` other than `.unicon/<step>`, with exit 2; a 204 says
+   nothing is left for the step to do, every run of it left out because its
+   part was not given or an earlier step stopped it, and it exits 0 having
    done nothing, so Woodpecker still starts the later steps, while a 410,
    the grading finished, or a 401, the token ended, is exit 2;
 2. fetches every file side by side, checking each against its size and
-   SHA-256, or copies it from the workspace the clone step checked out,
-   and makes each empty folder the job names;
+   SHA-256, or copies it from the workspace: the submission the clone step
+   checked out into `submission/`, or a file an earlier step of the
+   workflow kept beside it, checked against the size and SHA-256 the job
+   names, and a path through a link refused, since the entrant's files
+   may link anywhere; and makes
+   each empty folder the job names;
 3. writes `inputs.json` with each `{"secret": <setting>}` filled from the
    step's settings, refusing a setting of the wrapper's own and a value
    shorter than 8 characters, too short to mask, and each number exactly as
@@ -56,6 +61,10 @@ cannot read its `/proc/1/environ`, then:
    never masked, or writes it itself, holding only `error`, when the step
    could not do its work or `outputs.json` is not a plain file; a primitive
    that wrote none is told with its exit code or the signal that killed it;
+   then copies the plain files under `out/` to the workspace folder the job
+   names in `keep`, `.unicon/<step>`, emptied first, so the later steps of
+   the workflow read them from there, a copy that fails, such as on a full
+   disk, being the step's error;
 6. asks the door for an upload link per file, `outputs.json` and every file
    under `out/`, with its SHA-256 and size, puts each, and posts to done.
    Each file is opened once, without following a link, and hashed, measured
@@ -177,14 +186,16 @@ grades the task as Woodpecker pipelines. Nothing of the task's or the
 workflow's is resolved at grade time. It holds the run workflow the task
 names, pinned to a commit, and each workflow a box expanded; every task and
 workflow file a step is given, by path, size and SHA-256; the entrant's
-inputs; every run, with its id, its key and whether it is early; each
+inputs; every run, with its id, its key and whether it is early, shown
+during the contest; each
 workflow step bound to the task's values and placed by how often it runs
 (`save_once`, `save_per_run`, `grading_once`, `grading_per_run`), a
 batch step with what its declaration says it gives once for the whole
 batch (`once_outputs`, `once_outcomes`) and whether its compile error is
-the entrant's (`compiled`); the Woodpecker steps of the `save`, `early`
-and `late` pipelines, and the split a grading takes while the task's
-results are released; the workflow's reports; the save's notes; and the
+the entrant's (`compiled`); the Woodpecker steps of the `save` pipeline
+and of the `grading` one, a grading's only pipeline, which runs the early
+runs first, and the split a grading takes while the task's results are
+released; the workflow's reports; the save's notes; and the
 columns the entrant could set.
 
 **`result.schema.json`.** Built by the forge once a grading's pipeline has
@@ -286,8 +297,10 @@ skipped.
 wrapper: `inputs`, the `inputs.json` to write, with only the runs still to
 do in a batch; `files`, each placed at its path under `/work`, either a
 download (`url`, `sha256`, `size`, and `cached` for a task file read
-through the machine's cache), a copy of a `workspace` path, or an empty
-`folder`; `uploads` and
+through the machine's cache), a copy of a `workspace` path, with `sha256`
+and `size` for a file an earlier step kept, or an empty `folder`; `keep`,
+where a step that runs as root keeps its outputs for the later steps of
+its workflow; `uploads` and
 `done`, the door's links for the upload links and the end; `time_limit` in
 seconds; `box_users` and `step_memory_mb`, the memory the planner gave the
 step, which the primitive caps itself at, for an exec step;

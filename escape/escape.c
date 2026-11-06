@@ -255,6 +255,10 @@ int main(int argc, char **argv) {
         try_read("harness-docker-socket", "/run/unicon/docker.sock");
         try_read("docker-socket", "/var/run/docker.sock");
         try_read("woodpecker-dir", "/woodpecker/task/task.yaml");
+        // The step's workspace, where earlier steps keep their outputs for the
+        // later ones (.unicon/<step>), is never in the box.
+        try_write("write-workspace", "/woodpecker/escape-test");
+        try_list("list-workspace", "/woodpecker");
         try_read("lfs-cache", "/lfs-cache");
         try_read("proc-kcore", "/proc/kcore");
         try_write("sysrq", "/proc/sysrq-trigger");

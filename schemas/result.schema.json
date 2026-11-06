@@ -51,7 +51,7 @@
           "const": 6
         },
         "runs": {
-          "description": "One entry per run the pipeline grades, early or late, in the plan's order; for a save's pipeline, every run.",
+          "description": "One entry per run of the plan, in its order.",
           "type": "array",
           "items": { "$ref": "#/$defs/run_result" }
         },

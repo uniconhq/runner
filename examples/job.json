@@ -1,5 +1,5 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "inputs": {
     "schema_version": 6,
     "batch": [
@@ -69,6 +69,7 @@
   ],
   "uploads": "http://proxy/api/v1/gradings/0199a2c1-6b7e-7c3a-9f10-5d2e4b8a6c31/steps/solution/uploads",
   "done": "http://proxy/api/v1/gradings/0199a2c1-6b7e-7c3a-9f10-5d2e4b8a6c31/steps/solution/done",
+  "keep": ".unicon/solution",
   "time_limit": 54,
   "box_users": {
     "first": 20480,
