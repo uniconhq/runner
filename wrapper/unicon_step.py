@@ -10,21 +10,25 @@ header and only to the door and the links under it. In order, the wrapper:
 1. makes itself non-dumpable, so no process of its user reads its
    environment through /proc/1/environ, nor its memory;
 2. fetches the step's job (schemas/job.schema.json), or, answered 204,
-   exits 0 having done nothing: nothing is left for the step to do, and
-   the later steps still run;
+   exits 0 having done nothing: every run of the step was left out, its
+   part not given or stopped by an earlier step, and the later steps
+   still run;
 3. places the job's files, each checked against its length and SHA-256:
-   into /work/in, or a cached one through the machine's cache at /cache,
-   linked into an item folder of this running step's own, and makes each
-   empty folder the job names;
+   into /work/in, from a link, or from the workspace where an earlier step
+   of the workflow kept it, or a cached one through the machine's cache at
+   /cache, linked into an item folder of this running step's own, and
+   makes each empty folder the job names;
 4. writes /work/inputs.json with each secret's value filled in, and runs
    the primitive with no PLUGIN_ variable in its environment, its box
    users in UNICON_BOX_USERS and its memory in UNICON_STEP_MEMORY_MB,
    killing it at the job's time limit, and, as the container's first
    process, everything else left once it ends;
 5. masks every secret, the link and the token in what the primitive wrote
-   and printed, uploads /work/outputs.json and /work/out, each PUT sending
-   the file's SHA-256 its link is signed for, and tells the door the step
-   is done;
+   and printed, copies each plain file under /work/out to the workspace
+   folder the job names in `keep`, emptied first, for the later steps of
+   the workflow, uploads /work/outputs.json and /work/out, each PUT
+   sending the file's SHA-256 its link is signed for, and tells the door
+   the step is done;
 6. exits 1 when the step did not do its work, or when the job says a
    non-accepted outcome fails the step and one is not accepted.
 
@@ -71,7 +75,7 @@ from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
 
-JOB_VERSION = 1
+JOB_VERSION = 2
 WORK = Path("/work")
 CACHE = Path("/cache")
 CACHE_CAP_FILE = Path("/etc/unicon/cache-cap")
@@ -136,6 +140,7 @@ CHUNK = 1 << 20
 TIMEOUT = 60
 PR_SET_DUMPABLE = 4
 NAME = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.-]{0,254}")
+KEEP_ROOT = ".unicon"
 SETTING = re.compile(r"[a-z][a-z0-9_]*")
 OWN_SETTINGS = frozenset({"data_url", "data_token", "mode"})
 """The wrapper's own settings, which no secret may be read from."""
@@ -202,7 +207,7 @@ def main(argv: list[str]) -> int:
             return 0
         if not isinstance(job, dict) or job.get("schema_version") != JOB_VERSION:
             raise StepError(f"the job is not written against version {JOB_VERSION}")
-        return grade(door, job, argv[1:])
+        return grade(door, job, argv[1:], keep_folder(job))
     except (
         StepError,
         OSError,
@@ -247,7 +252,9 @@ def read_job(door: Door, url: str) -> Any:
     return job
 
 
-def grade(door: Door, job: dict[str, Any], command: list[str]) -> int:
+def grade(
+    door: Door, job: dict[str, Any], command: list[str], kept: Path | None
+) -> int:
     """Steps 3 to 6 for one job, and the exit code."""
     outputs = WORK / "outputs.json"
     try:
@@ -259,6 +266,7 @@ def grade(door: Door, job: dict[str, Any], command: list[str]) -> int:
             (WORK / "inputs.json").write_text(exact(filled), encoding="utf-8")
             ended = run(door, command, job)
         document = mask(door, read_plain(outputs, ended))
+        keep(kept)
     except (StepError, OSError, ValueError, http.client.HTTPException) as error:
         version = job["inputs"].get("schema_version")
         document = {"schema_version": version, "error": door.masked(str(error))}
@@ -1104,12 +1112,13 @@ def place(door: Door, files: list[dict[str, Any]], cache: Cache | None) -> None:
             or parts[0] != ("cache" if cached else "in")
             or (cached and (len(parts) != 3 or "workspace" in entry))
             or (entry.get("folder") and (cached or set(entry) != {"path", "folder"}))
+            or ("workspace" in entry and ("sha256" in entry) != ("size" in entry))
         ):
             raise StepError(f"the job places a file at {entry['path']!r}")
         if entry.get("folder"):
             WORK.joinpath(*parts).mkdir(parents=True)
         elif "workspace" in entry:
-            from_workspace(entry["workspace"], WORK.joinpath(*parts))
+            from_workspace(entry, WORK.joinpath(*parts))
         elif cache is not None and cached:
             target = cache.folder.joinpath(*parts[1:])
             fetches.append(functools.partial(cache.place, door, entry, target))
@@ -1182,16 +1191,38 @@ def download(door: Door, entry: dict[str, Any], target: Path) -> None:
         raise
 
 
-def from_workspace(source: str, target: Path) -> None:
-    """Copy a file or folder of the step's workspace, the submission the clone
-    step checked out, to `target`, refusing a link or anything else not a
-    plain file or folder: the wrapper may be root, the content the
-    entrant's."""
+def from_workspace(entry: dict[str, Any], target: Path) -> None:
+    """Copy a file or folder of the step's workspace to `target`: the
+    submission the clone step checked out, or a file an earlier step kept
+    there, which the entry names by its SHA-256 and length, refused unless
+    the copy is exactly those. A link anywhere on the way to it or in it,
+    or anything else not a plain file or folder, is refused too: the
+    wrapper may be root, and the entrant's checkout in `submission/` may
+    hold a link from their own files to anywhere, a file a step kept
+    included."""
+    source = entry["workspace"]
     workspace = Path(os.environ["CI_WORKSPACE"]).resolve()
     found = (workspace / source).resolve()
     if not found.is_relative_to(workspace) or not found.exists():
         raise StepError(f"the workspace has no {source!r}")
+    if found != workspace / source:
+        raise StepError(f"the workspace's {source!r} is reached through a link")
     target.parent.mkdir(parents=True, exist_ok=True)
+    if "sha256" in entry:
+        if not found.is_file():
+            raise StepError(f"the workspace's {source!r} is not a file")
+        shutil.copyfile(found, target)
+        with target.open("rb") as copied:
+            got = os.fstat(copied.fileno()).st_size
+            if (
+                got != entry["size"]
+                or digest_of(copied.fileno(), got) != entry["sha256"]
+            ):
+                raise StepError(
+                    f"the workspace's {source!r} is not the length and SHA-256 "
+                    "the job names"
+                )
+        return
     if found.is_file():
         shutil.copyfile(found, target)
         return
@@ -1378,20 +1409,8 @@ def upload(door: Door, job: dict[str, Any]) -> None:
     opened: list[tuple[str, int, int]] = []
     try:
         for path in paths:
-            flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
-            try:
-                descriptor = os.open(path, flags)
-            except OSError as error:
-                if error.errno in (errno.ELOOP, errno.ENOENT, errno.ENXIO):
-                    continue
-                raise StepError(
-                    f"could not open {path.relative_to(WORK)}: {error}"
-                ) from None
-            found = os.fstat(descriptor)
-            if not stat.S_ISREG(found.st_mode):
-                os.close(descriptor)
-                continue
-            opened.append((str(path.relative_to(WORK)), descriptor, found.st_size))
+            if (plain := open_plain(path)) is not None:
+                opened.append((str(path.relative_to(WORK)), *plain))
         digests = [digest_of(descriptor, size) for _, descriptor, size in opened]
         listing = [
             {"path": name, "sha256": digest, "size": size}
@@ -1410,6 +1429,62 @@ def upload(door: Door, job: dict[str, Any]) -> None:
     finally:
         for _, descriptor, _ in opened:
             os.close(descriptor)
+
+
+def open_plain(path: Path) -> tuple[int, int] | None:
+    """A descriptor and the size of `path` under /work, opened without
+    following a link, or none when it is not a plain file."""
+    try:
+        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except OSError as error:
+        if error.errno in (errno.ELOOP, errno.ENOENT, errno.ENXIO):
+            return None
+        raise StepError(f"could not open {path.relative_to(WORK)}: {error}") from None
+    found = os.fstat(descriptor)
+    if not stat.S_ISREG(found.st_mode):
+        os.close(descriptor)
+        return None
+    return descriptor, found.st_size
+
+
+def keep_folder(job: dict[str, Any]) -> Path | None:
+    """The workspace folder the job names in `keep`, `.unicon/<step>`, or
+    none for a job that keeps nothing."""
+    if "keep" not in job:
+        return None
+    named = job["keep"]
+    parts = named.split("/") if isinstance(named, str) else []
+    if len(parts) != 2 or parts[0] != KEEP_ROOT or not NAME.fullmatch(parts[1]):
+        raise StepError(f"the job keeps its outputs at {named!r}")
+    return Path(os.environ["CI_WORKSPACE"], *parts)
+
+
+def keep(folder: Path | None) -> None:
+    """Copy each plain file under out/, the ones the step then uploads, to
+    `folder`, emptied first, so a later step of the workflow reads it from
+    there by its SHA-256. The entrant's checkout is in `submission/` beside
+    it (#646). A copy that fails, such as on a full disk, leaves no folder
+    and is the step's error."""
+    if folder is None:
+        return
+    name = f"{KEEP_ROOT}/{folder.name}"
+    try:
+        shutil.rmtree(folder, ignore_errors=True)
+        folder.mkdir(parents=True)
+        for parent, _, names in os.walk(WORK / "out"):
+            for path in (Path(parent) / found for found in names):
+                if (plain := open_plain(path)) is None:
+                    continue
+                name = str(path.relative_to(WORK))
+                target = folder / name
+                with os.fdopen(plain[0], "rb") as source:
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    with target.open("xb") as copy:
+                        shutil.copyfileobj(source, copy, CHUNK)
+    except OSError as error:
+        shutil.rmtree(folder, ignore_errors=True)
+        reason = error.strerror or error
+        raise StepError(f"could not keep {name} for later steps: {reason}") from None
 
 
 def digest_of(descriptor: int, size: int) -> str:

@@ -82,7 +82,7 @@ def step(
     the step's token fresh."""
     server.ended = False
     server.job = {
-        "schema_version": 1,
+        "schema_version": 2,
         "inputs": inputs,
         "files": files,
         "uploads": f"{server.door}/uploads",

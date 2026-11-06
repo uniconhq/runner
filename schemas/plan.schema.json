@@ -145,7 +145,7 @@
           "additionalProperties": { "$ref": "#/$defs/entrant_input" }
         },
         "runs": {
-          "description": "Every run, in the order the task's tuples give them: its id, kept across the task's versions; its key, each repeated input's value, a part where the entrant fills it; and whether it is early, read by what is shown during the contest.",
+          "description": "Every run, in the order the task's tuples give them: its id, kept across the task's versions; its key, each repeated input's value, a part where the entrant fills it; and whether it is early, its results shown during the contest.",
           "type": "array",
           "uniqueItems": true,
           "items": {
@@ -175,20 +175,19 @@
           "additionalProperties": { "$ref": "#/$defs/run_step" }
         },
         "pipelines": {
-          "description": "The Woodpecker steps of each pipeline: save, the steps done when the task is saved, each check's copies of the steps graded per submission among them, after the rest; early, the steps done once per grading that an early run reads and every early run; late, every other step and run, started only once the early pipeline has finished. A pipeline with no step is left out.",
+          "description": "The Woodpecker steps of each pipeline: save, the steps done when the task is saved, the builds of the task's own sources and each check's copies of the steps graded per submission, after the rest, left out when it has none; grading, a grading's one pipeline, every workflow step over every run, the early runs first in each step, then each value's program.",
           "type": "object",
-          "minProperties": 1,
+          "required": ["grading"],
           "additionalProperties": false,
           "properties": {
             "save": { "$ref": "#/$defs/pipeline" },
-            "early": { "$ref": "#/$defs/pipeline" },
-            "late": { "$ref": "#/$defs/pipeline" }
+            "grading": { "$ref": "#/$defs/pipeline" }
           }
         },
         "released": {
-          "description": "The split a grading takes when it is made while the task's results are released, where it differs from the split above: the ids of the runs early then, and the early and late pipelines then, laid out as above. Such a grading reads these in place of each run's early and the early and late pipelines above; the save pipeline is the same for both. Left out when a release moves nothing.",
+          "description": "The split a grading takes when it is made while the task's results are released, where it differs from the split above: the ids of the runs early then, and the grading pipeline then, those runs first, laid out as above. Such a grading reads these in place of each run's early and the grading pipeline above; the save pipeline is the same for both. Left out when a release moves nothing.",
           "type": "object",
-          "required": ["early", "pipelines"],
+          "required": ["early", "grading"],
           "additionalProperties": false,
           "properties": {
             "early": {
@@ -196,14 +195,7 @@
               "uniqueItems": true,
               "items": { "$ref": "#/$defs/run_id" }
             },
-            "pipelines": {
-              "type": "object",
-              "additionalProperties": false,
-              "properties": {
-                "early": { "$ref": "#/$defs/pipeline" },
-                "late": { "$ref": "#/$defs/pipeline" }
-              }
-            }
+            "grading": { "$ref": "#/$defs/pipeline" }
           }
         },
         "reports": {
@@ -312,7 +304,7 @@
       "additionalProperties": false,
       "properties": {
         "class": {
-          "description": "How often the step runs, from what it reads directly or through earlier steps: at the save once, or once per run, when it reads nothing of the entrant's; once per grading, or once per run of a grading, when it does.",
+          "description": "How often the step runs: once per grading, or once per run of a grading, for every workflow step, by whether it reads a repeated input directly or through earlier steps; at the save once, or once per run, for the planner's own builds and each check's copies alone.",
           "type": "string",
           "enum": ["save_once", "save_per_run", "grading_once", "grading_per_run"]
         },
@@ -366,7 +358,7 @@
           "items": { "type": "string", "pattern": "^[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)?$" }
         },
         "once_outcomes": {
-          "description": "On a step done once per run: the outcomes its primitive gives for every item of a batch alike, as compile_error. One goes in a result's once, read from the first item of its batch, and stops the step's items in a later pipeline of the same grading.",
+          "description": "On a step done once per run: the outcomes its primitive gives for every item of a batch alike, as compile_error. One goes in a result's once, read from the first item of its batch.",
           "type": "array",
           "minItems": 1,
           "uniqueItems": true,
@@ -597,12 +589,12 @@
       }
     },
     "pipeline": {
-      "description": "The pipeline's Woodpecker steps in the order the workflow gives its steps: one per workflow step done once, one per workflow step of a primitive that takes a batch holding the pipeline's runs of it in run order, and one per run of any other step done per run.",
+      "description": "The pipeline's Woodpecker steps in the order the workflow gives its steps, which is the order they run in, one after another: one per workflow step done once, one per workflow step of a primitive that takes a batch holding the pipeline's runs of it in the order it grades them, and one per run of any other step done per run, in that order.",
       "type": "array",
       "minItems": 1,
       "items": {
         "type": "object",
-        "required": ["name", "step", "depends_on", "limits"],
+        "required": ["name", "step", "limits"],
         "additionalProperties": false,
         "properties": {
           "name": {
@@ -617,12 +609,6 @@
             "minItems": 1,
             "uniqueItems": true,
             "items": { "$ref": "#/$defs/run_id" }
-          },
-          "depends_on": {
-            "description": "The Woodpecker steps of the same pipeline holding what this one reads, from the wiring.",
-            "type": "array",
-            "uniqueItems": true,
-            "items": { "type": "string" }
           },
           "limits": {
             "description": "The container's limits: time_ms and cpu_ms summed over its runs, the others the most of any run, memory with room for the files it copies into its boxes.",

@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://raw.githubusercontent.com/uniconhq/runner/main/schemas/job.schema.json",
   "title": "Unicon step job",
-  "description": "What a grading step's door at the forge answers when the step's wrapper asks for its work. The forge writes each Woodpecker step a plugin step whose settings are data_url, the door, GET <machine URL>/api/v1/gradings/<row>/steps/<step>, <step> there the step's Woodpecker name, and data_token, which the wrapper (ghcr.io/uniconhq/primitive-base, wrapper/) sends only as `Authorization: Bearer <token>`, and only to the door and to links under it, never in a URL or a log; presigned links get no header. The job is minted when the step asks, so its links have not expired in the queue, and the token works from then until the wrapper posts to done, or the pipeline ends. The wrapper places the files, writes inputs, runs the image's own command, which the image names, uploads what it wrote and posts to done. The pipeline's last step, from the base image with the setting mode: report, only posts {} to its own data_url, whose token the forge gives it alike. Every POST to the door is sent as Content-Type: application/json. The wrapper follows no redirect, a 3xx failing the request, and uses no proxy. When nothing is left for the step to do, every run of it left out, as when another grading stored the same work first or an earlier step stopped every run, the door answers the GET 204 with no body, and the wrapper exits 0 without placing, running, uploading or posting to done, so Woodpecker still starts the later steps. A grading that has finished answers 410 and a token that no longer works 401, and either fails the step, exit 2.",
+  "description": "What a grading step's door at the forge answers when the step's wrapper asks for its work. The forge writes each Woodpecker step a plugin step whose settings are data_url, the door, GET <machine URL>/api/v1/gradings/<row>/steps/<step>, <step> there the step's Woodpecker name, and data_token, which the wrapper (ghcr.io/uniconhq/primitive-base, wrapper/) sends only as `Authorization: Bearer <token>`, and only to the door and to links under it, never in a URL or a log; presigned links get no header. The job is minted when the step asks, so its links have not expired in the queue, and the token works from then until the wrapper posts to done, or the pipeline ends. The wrapper places the files, writes inputs, runs the image's own command, which the image names, uploads what it wrote and posts to done. The pipeline's last step, from the base image with the setting mode: report, only posts {} to its own data_url, whose token the forge gives it alike. Every POST to the door is sent as Content-Type: application/json. The wrapper follows no redirect, a 3xx failing the request, and uses no proxy. When nothing is left for the step to do, every run of it left out because its part was not given or an earlier step stopped it, the door answers the GET 204 with no body, and the wrapper exits 0 without placing, running, uploading, keeping or posting to done, so Woodpecker still starts the later steps. A grading that has finished answers 410 and a token that no longer works 401, and either fails the step, exit 2.",
   "type": "object",
   "required": [
     "schema_version",
@@ -22,10 +22,10 @@
     "schema_version": {
       "description": "The job shape this answer is written against. The wrapper refuses another, exit 2, before it does anything.",
       "type": "integer",
-      "const": 1
+      "const": 2
     },
     "inputs": {
-      "description": "The inputs.json the primitive reads, an inputs_file of primitive.schema.json: for a batch, only the runs still to be done, so a run an earlier step did not accept, or one the store holds, is left out. Every file it names is a path relative to /work that one entry of files places. The one thing the forge cannot fill is a secret's value, which Woodpecker holds: each is written {\"secret\": <setting>}, and the wrapper puts the setting's value in its place.",
+      "description": "The inputs.json the primitive reads, an inputs_file of primitive.schema.json: for a batch, only the runs still to be done, so a run an earlier step did not accept is left out. Every file it names is a path relative to /work that one entry of files places. The one thing the forge cannot fill is a secret's value, which Woodpecker holds: each is written {\"secret\": <setting>}, and the wrapper puts the setting's value in its place.",
       "type": "object",
       "required": ["schema_version"]
     },
@@ -49,6 +49,11 @@
       "description": "The door's link, under data_url, that the wrapper posts {} to, as application/json, once every upload is in. It ends the token. The door answers a repeated done with the same token 2xx, as the first, so a done whose answer was cut off can be posted again; the wrapper also takes a 401 or 403 to a repeated done as done, and does the same for mode: report's post.",
       "type": "string",
       "format": "uri"
+    },
+    "keep": {
+      "description": "Where in the workspace the step keeps its outputs for the later steps of its workflow, .unicon/<step>, <step> its Woodpecker name; given only to a step that runs as root in its container, since the clone leaves the workspace root's, and only when a later step of the same workflow reads it. Once the primitive ends, and before the uploads, the wrapper empties the folder and copies there every plain file under out/, the ones it then uploads, at its path relative to /work; a copy that fails is the step's error, and a keep of another shape fails the step, exit 2, before anything runs. A later step names each such file in a from_workspace entry with its sha256 and size.",
+      "type": "string",
+      "pattern": "^\\.unicon/[A-Za-z0-9_][A-Za-z0-9_.-]*$"
     },
     "time_limit": {
       "description": "Seconds the primitive may run, from its start. At the limit the wrapper kills it and everything it started, and writes the error itself. Once it ends, either way, the wrapper, the container's first process, kills every process left in the container before it uploads. Woodpecker has only a pipeline's timeout.",
@@ -122,10 +127,14 @@
       }
     },
     "from_workspace": {
-      "description": "A file or folder of the submission the pipeline's clone step checked out, copied to path. A link, or anything else not a plain file or folder, inside it fails the step.",
+      "description": "A file or folder of the submission the pipeline's clone step checked out under submission/, or a file an earlier step of the workflow kept under its keep, copied to path. A link on the way to it or inside it, or anything else not a plain file or folder, fails the step. A kept file is named with its sha256 and size, as the forge stored them when that step uploaded it, and a copy not exactly those fails the step, since the entrant's files may link to it.",
       "type": "object",
       "required": ["path", "workspace"],
       "additionalProperties": false,
+      "dependentRequired": {
+        "sha256": ["size"],
+        "size": ["sha256"]
+      },
       "properties": {
         "path": {
           "description": "Under in/: a cached file is a task file, never the submission's.",
@@ -136,7 +145,9 @@
           "description": "Its path relative to the step's workspace, CI_WORKSPACE.",
           "type": "string",
           "pattern": "^[^/]"
-        }
+        },
+        "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "size": { "type": "integer", "minimum": 0 }
       }
     }
   }
