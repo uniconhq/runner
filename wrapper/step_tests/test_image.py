@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import re
 import runpy
 import subprocess
@@ -24,6 +25,7 @@ from typing import Any
 
 import pytest
 
+import core_yaml
 from step_tests.lab import docker, docker_ready, image
 from step_tests.stand_in import TOKEN, StandIn, stand_in
 
@@ -305,7 +307,7 @@ SOURCE = {
     "language": "python",
     "environment": {"file": "in/environment.json"},
 }
-"""A program's inputs for exec@v3: its source folder, which holds the one
+"""A program's inputs for exec@v4: its source folder, which holds the one
 file `in/p/source/main.py`, and its language; exec compiles it."""
 
 
@@ -343,14 +345,26 @@ def exec_cache() -> Iterator[str]:
         docker("volume", "rm", "--force", volume, check=False)
 
 
-def exec_flags() -> list[str]:
-    """exec's container as a grading machine starts it, privileged, with
-    the memory exec@v3 declares, which holds its compile box and a 64 MB
-    run, entered through primitive-exec's userns.py, as exec refuses root
-    Docker's identity map."""
-    userns = SIBLINGS / "primitive-exec" / "tests" / "userns.py"
-    flags = ["--privileged", "--memory=1136m", "--memory-swap=1136m"]
-    flags += ["--pids-limit=160", "--cpus=1", "--ulimit=cpu=5:5"]
+def exec_flags(batch: list[dict[str, Any]]) -> list[str]:
+    """exec's container as a grading machine starts it for `batch`,
+    privileged, with the memory exec@v4 declares, which holds its compile
+    box and a 64 MB run, entered through primitive-exec's userns.py, as exec
+    refuses root Docker's identity map. Its CPU time is the declared
+    `cpu_ms` for each item, raised by `limits_from` for the item's
+    `time_limit`, and `once_time_ms` once, for the work exec does in its
+    own process, as exec's own tests give it."""
+    exec_checkout = SIBLINGS / "primitive-exec"
+    declared = core_yaml.load((exec_checkout / "primitive.yaml").read_text())
+    form = declared["forms"]["one"]
+    limits, rule = form["limits"], form["limits_from"]["cpu_ms"]
+    cpu_ms = limits["once_time_ms"]
+    for entry in batch:
+        raised = entry["inputs"]["time_limit"] * rule["scale"] + rule["add"]
+        cpu_ms += max(limits["cpu_ms"], math.ceil(raised))
+    cpu = math.ceil(cpu_ms / 1000)
+    userns = exec_checkout / "tests" / "userns.py"
+    flags = ["--privileged", "--memory=1648m", "--memory-swap=1648m"]
+    flags += ["--pids-limit=160", "--cpus=1", f"--ulimit=cpu={cpu}:{cpu}"]
     flags += ["--tmpfs=/tmp:rw,noexec,nosuid,nodev,size=64m"]
     return [*flags, "--volume", f"{userns}:/userns.py:ro"]
 
@@ -384,10 +398,10 @@ def test_exec_on_the_base_image_runs_a_batch_through_the_wrapper(
         on_base("exec"),
         inputs,
         files,
-        [*exec_flags(), "--volume", f"{exec_cache}:/cache"],
+        [*exec_flags(batch), "--volume", f"{exec_cache}:/cache"],
         EXEC,
         box_users=BOX_USERS,
-        step_memory_mb=1136,
+        step_memory_mb=1648,
         fail_on_non_accepted=False,
     )
     assert done.returncode == 0, done.stdout + done.stderr
@@ -422,17 +436,18 @@ def test_exec_through_the_wrapper_binds_a_cached_file_into_its_box(
     named = {"files": {"data": {"file": cached["path"]}}}
     limits = {"time_limit": 1, "memory_limit": 64}
     entry = SOURCE | {"files": named} | limits
-    inputs = {"schema_version": 6, "batch": [{"run": "r1", "inputs": entry}]}
+    batch = [{"run": "r1", "inputs": entry}]
+    inputs = {"schema_version": 6, "batch": batch}
     try:
         done = step(
             server,
             on_base("exec"),
             inputs,
             [program, cached, *environment_files(server)],
-            [*exec_flags(), "--volume", f"{volume}:/cache"],
+            [*exec_flags(batch), "--volume", f"{volume}:/cache"],
             EXEC,
             box_users=BOX_USERS,
-            step_memory_mb=1136,
+            step_memory_mb=1648,
         )
         assert done.returncode == 0, done.stdout + done.stderr
         result = json.loads(server.put["outputs.json"])

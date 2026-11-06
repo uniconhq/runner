@@ -78,14 +78,14 @@ process, as it must be to kill what a primitive leaves. The
 pipeline's last step runs `primitive-base` with `mode: report` and only
 posts `{}` to its own door, telling the forge the pipeline ended.
 
-A step given the org's cache volume at `/cache`, a root step, as only exec
+A step given the org's cache folder at `/cache`, a root step, as only exec
 uses it, fetches a task file marked `cached` once per machine
 into `/cache/objects/<sha256>`, under a lock per name, downloading into its
-own folder on the volume, hashes an object already there again under its
+own folder on the cache, hashes an object already there again under its
 lock, removing and fetching it anew unless it is still the length and
 SHA-256 its name says, and hard-links it into a folder of its own under
 `/cache/items/`, reached as `/work/cache`, held by a lock for the step's
-life and removed at its end. A step given cached files and no volume is
+life and removed at its end. A step given cached files and no cache is
 refused. exec keeps each program it compiles in
 `/cache/programs/<key>/`, under the lock `/cache/locks/programs-<key>.lock`
 while it compiles or reads one, compiling into `<key>.<anything>` beside it
@@ -95,18 +95,46 @@ made, a folder without a lock, or a folder a program was being compiled
 into whose lock no one holds, and the lock of every name no object has.
 Past the cap, 10 GiB or the number of bytes in `/etc/unicon/cache-cap`, the
 least recently used objects no running step links, compiled programs and
-whole `envs/<F>` language folders no step holds go, their last use the time
-of their folder. Environment sizes count each plain-file inode once even
-inside nested package folders, and each folder is walked once a step, not
-again for each piece it fetches. Shared environment readers block exclusive
-eviction. An evicted folder is renamed to `<F>.evicting-<anything>`
-before it is removed, so a step killed midway leaves no half-removed folder
-under its name. Downloads and assemblies in progress are not counted; stale
-partial `envs/<F>.<suffix>` folders are swept under the same lock.
+whole `envs/<F>-<T>` environment folders no step holds go, oldest first and
+only until what is asked for fits. The cap is the org's cache, and the
+disk holds every org's on the machine, so they go too while less than a
+tenth of the disk is free, though the org is within its cap. An environment is named by its lock's
+fingerprint `F` and the toolchain line `T` of the exec that assembled it,
+under the lock `/cache/locks/envs-<F>-<T>.lock`, and its last use is the
+time of its `ready.json`. Its files are hard links into `/cache/store/`,
+where exec unpacks each package once: a folder in rattler's cache
+`store/conda/`, in uv's `store/uv/archive-v0/`, or a wheel file in
+`store/wheels/<sha256>/`, or exec's unpacked Maven jar or npm package in
+`store/files/<sha256>/`, each a store entry, beside the tools' own
+bookkeeping, which is never touched but for uv's pointers: uv trusts its
+`.rev` pointer to an unpacked wheel and fails an install whose entry is
+gone, so an entry in `archive-v0` is freed with the pointers under
+`store/uv/wheels-v7/` that name it. A folder counts only its own files,
+those not linked from the store, and its `ready.json` lists the entries it
+links: an entry is counted once however many folders list it, goes before
+any folder when none lists it, and goes with the last folder that lists
+it, in the same call. No entry is freed while exec assembles an
+environment, which holds `/cache/locks/store.lock` shared, nor one younger
+than an hour; an entry no folder lists that a call may not free is left
+out of its count, so the call does not evict everything else for bytes
+only a later call frees. Each folder is walked once a step, not again for each piece
+it fetches. An evicted folder or entry is renamed to
+`<name>.evicting-<anything>` before it is removed, so a step killed midway
+leaves nothing half-removed under its name, and the sweep removes it.
+What a step killed while it wrote the store leaves, uv's
+`store/uv/.tmp<random>`, exec's `store/files/.<sha256>.<random>` and its
+copy of a wheel `store/wheels/<sha256>/.<file name>.<random>`, is swept
+once an hour old, and only by a call that holds `/cache/locks/store.lock`
+exclusive.
+Downloads and assemblies in progress are not counted; stale partial
+`envs/<F>-<T>.<suffix>` folders are swept under the same lock, and a folder
+under any other name once it is an hour old.
 Conda archive file-name links live inside a step's own item and disappear
-with it, leaving the one verified archive in `objects/`. A root step with the volume does
+with it, leaving the one verified archive in `objects/`. A root step with the cache does
 both at its start, with cached files or without, so what exec stored is
-held to the cap. The volume takes the image's `/cache`, root's, mode 0755.
+held to the cap. The cache is the org's folder on the machine's cache
+disk, `/var/lib/unicon/cache/<org>`, bind-mounted at `/cache`, which
+Docker makes, root's, the first time the org grades.
 Its tests are in `wrapper/step_tests/`,
 against a stand-in for the forge's door.
 
@@ -291,8 +319,10 @@ is `ghcr.io/uniconhq/primitive-<name>`.
 
 - `primitive-ci.yaml`, on a push to `main` and on a pull request: ruff, mypy,
   `scripts/check_declaration.py` on the primitive's `primitive.yaml`, and
-  every primitive test except the image tests, in one job; in another, the
-  image is built and the image tests (`pytest -m image`) run against it.
+  every primitive test except the image tests, in one job; in another, run
+  once on an x86_64 runner (`ubuntu-24.04`) and once on an arm64 one
+  (`ubuntu-24.04-arm`), the image is built and the image tests (`pytest -m
+  image`) run against it.
 - `primitive-release.yaml`, on a tag push: the tag must be on `main`, be
   `v<major>.<minor>.<patch>` and equal the version in `pyproject.toml`. Its
   major is the primitive's version at the forge, which names the set of ports
@@ -370,7 +400,7 @@ uv run python scripts/check_contract_files.py
 `uv run pytest` runs the unit tests. `uv run pytest -m docker` needs a Docker
 daemon: it builds `primitive-base` and runs the step wrapper in it against
 its stand-in door: a primitive reading the wrapper's environment gets nothing,
-nothing a primitive leaves running outlives it, the org's cache volume serves
+nothing a primitive leaves running outlives it, the org's cache folder serves
 the root steps that use it, and exec built on the base image from a
 `primitive-exec` checkout beside this one runs a batch on isolate through the
 wrapper, a cached file bound into its box (the exec cases are skipped

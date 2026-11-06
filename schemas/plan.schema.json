@@ -458,7 +458,7 @@
           "type": "object", "required": ["environment"], "additionalProperties": false,
           "properties": {"environment": {
             "type": "object", "required": ["version", "prefix", "platforms"], "additionalProperties": false,
-            "properties": {"version": {"const": 2}, "prefix": {"const": "/env"}, "platforms": {"type": "object"}}
+            "properties": {"version": {"const": 3}, "prefix": {"const": "/env"}, "platforms": {"type": "object"}}
           }}
         },
         {

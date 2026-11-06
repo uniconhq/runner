@@ -56,8 +56,15 @@ jobs:
       - run: uv run --with ruamel-yaml==0.19.1 python ../runner/scripts/check_declaration.py "$PRIMITIVE_SCHEMA" .
       - run: uv run pytest -m "not image"
 
+  # The image on each chip a grading machine has, natively: an x86_64
+  # runner and an arm64 one, since the toolchains, the box limits and the
+  # programs they make differ between them.
   image:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-24.04, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.runner }}
     defaults:
       run:
         working-directory: primitive

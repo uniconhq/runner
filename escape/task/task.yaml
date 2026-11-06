@@ -1,8 +1,8 @@
 # The escape fixtures' task: one run an attack, each shown at once with
-# its attack's name (so `attacks/` is shown too), with 64 MB of memory
-# but where an attack must hold more to show its bound. The driver saves
-# it on the org's own copy of ../workflow.yaml, writing the org's name over
-# `escape-org`.
+# its attack's file, so its name, its memory limit and all it reports,
+# with 64 MB of memory but where an attack must hold more to show its
+# bound. The driver saves it on the org's own copy of ../workflow.yaml,
+# writing the org's name over `escape-org`.
 name: Escape
 workflow: escape-org/escape@v1
 inputs:
@@ -36,5 +36,10 @@ scoring:
   values:
     refused: {block: sum, over: {runs: all}, of: {run: [all, passed]}}
   show:
-    now: [refused, all, attacks/]
+    always:
+      values: [refused]
+      runs:
+        - of: all
+          fields: [attack, memory_limit, verdict, passed, label, message,
+                   score, escaped, time_ms, memory_kb]
 submissions: {max: 50, rate: {count: 1, per: 5}}
